@@ -1,0 +1,143 @@
+{
+  "theme": "light",
+  "archetype": "Swiss & High-Contrast (Archetype 4)",
+  "emotional_tone": "Authoritative, clear, precise, and highly functional. It should convey a sense of control and operational excellence.",
+  "colors": {
+    "background": {
+      "default": "#FFFFFF",
+      "subtle": "#F8F9FA",
+      "muted": "#F1F2F4"
+    },
+    "text": {
+      "primary": "#091E42",
+      "secondary": "#5E6C84",
+      "disabled": "#8993A4"
+    },
+    "brand": {
+      "primary": "#0052CC",
+      "primary_hover": "#0747A6"
+    },
+    "status": {
+      "success": "#36B37E",
+      "warning": "#FFC400",
+      "danger": "#FF5630",
+      "info": "#00B8D9"
+    },
+    "border": {
+      "default": "#DFE1E6",
+      "focus": "#4C9AFF"
+    }
+  },
+  "typography": {
+    "font_family": {
+      "headings": "Chivo, sans-serif",
+      "body": "'IBM Plex Sans', sans-serif",
+      "mono": "'IBM Plex Mono', monospace"
+    },
+    "scale": {
+      "h1": "text-3xl sm:text-4xl tracking-tight font-black",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-bold",
+      "h3": "text-xl sm:text-2xl tracking-tight font-bold",
+      "h4": "text-lg sm:text-xl tracking-tight font-semibold",
+      "body_large": "text-base leading-relaxed",
+      "body": "text-sm leading-relaxed",
+      "small": "text-xs tracking-wide uppercase font-semibold"
+    },
+    "rules": [
+      "Headings MUST use tight letter spacing (tracking-tight).",
+      "Overlines and small labels MUST be uppercase with wide tracking.",
+      "Never center-align body text or data tables; default to left-align."
+    ]
+  },
+  "layout_and_spacing": {
+    "strategy": "The 'Control Room' Grid",
+    "base_grid": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 or grid-cols-12 for complex views",
+    "gap": "gap-4 or gap-6",
+    "padding": "Generous internal padding for containers (p-6 or p-8).",
+    "rules": [
+      "Use strict grid hierarchy, dense and compact spacing for data, but ample whitespace between distinct widgets.",
+      "Cardless or 1px border cards. Minimal border-radius (max 8px).",
+      "Dashboard components should stretch to fill grid height."
+    ]
+  },
+  "components": {
+    "strategy": "Shadcn/UI heavily customized",
+    "rules": [
+      "Use Shadcn for interactive logic (tables, calendars, dropdowns, dialogs).",
+      "Buttons: Square or slightly rounded (rounded-md), flat colors, no heavy gradients.",
+      "Inputs: Clean, 1px border, clear focus ring (focus:ring-2 focus:ring-[#4C9AFF]).",
+      "Tables: Zebra striping optional, clear column headers, dense padding (py-2 px-3) for maximum data density.",
+      "Use Recharts or Shadcn Charts for data visualization. Avoid D3 unless building custom geography/topology."
+    ],
+    "surface_styles": {
+      "cards": "Flat background, 1px subtle border (#DFE1E6), no shadow by default. Hover: Slight lift, shadow-sm, border darkens.",
+      "header": "Solid background (#FFFFFF) with a hard 1px bottom border. z-50 fixed or sticky.",
+      "sidebar": "Collapsible left sidebar for navigation. Light grey background (#F8F9FA) with 1px right border."
+    }
+  },
+  "motion": {
+    "rules": [
+      "Minimalist animations.",
+      "Hover states on all interactive elements (buttons, table rows, links).",
+      "Smooth state changes for dropdowns and dialogs (opacity and subtle transform).",
+      "Respect prefers-reduced-motion."
+    ]
+  },
+  "icons": {
+    "library": "lucide-react",
+    "rules": [
+      "Use consistent stroke width (1.5 or 2).",
+      "Align icons optically with text."
+    ]
+  },
+  "accessibility": {
+    "rules": [
+      "Minimum 4.5:1 contrast ratio for normal text.",
+      "Explicitly set text color on hover (e.g., hover:bg-[#0052CC] hover:text-white).",
+      "Include data-testid on all interactive elements.",
+      "Focus states must be clearly visible."
+    ]
+  },
+  "media": {
+    "image_urls": [
+      {
+        "category": "hospital_modern_1",
+        "url": "https://images.unsplash.com/photo-1615770922480-0b9ae80afeba?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MDV8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjBob3NwaXRhbCUyMGJ1aWxkaW5nfGVufDB8fHx8MTc3OTg4ODkwOXww&ixlib=rb-4.1.0&q=85",
+        "description": "gray concrete building during daytime",
+        "usage": "Use for Hospital provider profiles or acquisition pipeline cards."
+      },
+      {
+        "category": "hospital_modern_2",
+        "url": "https://images.unsplash.com/photo-1580615631392-aeb060d526e4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MDV8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBob3NwaXRhbCUyMGJ1aWxkaW5nfGVufDB8fHx8MTc3OTg4ODkwOXww&ixlib=rb-4.1.0&q=85",
+        "description": "white and black concrete building",
+        "usage": "Use as a background for master admin login or hospital listing headers."
+      },
+      {
+        "category": "doctor_portrait_1",
+        "url": "https://images.unsplash.com/photo-1594824476967-48c8b964273f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzN8MHwxfHNlYXJjaHwzfHxkb2N0b3IlMjBwb3J0cmFpdCUyMHByb2Zlc3Npb25hbHxlbnwwfHx8fDE3Nzk4ODg5MDl8MA&ixlib=rb-4.1.0&q=85",
+        "description": "woman in blue crew neck t-shirt smiling",
+        "usage": "Use as an avatar for doctors or medical staff in the team or user list."
+      },
+      {
+        "category": "doctor_portrait_2",
+        "url": "https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzN8MHwxfHNlYXJjaHwxfHxkb2N0b3IlMjBwb3J0cmFpdCUyMHByb2Zlc3Npb25hbHxlbnwwfHx8fDE3Nzk4ODg5MDl8MA&ixlib=rb-4.1.0&q=85",
+        "description": "man in white dress shirt wearing black framed eyeglasses",
+        "usage": "Use as an avatar for master admin, doctors, or sales reps."
+      }
+    ],
+    "rules": [
+      "NEVER use placeholder URLs (via.placeholder.com, etc.). Only use the provided image URLs.",
+      "Avatars should be circular or rounded-md with a 1px border (#DFE1E6)."
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Build a Master Admin CRM dashboard for 'TrataHealth'.",
+    "Main pages to build: 1. Dashboard/Overview, 2. Unified Contacts (Patients, Doctors, Hospitals), 3. Provider Acquisition Pipeline (Kanban), 4. Activities/Tasks, 5. Analytics.",
+    "The layout MUST include a collapsible left sidebar and a top sticky header.",
+    "Implement Progressive Disclosure: Show key KPIs at the top, followed by interactive tables and charts.",
+    "Use 'Chivo' for all headings and 'IBM Plex Sans' for body text. Ensure these fonts are imported.",
+    "Implement the 'Swiss & High-Contrast' aesthetic: mostly white/grey backgrounds, sharp 1px borders, minimal shadow, and clear blue/green accents for actions and statuses.",
+    "Use Shadcn UI components extensively (Cards, Tables, Tabs, Select, Dialogs) but strip away heavy shadows or extreme rounded corners to fit the technical CRM look.",
+    "Add 'data-testid' to all interactive elements."
+  ]
+}
