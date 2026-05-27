@@ -21,6 +21,8 @@ import jwt
 import io
 import csv
 
+import upstream_sync as us
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -31,6 +33,7 @@ JWT_SECRET = os.environ['JWT_SECRET']
 MASTER_ADMIN_PHONE = os.environ['MASTER_ADMIN_PHONE']
 MASTER_ADMIN_OTP = os.environ['MASTER_ADMIN_OTP']
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
+UPSTREAM_SYNC_INTERVAL_MIN = int(os.environ.get('UPSTREAM_SYNC_INTERVAL_MIN', '5'))
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -916,13 +919,40 @@ async def _do_seed(force: bool = False) -> dict:
     }
 
 
+# ---------- Upstream Sync ----------
+@api.get("/admin/sync/status")
+async def sync_status(current=Depends(get_current_user)):
+    s = await db.sync_status.find_one({"_id": "upstream"}, {"_id": 0})
+    return {
+        "enabled": us.upstream_enabled(),
+        "interval_min": UPSTREAM_SYNC_INTERVAL_MIN,
+        "base_url": os.environ.get("UPSTREAM_API_URL"),
+        "last": s,
+        "mode": "live" if us.upstream_enabled() else "seeded",
+    }
+
+
+@api.post("/admin/sync/run")
+async def sync_run(current=Depends(get_current_user)):
+    if not current.get("is_master_admin"):
+        raise HTTPException(status_code=403, detail="Only master admin can trigger sync")
+    if not us.upstream_enabled():
+        raise HTTPException(status_code=400, detail="UPSTREAM_API_URL is not configured")
+    syncer = us.make_sync(db)
+    try:
+        res = await syncer.sync_all(wipe_seed=True)
+    finally:
+        await syncer.close()
+    return res
+
+
 # ---------- Startup ----------
 @app.on_event("startup")
 async def startup():
-    # Auto-seed on first boot
+    # Auto-seed on first boot ONLY when upstream is not configured
     count = await db.contacts.count_documents({})
-    if count == 0:
-        logger.info("No contacts found, seeding...")
+    if count == 0 and not us.upstream_enabled():
+        logger.info("No contacts found, seeding demo data...")
         result = await _do_seed(force=True)
         logger.info(f"Seeded: {result}")
     # Ensure master admin exists
@@ -938,10 +968,28 @@ async def startup():
             "avatar": None,
             "created_at": now_iso(),
         })
+    # Kick upstream sync (immediate + background loop)
+    if us.upstream_enabled():
+        logger.info(f"Upstream sync enabled → {os.environ.get('UPSTREAM_API_URL')}")
+        try:
+            syncer = us.make_sync(db)
+            res = await syncer.sync_all(wipe_seed=True)
+            await syncer.close()
+            logger.info(f"Initial upstream sync: {res}")
+            # If upstream returned nothing, fall back to demo seed so the UI isn't empty
+            if not res.get("success") and (await db.contacts.count_documents({})) == 0:
+                logger.warning("Upstream returned no data; falling back to demo seed")
+                await _do_seed(force=True)
+        except Exception as e:
+            logger.exception(f"Initial upstream sync failed: {e}")
+            if (await db.contacts.count_documents({})) == 0:
+                await _do_seed(force=True)
+        us.start_background(db, UPSTREAM_SYNC_INTERVAL_MIN)
 
 
 @app.on_event("shutdown")
 async def shutdown():
+    us.stop_background()
     client.close()
 
 

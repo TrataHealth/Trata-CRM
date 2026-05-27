@@ -2,9 +2,11 @@ import React from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity,
-  BarChart3, UserCog, LogOut, Search, Bell, Sparkles,
+  BarChart3, UserCog, LogOut, Search, Bell, Sparkles, RefreshCw, Database,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
+import api from "../lib/api";
+import { relativeTime } from "../lib/constants";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
@@ -22,6 +24,28 @@ export default function Layout({ children }) {
   const [query, setQuery] = React.useState("");
   const [results, setResults] = React.useState(null);
   const [open, setOpen] = React.useState(false);
+  const [sync, setSync] = React.useState(null);
+  const [syncing, setSyncing] = React.useState(false);
+
+  const loadSync = React.useCallback(async () => {
+    try {
+      const { data } = await api.get("/admin/sync/status");
+      setSync(data);
+    } catch {}
+  }, []);
+
+  React.useEffect(() => { loadSync(); }, [loadSync]);
+
+  const runSync = async () => {
+    setSyncing(true);
+    try {
+      await api.post("/admin/sync/run");
+      await loadSync();
+    } catch (e) {
+      alert(e?.response?.data?.detail || "Sync failed");
+    }
+    setSyncing(false);
+  };
 
   React.useEffect(() => {
     if (!query.trim()) { setResults(null); return; }
@@ -121,6 +145,7 @@ export default function Layout({ children }) {
           >
             <Bell className="h-4 w-4" /> Notifications
           </button>
+          <DataSourceBadge sync={sync} syncing={syncing} onSync={runSync} />
           <div className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-[#0052CC] to-[#00B8D9] text-white rounded-md text-xs font-semibold">
             <Sparkles className="h-3.5 w-3.5" /> AI Insights Active
           </div>
@@ -146,6 +171,43 @@ function SearchSection({ title, items, onClick, renderSub }) {
           <span className="text-[11px] text-[#5E6C84] truncate">{renderSub ? renderSub(i) : (i.type || i.phone || "")}</span>
         </button>
       ))}
+    </div>
+  );
+}
+
+
+function DataSourceBadge({ sync, syncing, onSync }) {
+  const live = sync?.enabled;
+  const last = sync?.last?.last_synced_at;
+  const tip = live
+    ? `Live · ${sync?.base_url}\nLast sync: ${last ? relativeTime(last) : "never"}`
+    : "Demo mode — set UPSTREAM_API_URL in backend/.env to connect to live Trata-admin backend";
+  return (
+    <div
+      data-testid="data-source-badge"
+      title={tip}
+      className={`flex items-center gap-2 px-2.5 py-1 rounded-md text-[11px] font-semibold border ${
+        live ? "border-[#36B37E]/30 bg-[#E3FCEF] text-[#006644]" : "border-[#FFC400]/40 bg-[#FFFAE6] text-[#974F0C]"
+      }`}
+    >
+      <Database className="h-3 w-3" />
+      {live ? (
+        <>
+          <span>LIVE</span>
+          <span className="font-normal text-[#42526E] hidden md:inline">· {last ? relativeTime(last) : "syncing…"}</span>
+          <button
+            onClick={onSync}
+            disabled={syncing}
+            data-testid="sync-now-btn"
+            className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white hover:bg-[#F4F5F7] border border-[#DFE1E6] text-[#42526E] disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
+            {syncing ? "Syncing" : "Sync"}
+          </button>
+        </>
+      ) : (
+        <span>DEMO DATA</span>
+      )}
     </div>
   );
 }
