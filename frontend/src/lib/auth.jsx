@@ -16,17 +16,41 @@ export function AuthProvider({ children }) {
     setLoading(false);
   }, []);
 
-  const login = async (phone, otp) => {
-    const { data } = await api.post("/auth/verify-otp", { phone, otp });
-    localStorage.setItem("trata_token", data.token);
-    localStorage.setItem("trata_user", JSON.stringify(data.user));
-    setUser(data.user);
-    return data.user;
-  };
-
   const sendOtp = async (phone) => {
     const { data } = await api.post("/auth/send-otp", { phone });
     return data;
+  };
+
+  const verifyOtp = async (phone, otp) => {
+    const { data } = await api.post("/auth/verify-otp", { phone, otp });
+    // returns { needs_password_setup, temp_token, user }
+    return data;
+  };
+
+  const setPassword = async (tempToken, password) => {
+    const { data } = await api.post(
+      "/auth/set-password",
+      { password },
+      { headers: { Authorization: `Bearer ${tempToken}` } }
+    );
+    _persist(data.user, data.token);
+    return data.user;
+  };
+
+  const loginPassword = async (tempToken, password) => {
+    const { data } = await api.post(
+      "/auth/login-password",
+      { password },
+      { headers: { Authorization: `Bearer ${tempToken}` } }
+    );
+    _persist(data.user, data.token);
+    return data.user;
+  };
+
+  const _persist = (u, t) => {
+    localStorage.setItem("trata_token", t);
+    localStorage.setItem("trata_user", JSON.stringify(u));
+    setUser(u);
   };
 
   const logout = () => {
@@ -35,8 +59,17 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
+  const isInternal = !!user && (
+    user.is_master_admin ||
+    ["admin", "manager", "sales_rep", "ops_rep"].includes(user.role)
+  );
+  const isProvider = user?.role === "provider_owner";
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, sendOtp, logout }}>
+    <AuthContext.Provider value={{
+      user, loading, sendOtp, verifyOtp, setPassword, loginPassword, logout,
+      isInternal, isProvider,
+    }}>
       {children}
     </AuthContext.Provider>
   );

@@ -18,6 +18,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict
 import jwt
+import bcrypt
 import io
 import csv
 
@@ -49,15 +50,75 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def make_token(user: dict) -> str:
+# ---------- Roles & Scopes ----------
+INTERNAL_ROLES = {"admin", "manager", "sales_rep", "ops_rep"}
+PROVIDER_ROLES = {"provider_owner"}
+PROVIDER_TYPE_TO_CONTACT_TYPE = {
+    "hospital": "hospital",
+    "clinic": "doctor",   # clinic is run by a doctor in this MVP
+    "ambulance": "ambulance_provider",
+    "pathology": "pathologist",
+}
+
+
+def is_internal(user: dict) -> bool:
+    return user.get("role") in INTERNAL_ROLES or user.get("is_master_admin")
+
+
+def is_provider(user: dict) -> bool:
+    return user.get("role") in PROVIDER_ROLES
+
+
+def scope_filter(user: dict, key_contact: str = "id", key_provider: str = "provider_ids") -> dict:
+    """
+    Returns a Mongo filter dict scoping a query to what the user is allowed to see.
+    Internal users → {} (full access). Provider users → only docs linked to their provider_id or themselves.
+    """
+    if is_internal(user):
+        return {}
+    if is_provider(user):
+        pid = user.get("provider_id")
+        # Match the provider's own contact OR any doc linked via provider_ids array OR its own owner-id
+        return {"$or": [
+            {key_contact: pid},
+            {key_provider: pid},
+        ]}
+    # Unknown role → see nothing
+    return {"_never_": True}
+
+
+# ---------- Password helpers ----------
+def hash_password(password: str) -> str:
+    pw = password.encode("utf-8")[:72]
+    return bcrypt.hashpw(pw, bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    if not hashed:
+        return False
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8")[:72], hashed.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def make_token(user: dict, ttype: str = "access") -> str:
     payload = {
         "sub": user["id"],
         "phone": user["phone"],
-        "role": user["role"],
+        "role": user.get("role"),
         "name": user.get("name"),
-        "exp": datetime.now(timezone.utc) + timedelta(days=30),
+        "type": ttype,
+        "exp": datetime.now(timezone.utc) + (timedelta(minutes=10) if ttype == "temp" else timedelta(days=30)),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def decode_token(token: str, expected_type: Optional[str] = None) -> dict:
+    payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    if expected_type and payload.get("type", "access") != expected_type:
+        raise jwt.PyJWTError("Wrong token type")
+    return payload
 
 
 async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
@@ -65,12 +126,18 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
         raise HTTPException(status_code=401, detail="Missing token")
     token = authorization.split(" ", 1)[1]
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        payload = decode_token(token, expected_type="access")
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    user = await db.crm_users.find_one({"id": payload["sub"]}, {"_id": 0, "password": 0})
+    user = await db.crm_users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+async def require_internal(user: dict = Depends(get_current_user)) -> dict:
+    if not is_internal(user):
+        raise HTTPException(status_code=403, detail="Admin access only")
     return user
 
 
@@ -82,6 +149,14 @@ class LoginSendOTP(BaseModel):
 class LoginVerifyOTP(BaseModel):
     phone: str
     otp: str
+
+
+class PasswordSet(BaseModel):
+    password: str
+
+
+class PasswordLogin(BaseModel):
+    password: str
 
 
 class ContactStatusUpdate(BaseModel):
@@ -136,15 +211,40 @@ def normalize_phone(p: str) -> str:
     return p
 
 
-# ---------- Auth ----------
+# ---------- Auth (3-step: phone → OTP → password) ----------
 @api.post("/auth/send-otp")
 async def send_otp(data: LoginSendOTP):
     phone = normalize_phone(data.phone)
+    # TODO: when UPSTREAM_API_URL is set, forward to upstream /api/auth/send-otp
     logger.info(f"Mock OTP sent to {phone}: {MASTER_ADMIN_OTP}")
     return {
         "success": True,
         "message": f"OTP sent (use {MASTER_ADMIN_OTP} for testing)",
         "provider": "mock",
+    }
+
+
+def _safe_user(u: dict) -> dict:
+    u = {**u}
+    u.pop("password_hash", None)
+    u.pop("_id", None)
+    return u
+
+
+async def _ensure_master_admin_user(phone: str) -> dict:
+    return {
+        "id": str(uuid.uuid4()),
+        "phone": phone,
+        "name": "Master Admin",
+        "email": "admin@tratahealth.com",
+        "role": "admin",
+        "is_master_admin": True,
+        "is_active": True,
+        "avatar": None,
+        "provider_type": None,
+        "provider_id": None,
+        "password_hash": None,
+        "created_at": now_iso(),
     }
 
 
@@ -156,26 +256,69 @@ async def verify_otp(data: LoginVerifyOTP):
 
     user = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
     if not user:
-        # Master admin auto-provision
         if phone == MASTER_ADMIN_PHONE:
-            user = {
-                "id": str(uuid.uuid4()),
-                "phone": phone,
-                "name": "Master Admin",
-                "email": "admin@tratahealth.com",
-                "role": "admin",
-                "is_master_admin": True,
-                "is_active": True,
-                "avatar": None,
-                "created_at": now_iso(),
-            }
+            user = await _ensure_master_admin_user(phone)
             await db.crm_users.insert_one(user.copy())
-            user.pop("_id", None)
         else:
-            raise HTTPException(status_code=403, detail="Phone not authorized. Contact master admin.")
+            raise HTTPException(status_code=403, detail="Phone not authorized. Contact master admin to be added.")
 
-    token = make_token(user)
-    return {"success": True, "user": user, "token": token, "is_master_admin": user.get("is_master_admin", False)}
+    needs_setup = not user.get("password_hash")
+    # Short-lived temp token good only for the next step (set/verify password)
+    temp = make_token(user, ttype="temp")
+    return {
+        "success": True,
+        "needs_password_setup": needs_setup,
+        "temp_token": temp,
+        "user": {
+            "id": user["id"],
+            "name": user.get("name"),
+            "phone": user["phone"],
+            "role": user.get("role"),
+            "provider_type": user.get("provider_type"),
+        },
+    }
+
+
+async def _user_from_temp(authorization: Optional[str]) -> dict:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing temp token")
+    token = authorization.split(" ", 1)[1]
+    try:
+        payload = decode_token(token, expected_type="temp")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired temp token")
+    user = await db.crm_users.find_one({"id": payload["sub"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+@api.post("/auth/set-password")
+async def set_password(data: PasswordSet, authorization: Optional[str] = Header(None)):
+    if len(data.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    user = await _user_from_temp(authorization)
+    if user.get("password_hash"):
+        raise HTTPException(status_code=400, detail="Password already set. Use login.")
+    await db.crm_users.update_one(
+        {"id": user["id"]},
+        {"$set": {"password_hash": hash_password(data.password), "updated_at": now_iso()}},
+    )
+    user = await db.crm_users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0})
+    token = make_token(user, ttype="access")
+    return {"success": True, "user": _safe_user(user), "token": token}
+
+
+@api.post("/auth/login-password")
+async def login_password(data: PasswordLogin, authorization: Optional[str] = Header(None)):
+    user = await _user_from_temp(authorization)
+    if not user.get("password_hash"):
+        raise HTTPException(status_code=400, detail="Password not set. Use set-password first.")
+    if not verify_password(data.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Incorrect password")
+    safe = _safe_user(user)
+    token = make_token(safe, ttype="access")
+    return {"success": True, "user": safe, "token": token}
 
 
 @api.get("/auth/me")
@@ -185,7 +328,7 @@ async def me(current=Depends(get_current_user)):
 
 # ---------- Dashboard ----------
 @api.get("/dashboard/stats")
-async def dashboard_stats(current=Depends(get_current_user)):
+async def dashboard_stats(current=Depends(require_internal)):
     total_contacts = await db.contacts.count_documents({})
     by_type = {}
     for t in ["patient", "doctor", "hospital", "paramedic", "ambulance_provider", "pathologist"]:
@@ -260,7 +403,7 @@ async def dashboard_stats(current=Depends(get_current_user)):
 
 
 @api.get("/dashboard/activity-feed")
-async def activity_feed(limit: int = 20, current=Depends(get_current_user)):
+async def activity_feed(limit: int = 20, current=Depends(require_internal)):
     items = await db.activities.find({}, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
     return {"items": items}
 
@@ -293,6 +436,9 @@ async def list_contacts(
             {"email": {"$regex": q, "$options": "i"}},
             {"specialization": {"$regex": q, "$options": "i"}},
         ]
+    # Scope: providers only see themselves (everything else hidden)
+    if is_provider(current):
+        qry["id"] = current.get("provider_id")
     total = await db.contacts.count_documents(qry)
     items = (
         await db.contacts.find(qry, {"_id": 0})
@@ -303,10 +449,11 @@ async def list_contacts(
 
 @api.get("/contacts/{contact_id}")
 async def get_contact(contact_id: str, current=Depends(get_current_user)):
+    if is_provider(current) and contact_id != current.get("provider_id"):
+        raise HTTPException(status_code=403, detail="Forbidden")
     c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
     if not c:
         raise HTTPException(status_code=404, detail="Contact not found")
-    # gather activities
     acts = await db.activities.find({"contact_id": contact_id}, {"_id": 0}).sort("created_at", -1).limit(100).to_list(100)
     notes = await db.notes.find({"contact_id": contact_id}, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
     tasks = await db.tasks.find({"contact_id": contact_id}, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
@@ -314,7 +461,7 @@ async def get_contact(contact_id: str, current=Depends(get_current_user)):
 
 
 @api.patch("/contacts/{contact_id}")
-async def update_contact(contact_id: str, data: ContactStatusUpdate, current=Depends(get_current_user)):
+async def update_contact(contact_id: str, data: ContactStatusUpdate, current=Depends(require_internal)):
     update = {k: v for k, v in data.dict().items() if v is not None}
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -328,7 +475,7 @@ async def update_contact(contact_id: str, data: ContactStatusUpdate, current=Dep
 
 # ---------- Pipeline ----------
 @api.get("/pipeline")
-async def get_pipeline(current=Depends(get_current_user)):
+async def get_pipeline(current=Depends(require_internal)):
     stages = ["lead", "contacted", "kyc_submitted", "verified", "active", "churned"]
     out = {}
     for s in stages:
@@ -364,6 +511,8 @@ async def list_activities(
             {"contact_name": {"$regex": q, "$options": "i"}},
             {"description": {"$regex": q, "$options": "i"}},
         ]
+    if is_provider(current):
+        qry["provider_ids"] = current.get("provider_id")
     total = await db.activities.count_documents(qry)
     items = await db.activities.find(qry, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
     return {"items": items, "total": total}
@@ -374,6 +523,8 @@ async def get_activity(activity_id: str, current=Depends(get_current_user)):
     a = await db.activities.find_one({"id": activity_id}, {"_id": 0})
     if not a:
         raise HTTPException(status_code=404, detail="Activity not found")
+    if is_provider(current) and current.get("provider_id") not in (a.get("provider_ids") or []):
+        raise HTTPException(status_code=403, detail="Forbidden")
     return a
 
 
@@ -447,7 +598,7 @@ async def create_note(data: NoteCreate, current=Depends(get_current_user)):
 
 # ---------- Team ----------
 @api.get("/team")
-async def list_team(current=Depends(get_current_user)):
+async def list_team(current=Depends(require_internal)):
     items = await db.crm_users.find({}, {"_id": 0, "password": 0}).sort("created_at", 1).to_list(200)
     return {"items": items}
 
@@ -489,7 +640,7 @@ async def delete_team_member(member_id: str, current=Depends(get_current_user)):
 
 # ---------- Analytics ----------
 @api.get("/analytics/overview")
-async def analytics_overview(current=Depends(get_current_user)):
+async def analytics_overview(current=Depends(require_internal)):
     # Cases by status
     cases_by_status: Dict[str, int] = {}
     statuses = ["CREATED", "PARAMEDIC_ASSIGNED", "AMBULANCE_DISPATCHED", "ON_THE_WAY", "REACHED", "COMPLETED", "CANCELLED"]
@@ -539,7 +690,7 @@ async def analytics_overview(current=Depends(get_current_user)):
 
 # ---------- Export ----------
 @api.get("/export/contacts.csv")
-async def export_contacts_csv(type: Optional[str] = None, current=Depends(get_current_user)):
+async def export_contacts_csv(type: Optional[str] = None, current=Depends(require_internal)):
     qry = {"type": type} if type else {}
     items = await db.contacts.find(qry, {"_id": 0}).to_list(10000)
     buf = io.StringIO()
@@ -569,19 +720,153 @@ async def global_search(q: str, current=Depends(get_current_user)):
     if not q.strip():
         return {"contacts": [], "activities": [], "tasks": []}
     rx = {"$regex": q, "$options": "i"}
+    c_filter = {"$or": [{"name": rx}, {"phone": rx}, {"email": rx}, {"specialization": rx}]}
+    a_filter = {"$or": [{"title": rx}, {"description": rx}, {"contact_name": rx}]}
+    t_filter = {"$or": [{"title": rx}, {"description": rx}]}
+    if is_provider(current):
+        pid = current.get("provider_id")
+        c_filter = {"$and": [c_filter, {"id": pid}]}
+        a_filter = {"$and": [a_filter, {"provider_ids": pid}]}
+        t_filter = {"$and": [t_filter, {"contact_id": pid}]}
     contacts = await db.contacts.find(
-        {"$or": [{"name": rx}, {"phone": rx}, {"email": rx}, {"specialization": rx}]},
+        c_filter,
         {"_id": 0, "id": 1, "name": 1, "type": 1, "phone": 1, "city": 1, "is_verified": 1, "avatar": 1},
     ).limit(10).to_list(10)
     activities = await db.activities.find(
-        {"$or": [{"title": rx}, {"description": rx}, {"contact_name": rx}]},
+        a_filter,
         {"_id": 0, "id": 1, "title": 1, "category": 1, "status": 1, "contact_name": 1, "created_at": 1},
     ).limit(10).to_list(10)
     tasks = await db.tasks.find(
-        {"$or": [{"title": rx}, {"description": rx}]},
+        t_filter,
         {"_id": 0, "id": 1, "title": 1, "status": 1, "priority": 1, "due_date": 1},
     ).limit(10).to_list(10)
     return {"contacts": contacts, "activities": activities, "tasks": tasks}
+
+
+# ---------- Provider (multi-tenant) ----------
+@api.get("/provider/me")
+async def provider_me(current=Depends(get_current_user)):
+    """Returns the calling provider's own contact record + KYC + summary."""
+    if not is_provider(current):
+        raise HTTPException(status_code=403, detail="Provider access only")
+    pid = current.get("provider_id")
+    contact = await db.contacts.find_one({"id": pid}, {"_id": 0})
+    if not contact:
+        raise HTTPException(status_code=404, detail="Provider record not found")
+    return {"contact": contact, "user": current}
+
+
+@api.get("/provider/dashboard")
+async def provider_dashboard(current=Depends(get_current_user)):
+    """Per-type tailored dashboard. Returns KPIs + breakdowns scoped to this provider."""
+    if not is_provider(current):
+        raise HTTPException(status_code=403, detail="Provider access only")
+    pid = current.get("provider_id")
+    ptype = current.get("provider_type")
+    contact = await db.contacts.find_one({"id": pid}, {"_id": 0})
+
+    scope = {"provider_ids": pid}
+
+    # Totals
+    total_activities = await db.activities.count_documents(scope)
+    completed = await db.activities.count_documents({**scope, "status": {"$in": ["COMPLETED", "completed", "report_ready", "approved"]}})
+    active = await db.activities.count_documents({**scope, "status": {"$nin": ["COMPLETED", "completed", "CANCELLED", "cancelled", "report_ready", "no_show"]}})
+
+    # Revenue
+    rev_cursor = db.activities.find({**scope, "amount": {"$gt": 0}}, {"amount": 1, "_id": 0})
+    revenue = 0
+    async for d in rev_cursor:
+        revenue += d.get("amount", 0) or 0
+
+    # Last 14 days trend
+    trend = []
+    for i in range(13, -1, -1):
+        day = (datetime.now(timezone.utc) - timedelta(days=i)).date()
+        start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc).isoformat()
+        end = (datetime(day.year, day.month, day.day, tzinfo=timezone.utc) + timedelta(days=1)).isoformat()
+        c = await db.activities.count_documents({**scope, "created_at": {"$gte": start, "$lt": end}})
+        trend.append({"date": day.isoformat(), "activities": c})
+
+    # By category
+    by_category = {}
+    for cat in ["emergency_case", "appointment", "ambulance_booking", "lab_booking", "pathology_booking", "kyc"]:
+        by_category[cat] = await db.activities.count_documents({**scope, "category": cat})
+
+    # Type-specific KPIs
+    extras: Dict[str, Any] = {}
+    if ptype == "hospital":
+        meta = contact.get("meta") or {}
+        extras["total_beds"] = meta.get("total_beds") or 0
+        extras["available_beds"] = meta.get("available_beds") or 0
+        extras["occupancy_pct"] = (
+            round(100 * (1 - (extras["available_beds"] / extras["total_beds"])), 1)
+            if extras["total_beds"] else 0
+        )
+        extras["incoming_today"] = await db.activities.count_documents({
+            **scope, "category": "emergency_case",
+            "status": {"$in": ["AMBULANCE_DISPATCHED", "ON_THE_WAY"]},
+        })
+    elif ptype == "ambulance":
+        meta = contact.get("meta") or {}
+        extras["fleet_size"] = meta.get("ambulance_count") or 0
+        # avg response time
+        rt = []
+        async for d in db.activities.find({**scope, "response_time_minutes": {"$exists": True, "$ne": None}}, {"response_time_minutes": 1, "_id": 0}):
+            rt.append(d["response_time_minutes"])
+        extras["avg_response_min"] = round(sum(rt) / len(rt), 1) if rt else None
+        extras["trips_completed"] = await db.activities.count_documents({**scope, "category": {"$in": ["ambulance_booking", "emergency_case"]}, "status": {"$in": ["completed", "COMPLETED"]}})
+        extras["live_trips"] = await db.activities.count_documents({**scope, "category": "emergency_case", "status": {"$in": ["AMBULANCE_DISPATCHED", "ON_THE_WAY", "REACHED"]}})
+    elif ptype == "clinic":
+        extras["appointments_today"] = await db.activities.count_documents({
+            **scope, "category": "appointment",
+            "created_at": {"$gte": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()},
+        })
+        extras["no_show_rate_pct"] = await _no_show_rate(scope)
+    elif ptype == "pathology":
+        extras["samples_collected"] = await db.activities.count_documents({**scope, "status": "sample_collected"})
+        extras["reports_ready"] = await db.activities.count_documents({**scope, "status": "report_ready"})
+        extras["pending_bookings"] = await db.activities.count_documents({**scope, "status": "booked"})
+
+    return {
+        "contact": contact,
+        "provider_type": ptype,
+        "kpis": {
+            "total_activities": total_activities,
+            "active": active,
+            "completed": completed,
+            "revenue": round(revenue, 2),
+            **extras,
+        },
+        "trend_14d": trend,
+        "by_category": by_category,
+    }
+
+
+async def _no_show_rate(scope: dict) -> float:
+    total = await db.activities.count_documents({**scope, "category": "appointment"})
+    if not total:
+        return 0.0
+    no_show = await db.activities.count_documents({**scope, "category": "appointment", "status": "no_show"})
+    return round(100 * no_show / total, 1)
+
+
+@api.get("/provider/activities")
+async def provider_activities(
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 50,
+    current=Depends(get_current_user),
+):
+    if not is_provider(current):
+        raise HTTPException(status_code=403, detail="Provider access only")
+    pid = current.get("provider_id")
+    qry: Dict[str, Any] = {"provider_ids": pid}
+    if category: qry["category"] = category
+    if status: qry["status"] = status
+    total = await db.activities.count_documents(qry)
+    items = await db.activities.find(qry, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    return {"items": items, "total": total}
 
 
 # ---------- AI ----------
@@ -633,9 +918,7 @@ async def ai_insight(data: AISummaryRequest, current=Depends(get_current_user)):
 
 # ---------- Seed ----------
 @api.post("/admin/seed")
-async def seed_data(force: bool = False, current=Depends(get_current_user)):
-    if not current.get("is_master_admin"):
-        raise HTTPException(status_code=403, detail="Only master admin can seed")
+async def seed_data(force: bool = False, current=Depends(require_internal)):
     return await _do_seed(force)
 
 
@@ -785,15 +1068,21 @@ async def _do_seed(force: bool = False) -> dict:
         status = random.choices(case_statuses, weights=[5, 8, 8, 10, 8, 55, 6])[0]
         resp = random.randint(3, 45)
         amb = random.choice(ambulance_contacts) if random.random() > 0.2 else None
+        # destination hospital: most cases route to a hospital, esp. completed ones
+        hosp = random.choice(hospital_contacts) if (random.random() > 0.25 or status in ("REACHED", "COMPLETED")) else None
+        pids = [x for x in [amb["id"] if amb else None, hosp["id"] if hosp else None] if x]
         a = make_activity("emergency_case", p, 30, {
             "title": f"SOS: {random.choice(reasons)}",
-            "description": f"Patient triggered SOS at {p['city']}.",
+            "description": f"Patient triggered SOS at {p['city']}." + (f" Destination: {hosp['name']}." if hosp else ""),
             "status": status,
             "priority": random.choice(["CRITICAL", "HIGH", "MODERATE"]),
             "response_time_minutes": resp,
             "ambulance_provider_id": amb["id"] if amb else None,
             "ambulance_provider_name": amb["name"] if amb else None,
+            "hospital_id": hosp["id"] if hosp else None,
+            "hospital_name": hosp["name"] if hosp else None,
             "amount": random.choice([0, 1500, 2500, 3500]) if status == "COMPLETED" else 0,
+            "provider_ids": pids,
         })
         activities.append(a)
 
@@ -809,6 +1098,7 @@ async def _do_seed(force: bool = False) -> dict:
             "doctor_id": d["id"],
             "doctor_name": d["name"],
             "amount": random.choice([300, 500, 800, 1200]) if status == "completed" else 0,
+            "provider_ids": [d["id"]],
         })
         activities.append(a)
 
@@ -824,6 +1114,7 @@ async def _do_seed(force: bool = False) -> dict:
             "ambulance_provider_id": amb["id"],
             "ambulance_provider_name": amb["name"],
             "amount": random.choice([800, 1500, 2500, 5000]) if status == "completed" else 0,
+            "provider_ids": [amb["id"]],
         })
         activities.append(a)
 
@@ -840,6 +1131,7 @@ async def _do_seed(force: bool = False) -> dict:
             "lab_id": lab["id"],
             "lab_name": lab["name"],
             "amount": random.choice([400, 800, 1500, 2500, 4500]) if status == "report_ready" else 0,
+            "provider_ids": [lab["id"]],
         })
         activities.append(a)
 
@@ -851,6 +1143,7 @@ async def _do_seed(force: bool = False) -> dict:
             "description": f"{c['type'].replace('_', ' ').title()} KYC review",
             "status": status,
             "amount": 0,
+            "provider_ids": [c["id"]],
         }))
 
     await db.activities.insert_many([a.copy() for a in activities])
@@ -910,18 +1203,53 @@ async def _do_seed(force: bool = False) -> dict:
             m_full = {**m, "id": str(uuid.uuid4()), "is_master_admin": False, "is_active": True, "created_at": now_iso()}
             await db.crm_users.insert_one(m_full)
 
+    # Seed demo PROVIDER OWNER accounts — one per provider type, linked to a verified contact
+    demo_pw = hash_password("Trata@123")
+    demo_provider_seed = [
+        ("hospital",  "9000020001", "Apollo Hospital Owner"),
+        ("clinic",    "9000020002", "Clinic Doctor Owner"),
+        ("ambulance", "9000020003", "Ambulance Fleet Owner"),
+        ("pathology", "9000020004", "Path Lab Owner"),
+    ]
+    for ptype, phone, label in demo_provider_seed:
+        if await db.crm_users.find_one({"phone": phone}):
+            continue
+        ctype = PROVIDER_TYPE_TO_CONTACT_TYPE[ptype]
+        # Pick a verified contact of that type to act as their business
+        candidates = [c for c in contacts if c["type"] == ctype and c.get("is_verified")]
+        if not candidates:
+            candidates = [c for c in contacts if c["type"] == ctype]
+        if not candidates:
+            continue
+        contact = candidates[0]
+        await db.crm_users.insert_one({
+            "id": str(uuid.uuid4()),
+            "phone": phone,
+            "name": label,
+            "email": f"{ptype}.owner@tratahealth.com",
+            "role": "provider_owner",
+            "provider_type": ptype,
+            "provider_id": contact["id"],
+            "provider_name": contact["name"],
+            "is_master_admin": False,
+            "is_active": True,
+            "password_hash": demo_pw,
+            "created_at": now_iso(),
+        })
+
     return {
         "success": True,
         "contacts": len(contacts),
         "activities": len(activities),
         "tasks": len(tasks),
         "notifications": len(notifs),
+        "demo_providers": [p[1] for p in demo_provider_seed],
     }
 
 
 # ---------- Upstream Sync ----------
 @api.get("/admin/sync/status")
-async def sync_status(current=Depends(get_current_user)):
+async def sync_status(current=Depends(require_internal)):
     s = await db.sync_status.find_one({"_id": "upstream"}, {"_id": 0})
     return {
         "enabled": us.upstream_enabled(),

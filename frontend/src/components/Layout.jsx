@@ -3,12 +3,13 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity,
   BarChart3, UserCog, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
+  Building2, ClipboardList, IdCard,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import api from "../lib/api";
 import { relativeTime } from "../lib/constants";
 
-const NAV = [
+const ADMIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { to: "/contacts", label: "Contacts", icon: Users },
   { to: "/pipeline", label: "Pipeline", icon: GitBranch },
@@ -18,8 +19,16 @@ const NAV = [
   { to: "/team", label: "Team & Roles", icon: UserCog },
 ];
 
+const PROVIDER_NAV = [
+  { to: "/provider", label: "My Dashboard", icon: LayoutDashboard, exact: true },
+  { to: "/provider/activities", label: "My Activities", icon: Activity },
+  { to: "/provider/profile", label: "Profile & KYC", icon: IdCard },
+  { to: "/tasks", label: "Tasks", icon: ListChecks },
+];
+
 export default function Layout({ children }) {
-  const { user, logout } = useAuth();
+  const { user, logout, isProvider } = useAuth();
+  const NAV = isProvider ? PROVIDER_NAV : ADMIN_NAV;
   const navigate = useNavigate();
   const [query, setQuery] = React.useState("");
   const [results, setResults] = React.useState(null);
@@ -32,11 +41,12 @@ export default function Layout({ children }) {
   React.useEffect(() => { setNavOpen(false); }, [navigate]);
 
   const loadSync = React.useCallback(async () => {
+    if (isProvider) return;
     try {
       const { data } = await api.get("/admin/sync/status");
       setSync(data);
     } catch {}
-  }, []);
+  }, [isProvider]);
 
   React.useEffect(() => { loadSync(); }, [loadSync]);
 
@@ -127,7 +137,12 @@ export default function Layout({ children }) {
             </div>
             <div className="min-w-0">
               <div className="text-sm font-semibold text-[#091E42] truncate">{user?.name}</div>
-              <div className="text-[11px] text-[#5E6C84] truncate">{user?.is_master_admin ? "Master Admin" : user?.role}</div>
+              <div className="text-[11px] text-[#5E6C84] truncate">
+                {user?.is_master_admin ? "Master Admin"
+                  : user?.role === "provider_owner"
+                    ? `${(user?.provider_type || "").replace(/^\w/, c => c.toUpperCase())} Owner`
+                    : user?.role}
+              </div>
             </div>
           </div>
           <button
@@ -196,7 +211,7 @@ export default function Layout({ children }) {
           >
             <Bell className="h-4 w-4" /> Notifications
           </button>
-          <DataSourceBadge sync={sync} syncing={syncing} onSync={runSync} />
+          <DataSourceBadge sync={sync} syncing={syncing} onSync={runSync} hidden={isProvider} />
           <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-[#0052CC] to-[#00B8D9] text-white rounded-md text-xs font-semibold">
             <Sparkles className="h-3.5 w-3.5" /> AI Insights Active
           </div>
@@ -250,7 +265,8 @@ function SearchSection({ title, items, onClick, renderSub }) {
 }
 
 
-function DataSourceBadge({ sync, syncing, onSync }) {
+function DataSourceBadge({ sync, syncing, onSync, hidden }) {
+  if (hidden) return null;
   const live = sync?.enabled;
   const last = sync?.last?.last_synced_at;
   const tip = live

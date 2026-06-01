@@ -13,16 +13,29 @@ import Activities from "./pages/Activities";
 import Tasks from "./pages/Tasks";
 import Analytics from "./pages/Analytics";
 import Team from "./pages/Team";
+import ProviderDashboard from "./pages/ProviderDashboard";
+import ProviderActivities from "./pages/ProviderActivities";
+import ProviderProfile from "./pages/ProviderProfile";
 import { Toaster } from "sonner";
 import { registerSW } from "./lib/registerSW";
 
 registerSW();
 
-function RequireAuth({ children }) {
-  const { user, loading } = useAuth();
+function RequireAuth({ children, internalOnly = false, providerOnly = false }) {
+  const { user, loading, isInternal, isProvider } = useAuth();
   if (loading) return <div className="p-10 text-sm text-[#5E6C84]">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
+  if (internalOnly && !isInternal) return <Navigate to="/provider" replace />;
+  if (providerOnly && !isProvider) return <Navigate to="/" replace />;
   return <Layout>{children}</Layout>;
+}
+
+function RoleRoot() {
+  const { user, loading, isProvider } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/login" replace />;
+  if (isProvider) return <Navigate to="/provider" replace />;
+  return <Dashboard />;
 }
 
 function App() {
@@ -33,14 +46,24 @@ function App() {
         <InstallPrompt />
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route path="/" element={<RequireAuth><Dashboard /></RequireAuth>} />
-          <Route path="/contacts" element={<RequireAuth><Contacts /></RequireAuth>} />
-          <Route path="/contacts/:id" element={<RequireAuth><ContactDetail /></RequireAuth>} />
-          <Route path="/pipeline" element={<RequireAuth><Pipeline /></RequireAuth>} />
-          <Route path="/activities" element={<RequireAuth><Activities /></RequireAuth>} />
+
+          {/* Admin / internal routes */}
+          <Route path="/" element={<RequireAuth><RoleRoot /></RequireAuth>} />
+          <Route path="/contacts" element={<RequireAuth internalOnly><Contacts /></RequireAuth>} />
+          <Route path="/contacts/:id" element={<RequireAuth internalOnly><ContactDetail /></RequireAuth>} />
+          <Route path="/pipeline" element={<RequireAuth internalOnly><Pipeline /></RequireAuth>} />
+          <Route path="/activities" element={<RequireAuth internalOnly><Activities /></RequireAuth>} />
+          <Route path="/analytics" element={<RequireAuth internalOnly><Analytics /></RequireAuth>} />
+          <Route path="/team" element={<RequireAuth internalOnly><Team /></RequireAuth>} />
+
+          {/* Shared (admins + providers) */}
           <Route path="/tasks" element={<RequireAuth><Tasks /></RequireAuth>} />
-          <Route path="/analytics" element={<RequireAuth><Analytics /></RequireAuth>} />
-          <Route path="/team" element={<RequireAuth><Team /></RequireAuth>} />
+
+          {/* Provider routes */}
+          <Route path="/provider" element={<RequireAuth providerOnly><ProviderDashboard /></RequireAuth>} />
+          <Route path="/provider/activities" element={<RequireAuth providerOnly><ProviderActivities /></RequireAuth>} />
+          <Route path="/provider/profile" element={<RequireAuth providerOnly><ProviderProfile /></RequireAuth>} />
+
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
