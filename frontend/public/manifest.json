@@ -1,0 +1,26 @@
+{
+  "name": "TrataHealth CRM",
+  "short_name": "TrataCRM",
+  "description": "Master operations console for TrataHealth — unified view of patients, providers, cases, pipeline, tasks and AI insights.",
+  "start_url": "/?utm_source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#091E42",
+  "theme_color": "#0052CC",
+  "categories": ["business", "medical", "productivity"],
+  "lang": "en",
+  "icons": [
+    { "src": "/icons/icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any" },
+    { "src": "/icons/icon-maskable.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" },
+    { "src": "/icons/icon.svg",     "type": "image/svg+xml", "sizes": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Dashboard",   "url": "/",          "description": "Operations overview" },
+    { "name": "Contacts",    "url": "/contacts",  "description": "All users" },
+    { "name": "Pipeline",    "url": "/pipeline",  "description": "Acquisition pipeline" },
+    { "name": "Activities",  "url": "/activities","description": "Live activity feed" },
+    { "name": "Tasks",       "url": "/tasks",     "description": "Open tasks" }
+  ]
+}

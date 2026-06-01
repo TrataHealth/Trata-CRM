@@ -3,6 +3,7 @@ import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/auth";
 import Layout from "./components/Layout";
+import InstallPrompt from "./components/InstallPrompt";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Contacts from "./pages/Contacts";
@@ -13,6 +14,9 @@ import Tasks from "./pages/Tasks";
 import Analytics from "./pages/Analytics";
 import Team from "./pages/Team";
 import { Toaster } from "sonner";
+import { registerSW } from "./lib/registerSW";
+
+registerSW();
 
 function RequireAuth({ children }) {
   const { user, loading } = useAuth();
@@ -26,6 +30,7 @@ function App() {
     <AuthProvider>
       <BrowserRouter>
         <Toaster position="top-right" />
+        <InstallPrompt />
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/" element={<RequireAuth><Dashboard /></RequireAuth>} />
