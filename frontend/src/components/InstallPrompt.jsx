@@ -82,15 +82,12 @@ export default function InstallPrompt() {
     <>
       {/* Banner */}
       {!iosTip && (
-        <div
+        <div className="fixed bottom-4 left-4 right-4 lg:left-auto lg:right-6 lg:bottom-6 lg:w-[380px] z-[60] bg-white border border-[#DFE1E6] rounded-lg shadow-xl p-4 flex items-start gap-3 animate-in fade-in slide-in-from-bottom-4"
           data-testid="pwa-install-banner"
-          className="fixed bottom-4 left-4 right-4 lg:left-auto lg:right-6 lg:bottom-6 lg:w-[380px] z-[60] bg-white border border-[#DFE1E6] rounded-lg shadow-xl p-4 flex items-start gap-3 animate-in fade-in slide-in-from-bottom-4"
         >
-          <div className="h-10 w-10 rounded-md bg-gradient-to-br from-[#0052CC] to-[#091E42] text-white font-heading font-black flex items-center justify-center text-lg shrink-0">
-            T
-          </div>
+          <img src="/brand/shield.png" alt="" className="h-10 w-10 object-contain shrink-0" />
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-heading font-bold text-[#091E42]">Install TrataCRM</div>
+            <div className="text-sm font-heading font-bold text-[#091E42]">Install Trata Health CRM</div>
             <div className="text-xs text-[#5E6C84] mt-0.5 leading-snug">
               Add to your home screen for one-tap access, full-screen view and faster loads.
             </div>
@@ -134,10 +131,10 @@ export default function InstallPrompt() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start gap-3">
-              <div className="h-10 w-10 rounded-md bg-gradient-to-br from-[#0052CC] to-[#091E42] text-white font-heading font-black flex items-center justify-center text-lg">T</div>
+              <img src="/brand/shield.png" alt="" className="h-10 w-10 object-contain shrink-0" />
               <div className="flex-1">
                 <div className="font-heading text-base font-bold text-[#091E42]">Add to Home Screen</div>
-                <div className="text-xs text-[#5E6C84] mt-1">Install TrataCRM on your iPhone/iPad in two taps.</div>
+                <div className="text-xs text-[#5E6C84] mt-1">Install Trata Health CRM on your iPhone/iPad in two taps.</div>
               </div>
               <button onClick={dismiss} aria-label="Close" className="p-1 text-[#5E6C84]"><X className="h-4 w-4" /></button>
             </div>

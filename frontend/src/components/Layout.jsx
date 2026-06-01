@@ -92,12 +92,12 @@ export default function Layout({ children }) {
         }`}
         data-testid="sidebar"
       >
-        <div className="h-14 flex items-center gap-2 px-5 border-b border-[#DFE1E6] justify-between">
-          <div className="flex items-center gap-2">
-            <div className="h-7 w-7 rounded-md bg-[#0052CC] flex items-center justify-center text-white font-bold font-heading">T</div>
-            <div>
-              <div className="font-heading font-bold text-[#091E42] leading-none">TrataCRM</div>
-              <div className="text-[10px] text-[#5E6C84] tracking-wider uppercase mt-0.5">Master Console</div>
+        <div className="h-14 flex items-center gap-2 px-4 border-b border-[#DFE1E6] justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <img src="/brand/shield.png" alt="" className="h-9 w-9 object-contain shrink-0" />
+            <div className="min-w-0">
+              <div className="font-heading font-bold text-[#091E42] leading-none truncate">Trata Health</div>
+              <div className="text-[10px] text-[#5E6C84] tracking-wider uppercase mt-0.5 truncate">Provider CRM</div>
             </div>
           </div>
           <button
@@ -170,8 +170,8 @@ export default function Layout({ children }) {
           </button>
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center gap-1.5 mr-auto">
-            <div className="h-6 w-6 rounded bg-[#0052CC] flex items-center justify-center text-white font-bold font-heading text-xs">T</div>
-            <span className="font-heading font-bold text-sm text-[#091E42]">TrataCRM</span>
+            <img src="/brand/shield.png" alt="" className="h-7 w-7 object-contain" />
+            <span className="font-heading font-bold text-sm text-[#091E42]">Trata Health</span>
           </div>
           {/* Search - desktop inline */}
           <div className="hidden md:block relative flex-1 max-w-xl">

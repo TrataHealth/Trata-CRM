@@ -82,10 +82,10 @@ export default function Login() {
         <div className="absolute -bottom-32 -right-32 w-96 h-96 rounded-full bg-[#00B8D9] blur-3xl opacity-30" />
         <div className="relative z-10 p-12 flex flex-col h-full">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-md bg-white text-[#0052CC] flex items-center justify-center font-heading font-black text-lg">T</div>
+            <img src="/brand/shield.png" alt="" className="h-12 w-12 object-contain bg-white rounded-md p-1" />
             <div>
-              <div className="font-heading font-bold text-xl">TrataHealth CRM</div>
-              <div className="text-xs opacity-70 tracking-widest uppercase">Master Operations · Provider Portal</div>
+              <div className="font-heading font-bold text-xl">Trata Health</div>
+              <div className="text-xs opacity-70 tracking-widest uppercase">Provider CRM · Master Console</div>
             </div>
           </div>
           <div className="mt-auto space-y-6">
@@ -121,8 +121,11 @@ export default function Login() {
       <div className="flex items-center justify-center p-8">
         <div className="w-full max-w-md">
           <div className="lg:hidden flex items-center gap-3 mb-8">
-            <div className="h-10 w-10 rounded-md bg-[#0052CC] text-white flex items-center justify-center font-heading font-black text-lg">T</div>
-            <div className="font-heading font-bold text-lg">TrataHealth CRM</div>
+            <img src="/brand/shield.png" alt="" className="h-10 w-10 object-contain" />
+            <div>
+              <div className="font-heading font-bold text-lg leading-none">Trata Health</div>
+              <div className="text-[10px] text-[#5E6C84] tracking-widest uppercase mt-0.5">Provider CRM</div>
+            </div>
           </div>
           <div className="overline mb-2">{t.kicker}</div>
           <h2 className="font-heading text-3xl font-bold tracking-tight text-[#091E42] mb-2">{t.title}</h2>

@@ -1,7 +1,7 @@
 {
-  "name": "TrataHealth CRM",
-  "short_name": "TrataCRM",
-  "description": "Master operations console for TrataHealth — unified view of patients, providers, cases, pipeline, tasks and AI insights.",
+  "name": "Trata Health Provider CRM",
+  "short_name": "Trata Health",
+  "description": "Master operations console for Trata Health — unified view of patients, providers, cases, pipeline, tasks and AI insights.",
   "start_url": "/?utm_source=pwa",
   "scope": "/",
   "display": "standalone",
