@@ -18,10 +18,10 @@ export default function Analytics() {
   const palette = ["#0052CC", "#36B37E", "#FFC400", "#FF5630", "#00B8D9", "#6554C0", "#5E6C84"];
 
   return (
-    <div className="p-6 lg:p-8 space-y-6" data-testid="analytics-page">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-5 lg:space-y-6" data-testid="analytics-page">
       <div>
         <div className="overline">Insights & Reports</div>
-        <h1 className="font-heading text-3xl font-black tracking-tight text-[#091E42] mt-1">Analytics</h1>
+        <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">Analytics</h1>
         <p className="text-sm text-[#5E6C84] mt-1">Operational performance across cases, response times, geographies and revenue.</p>
       </div>
 

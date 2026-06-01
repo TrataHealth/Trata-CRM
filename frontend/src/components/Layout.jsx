@@ -2,7 +2,7 @@ import React from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity,
-  BarChart3, UserCog, LogOut, Search, Bell, Sparkles, RefreshCw, Database,
+  BarChart3, UserCog, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import api from "../lib/api";
@@ -26,6 +26,10 @@ export default function Layout({ children }) {
   const [open, setOpen] = React.useState(false);
   const [sync, setSync] = React.useState(null);
   const [syncing, setSyncing] = React.useState(false);
+  const [navOpen, setNavOpen] = React.useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = React.useState(false);
+
+  React.useEffect(() => { setNavOpen(false); }, [navigate]);
 
   const loadSync = React.useCallback(async () => {
     try {
@@ -62,14 +66,36 @@ export default function Layout({ children }) {
 
   return (
     <div className="min-h-screen flex bg-white" data-testid="app-layout">
-      {/* Sidebar */}
-      <aside className="w-60 shrink-0 bg-[#F8F9FA] border-r border-[#DFE1E6] flex flex-col" data-testid="sidebar">
-        <div className="h-14 flex items-center gap-2 px-5 border-b border-[#DFE1E6]">
-          <div className="h-7 w-7 rounded-md bg-[#0052CC] flex items-center justify-center text-white font-bold font-heading">T</div>
-          <div>
-            <div className="font-heading font-bold text-[#091E42] leading-none">TrataCRM</div>
-            <div className="text-[10px] text-[#5E6C84] tracking-wider uppercase mt-0.5">Master Console</div>
+      {/* Sidebar — desktop fixed, mobile drawer */}
+      {navOpen && (
+        <button
+          aria-label="Close menu"
+          onClick={() => setNavOpen(false)}
+          className="lg:hidden fixed inset-0 bg-black/40 z-40"
+          data-testid="nav-overlay"
+        />
+      )}
+      <aside
+        className={`fixed lg:static inset-y-0 left-0 z-50 w-64 lg:w-60 shrink-0 bg-[#F8F9FA] border-r border-[#DFE1E6] flex flex-col transform transition-transform lg:transform-none ${
+          navOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+        }`}
+        data-testid="sidebar"
+      >
+        <div className="h-14 flex items-center gap-2 px-5 border-b border-[#DFE1E6] justify-between">
+          <div className="flex items-center gap-2">
+            <div className="h-7 w-7 rounded-md bg-[#0052CC] flex items-center justify-center text-white font-bold font-heading">T</div>
+            <div>
+              <div className="font-heading font-bold text-[#091E42] leading-none">TrataCRM</div>
+              <div className="text-[10px] text-[#5E6C84] tracking-wider uppercase mt-0.5">Master Console</div>
+            </div>
           </div>
+          <button
+            className="lg:hidden p-1.5 text-[#5E6C84] hover:bg-white rounded"
+            onClick={() => setNavOpen(false)}
+            data-testid="nav-close-btn"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
 
         <nav className="flex-1 p-3 space-y-1">
@@ -78,6 +104,7 @@ export default function Layout({ children }) {
               key={n.to}
               to={n.to}
               end={n.exact}
+              onClick={() => setNavOpen(false)}
               data-testid={`nav-${n.label.toLowerCase().replace(/\s+/g, "-")}`}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2 text-sm rounded-md transition-colors ${
@@ -115,8 +142,23 @@ export default function Layout({ children }) {
 
       {/* Main */}
       <main className="flex-1 min-w-0 flex flex-col">
-        <header className="h-14 flex items-center gap-4 px-6 border-b border-[#DFE1E6] bg-white sticky top-0 z-30" data-testid="topbar">
-          <div className="relative flex-1 max-w-xl">
+        <header className="h-14 flex items-center gap-2 lg:gap-4 px-3 lg:px-6 border-b border-[#DFE1E6] bg-white sticky top-0 z-30" data-testid="topbar">
+          {/* Mobile menu trigger */}
+          <button
+            className="lg:hidden p-2 -ml-1 text-[#091E42] hover:bg-[#F1F2F4] rounded"
+            onClick={() => setNavOpen(true)}
+            aria-label="Open menu"
+            data-testid="nav-open-btn"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          {/* Mobile logo */}
+          <div className="lg:hidden flex items-center gap-1.5 mr-auto">
+            <div className="h-6 w-6 rounded bg-[#0052CC] flex items-center justify-center text-white font-bold font-heading text-xs">T</div>
+            <span className="font-heading font-bold text-sm text-[#091E42]">TrataCRM</span>
+          </div>
+          {/* Search - desktop inline */}
+          <div className="hidden md:block relative flex-1 max-w-xl">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#5E6C84]" />
             <input
               data-testid="global-search-input"
@@ -138,18 +180,50 @@ export default function Layout({ children }) {
               </div>
             )}
           </div>
+          {/* Mobile search icon trigger */}
+          <button
+            className="md:hidden p-2 text-[#42526E] hover:bg-[#F1F2F4] rounded"
+            onClick={() => setMobileSearchOpen((v) => !v)}
+            aria-label="Search"
+            data-testid="mobile-search-toggle"
+          >
+            <Search className="h-5 w-5" />
+          </button>
           <button
             onClick={() => navigate("/activities")}
-            className="flex items-center gap-2 px-3 py-2 text-sm text-[#42526E] hover:bg-[#F1F2F4] rounded-md"
+            className="hidden md:flex items-center gap-2 px-3 py-2 text-sm text-[#42526E] hover:bg-[#F1F2F4] rounded-md"
             data-testid="topbar-notifications-btn"
           >
             <Bell className="h-4 w-4" /> Notifications
           </button>
           <DataSourceBadge sync={sync} syncing={syncing} onSync={runSync} />
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-[#0052CC] to-[#00B8D9] text-white rounded-md text-xs font-semibold">
+          <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-[#0052CC] to-[#00B8D9] text-white rounded-md text-xs font-semibold">
             <Sparkles className="h-3.5 w-3.5" /> AI Insights Active
           </div>
         </header>
+        {/* Mobile search overlay row */}
+        {mobileSearchOpen && (
+          <div className="md:hidden p-3 border-b border-[#DFE1E6] bg-white sticky top-14 z-20">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#5E6C84]" />
+              <input
+                autoFocus
+                data-testid="mobile-search-input"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search contacts, activities, tasks…"
+                className="w-full pl-9 pr-3 py-2 text-sm bg-[#F1F2F4] border border-transparent rounded-md focus:bg-white focus:border-[#4C9AFF] outline-none"
+              />
+              {results && (
+                <div className="mt-2 bg-white border border-[#DFE1E6] rounded-md shadow max-h-80 overflow-auto">
+                  <SearchSection title="Contacts" items={results.contacts} onClick={(i) => { navigate(`/contacts/${i.id}`); setMobileSearchOpen(false); }} />
+                  <SearchSection title="Activities" items={results.activities} renderSub={(i) => `${i.category} · ${i.status}`} />
+                  <SearchSection title="Tasks" items={results.tasks} renderSub={(i) => `${i.status} · ${i.priority}`} />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         <div className="flex-1 min-w-0 overflow-x-hidden">{children}</div>
       </main>
     </div>

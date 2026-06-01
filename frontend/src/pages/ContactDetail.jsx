@@ -56,7 +56,7 @@ export default function ContactDetail() {
   const stage = PIPELINE_STAGES.find((s) => s.value === c.pipeline_stage);
 
   return (
-    <div className="p-6 lg:p-8 space-y-6 max-w-7xl" data-testid="contact-detail-page">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-5 lg:space-y-6 max-w-7xl" data-testid="contact-detail-page">
       <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-xs uppercase tracking-wider font-semibold text-[#5E6C84] hover:text-[#091E42]">
         <ArrowLeft className="h-3.5 w-3.5" /> Back
       </button>
@@ -75,7 +75,7 @@ export default function ContactDetail() {
             </div>
             {c.specialization && <div className="mt-1 text-sm text-[#42526E]">{c.specialization}</div>}
           </div>
-          <div className="grid grid-cols-2 gap-3 min-w-[280px]">
+          <div className="grid grid-cols-2 gap-3 w-full sm:w-auto sm:min-w-[280px]">
             <Metric label="Stage" value={
               <span className="inline-flex px-2 py-0.5 text-xs uppercase tracking-wider font-semibold rounded" style={{ background: `${stage?.color}15`, color: stage?.color }}>
                 {stage?.label || "—"}
@@ -114,13 +114,13 @@ export default function ContactDetail() {
       </div>
 
       {/* AI Insights */}
-      <div className="bg-gradient-to-br from-[#091E42] to-[#0747A6] text-white rounded-md p-6" data-testid="ai-panel">
+      <div className="bg-gradient-to-br from-[#091E42] to-[#0747A6] text-white rounded-md p-4 sm:p-6" data-testid="ai-panel">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-xs uppercase tracking-widest font-semibold text-white/70"><Sparkles className="h-3.5 w-3.5 text-[#79E2F2]" /> Claude AI Insights</div>
-            <div className="font-heading text-xl font-bold mt-1">Get instant context on this {typeLabel(c.type).toLowerCase()}</div>
+            <div className="font-heading text-lg sm:text-xl font-bold mt-1">Get instant context on this {typeLabel(c.type).toLowerCase()}</div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
             <AiBtn onClick={() => runAi("summary")} active={aiMode === "summary"} testid="ai-summary-btn">Summarize</AiBtn>
             <AiBtn onClick={() => runAi("next_action")} active={aiMode === "next_action"} testid="ai-next-action-btn">Next action</AiBtn>
             <AiBtn onClick={() => runAi("draft_email")} active={aiMode === "draft_email"} testid="ai-draft-email-btn">Draft message</AiBtn>
@@ -137,7 +137,7 @@ export default function ContactDetail() {
 
       {/* Tabs */}
       <div>
-        <div className="flex border-b border-[#DFE1E6]" data-testid="detail-tabs">
+        <div className="flex overflow-x-auto scrollbar-thin border-b border-[#DFE1E6]" data-testid="detail-tabs">
           <Tab active={tab === "activity"} onClick={() => setTab("activity")} icon={ActivityIcon} label={`Activity (${data.activities.length})`} testid="tab-activity" />
           <Tab active={tab === "tasks"} onClick={() => setTab("tasks")} icon={ListChecks} label={`Tasks (${data.tasks.length})`} testid="tab-tasks" />
           <Tab active={tab === "notes"} onClick={() => setTab("notes")} icon={StickyNote} label={`Notes (${data.notes.length})`} testid="tab-notes" />

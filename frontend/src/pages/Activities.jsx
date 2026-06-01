@@ -30,16 +30,16 @@ export default function Activities() {
   };
 
   return (
-    <div className="p-6 lg:p-8 space-y-6" data-testid="activities-page">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-5 lg:space-y-6" data-testid="activities-page">
       <div>
         <div className="overline">Live Operations</div>
-        <h1 className="font-heading text-3xl font-black tracking-tight text-[#091E42] mt-1">
+        <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
           Activities <span className="text-[#5E6C84] font-medium">/ {total.toLocaleString()}</span>
         </h1>
         <p className="text-sm text-[#5E6C84] mt-1">Emergency cases, appointments, bookings and KYC events.</p>
       </div>
 
-      <div className="flex flex-wrap gap-1.5 border-b border-[#DFE1E6] pb-3" data-testid="category-tabs">
+      <div className="flex flex-nowrap overflow-x-auto scrollbar-thin gap-1.5 border-b border-[#DFE1E6] pb-3 -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="category-tabs">
         <CategoryChip label="All" active={!category} onClick={() => setParam("category", "")} testid="cat-all" />
         {ACTIVITY_CATEGORIES.map((c) => (
           <CategoryChip
@@ -121,7 +121,7 @@ function CategoryChip({ label, color, active, onClick, testid }) {
     <button
       onClick={onClick}
       data-testid={testid}
-      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors flex items-center gap-1.5 ${
+      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
         active ? "bg-[#091E42] text-white" : "text-[#42526E] hover:bg-[#F1F2F4]"
       }`}
     >

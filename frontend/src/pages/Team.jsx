@@ -41,10 +41,10 @@ export default function Team() {
   };
 
   return (
-    <div className="p-6 lg:p-8 space-y-6" data-testid="team-page">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-5 lg:space-y-6" data-testid="team-page">
       <div>
         <div className="overline">Access Control</div>
-        <h1 className="font-heading text-3xl font-black tracking-tight text-[#091E42] mt-1">Team & Roles</h1>
+        <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">Team & Roles</h1>
         <p className="text-sm text-[#5E6C84] mt-1">Manage internal users with role-based access.</p>
       </div>
 

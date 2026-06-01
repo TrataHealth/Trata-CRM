@@ -31,14 +31,14 @@ export default function Pipeline() {
   });
 
   return (
-    <div className="p-6 lg:p-8 space-y-6" data-testid="pipeline-page">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-5 lg:space-y-6" data-testid="pipeline-page">
       <div>
         <div className="overline">Provider Acquisition</div>
-        <h1 className="font-heading text-3xl font-black tracking-tight text-[#091E42] mt-1">Pipeline</h1>
+        <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">Pipeline</h1>
         <p className="text-sm text-[#5E6C84] mt-1">Drag providers between stages. Hospitals, doctors, ambulances, paramedics & labs only.</p>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 min-h-[60vh]" data-testid="pipeline-board">
+      <div className="flex lg:grid gap-3 lg:grid-cols-6 overflow-x-auto scrollbar-thin -mx-4 px-4 sm:mx-0 sm:px-0 pb-3 min-h-[60vh] snap-x" data-testid="pipeline-board">
         {PIPELINE_STAGES.map((s) => {
           const items = data.items_by_stage[s.value] || [];
           return (
@@ -46,7 +46,7 @@ export default function Pipeline() {
               key={s.value}
               onDragOver={(e) => e.preventDefault()}
               onDrop={() => onDrop(s.value)}
-              className="bg-[#F8F9FA] border border-[#DFE1E6] rounded-md flex flex-col"
+              className="bg-[#F8F9FA] border border-[#DFE1E6] rounded-md flex flex-col w-[78vw] sm:w-[60vw] md:w-[40vw] lg:w-auto shrink-0 snap-start"
               data-testid={`stage-column-${s.value}`}
             >
               <div className="p-3 border-b border-[#DFE1E6]">

@@ -49,11 +49,11 @@ export default function Contacts() {
   };
 
   return (
-    <div className="p-6 lg:p-8 space-y-6" data-testid="contacts-page">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-5 lg:space-y-6" data-testid="contacts-page">
       <div className="flex items-end justify-between flex-wrap gap-4">
         <div>
           <div className="overline">Contact Management</div>
-          <h1 className="font-heading text-3xl font-black tracking-tight text-[#091E42] mt-1">
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
             Contacts <span className="text-[#5E6C84] font-medium">/ {total.toLocaleString()}</span>
           </h1>
           <p className="text-sm text-[#5E6C84] mt-1">All users across patients, providers, and operational partners.</p>
@@ -68,7 +68,7 @@ export default function Contacts() {
       </div>
 
       {/* Type tabs */}
-      <div className="flex flex-wrap gap-1.5 border-b border-[#DFE1E6] pb-3" data-testid="contacts-type-tabs">
+      <div className="flex flex-nowrap overflow-x-auto scrollbar-thin gap-1.5 border-b border-[#DFE1E6] pb-3 -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="contacts-type-tabs">
         <TypeTab label="All" value="" active={!type} onClick={() => setParam("type", "")} />
         {CONTACT_TYPES.map((c) => (
           <TypeTab key={c.value} label={c.label} value={c.value} active={type === c.value} onClick={() => setParam("type", c.value)} />
@@ -176,7 +176,7 @@ function TypeTab({ label, value, active, onClick }) {
     <button
       onClick={onClick}
       data-testid={`typetab-${value || "all"}`}
-      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
         active ? "bg-[#091E42] text-white" : "text-[#42526E] hover:bg-[#F1F2F4]"
       }`}
     >

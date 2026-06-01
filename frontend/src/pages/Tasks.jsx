@@ -41,10 +41,10 @@ export default function Tasks() {
   };
 
   return (
-    <div className="p-6 lg:p-8 space-y-6" data-testid="tasks-page">
+    <div className="p-4 sm:p-6 lg:p-8 space-y-5 lg:space-y-6" data-testid="tasks-page">
       <div>
         <div className="overline">Daily Operations</div>
-        <h1 className="font-heading text-3xl font-black tracking-tight text-[#091E42] mt-1">Tasks</h1>
+        <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">Tasks</h1>
         <p className="text-sm text-[#5E6C84] mt-1">Assign work to your team and track follow-ups across contacts.</p>
       </div>
 
@@ -93,7 +93,7 @@ export default function Tasks() {
         </div>
       </div>
 
-      <div className="flex gap-1.5 border-b border-[#DFE1E6] pb-3" data-testid="task-tabs">
+      <div className="flex gap-1.5 overflow-x-auto scrollbar-thin border-b border-[#DFE1E6] pb-3 -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="task-tabs">
         {[
           { v: "all", l: "All" },
           { v: "open", l: "Open" },
@@ -104,7 +104,7 @@ export default function Tasks() {
             key={t.v}
             data-testid={`task-tab-${t.v}`}
             onClick={() => setTab(t.v)}
-            className={`px-3 py-1.5 text-sm font-medium rounded-md ${tab === t.v ? "bg-[#091E42] text-white" : "text-[#42526E] hover:bg-[#F1F2F4]"}`}
+            className={`px-3 py-1.5 text-sm font-medium rounded-md whitespace-nowrap shrink-0 ${tab === t.v ? "bg-[#091E42] text-white" : "text-[#42526E] hover:bg-[#F1F2F4]"}`}
           >{t.l}</button>
         ))}
       </div>
