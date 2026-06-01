@@ -869,6 +869,173 @@ async def provider_activities(
     return {"items": items, "total": total}
 
 
+# ---------- Earnings & Payouts ----------
+PLATFORM_FEE_PCT = 15.0  # global platform commission for this MVP
+PAID_STATUSES = ["COMPLETED", "completed", "report_ready", "delivered"]
+
+
+def _next_monday_iso() -> str:
+    """Next payout = next Monday at 11:00 IST (~05:30 UTC)."""
+    now = datetime.now(timezone.utc)
+    days_ahead = (7 - now.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7
+    nxt = (now + timedelta(days=days_ahead)).replace(hour=5, minute=30, second=0, microsecond=0)
+    return nxt.isoformat()
+
+
+@api.get("/provider/earnings")
+async def provider_earnings(period: str = "30d", current=Depends(get_current_user)):
+    if not is_provider(current):
+        raise HTTPException(status_code=403, detail="Provider access only")
+    pid = current.get("provider_id")
+
+    # Period window
+    days = {"7d": 7, "30d": 30, "90d": 90, "all": 3650}.get(period, 30)
+    start = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    base_match = {"provider_ids": pid, "status": {"$in": PAID_STATUSES}, "amount": {"$gt": 0}}
+    period_match = {**base_match, "created_at": {"$gte": start}}
+
+    # Aggregations
+    total_gross = 0
+    transactions = 0
+    by_category: Dict[str, float] = {}
+    cursor = db.activities.find(period_match, {"_id": 0, "amount": 1, "category": 1})
+    async for d in cursor:
+        amt = d.get("amount", 0) or 0
+        total_gross += amt
+        transactions += 1
+        cat = d.get("category", "other")
+        by_category[cat] = round(by_category.get(cat, 0) + amt, 2)
+
+    # Daily series (last `days`)
+    daily = []
+    for i in range(min(days, 60) - 1, -1, -1):
+        day = (datetime.now(timezone.utc) - timedelta(days=i)).date()
+        s = datetime(day.year, day.month, day.day, tzinfo=timezone.utc).isoformat()
+        e = (datetime(day.year, day.month, day.day, tzinfo=timezone.utc) + timedelta(days=1)).isoformat()
+        cur = db.activities.find({**base_match, "created_at": {"$gte": s, "$lt": e}}, {"amount": 1, "_id": 0})
+        v = 0
+        async for d in cur:
+            v += d.get("amount", 0) or 0
+        daily.append({"date": day.isoformat(), "amount": round(v, 2)})
+
+    # Lifetime totals
+    lifetime_gross = 0
+    async for d in db.activities.find(base_match, {"_id": 0, "amount": 1}):
+        lifetime_gross += d.get("amount", 0) or 0
+
+    # Next payout = unpaid period from last paid → next Monday
+    last_paid = await db.payouts.find_one({"provider_id": pid, "status": "paid"}, {"_id": 0}, sort=[("period_end", -1)])
+    unpaid_since = last_paid["period_end"] if last_paid else (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    unpaid_gross = 0
+    async for d in db.activities.find({**base_match, "created_at": {"$gte": unpaid_since}}, {"amount": 1, "_id": 0}):
+        unpaid_gross += d.get("amount", 0) or 0
+    next_payout_fee = round(unpaid_gross * PLATFORM_FEE_PCT / 100, 2)
+    next_payout_net = round(unpaid_gross - next_payout_fee, 2)
+
+    fee = round(total_gross * PLATFORM_FEE_PCT / 100, 2)
+    net = round(total_gross - fee, 2)
+
+    return {
+        "currency": "INR",
+        "period": period,
+        "fee_pct": PLATFORM_FEE_PCT,
+        "summary": {
+            "gross": round(total_gross, 2),
+            "fee": fee,
+            "net": net,
+            "transactions": transactions,
+        },
+        "lifetime": {
+            "gross": round(lifetime_gross, 2),
+            "fee": round(lifetime_gross * PLATFORM_FEE_PCT / 100, 2),
+            "net": round(lifetime_gross * (1 - PLATFORM_FEE_PCT / 100), 2),
+        },
+        "next_payout": {
+            "scheduled_for": _next_monday_iso(),
+            "gross": round(unpaid_gross, 2),
+            "fee": next_payout_fee,
+            "net": next_payout_net,
+        },
+        "by_category": by_category,
+        "daily": daily,
+    }
+
+
+@api.get("/provider/payouts")
+async def provider_payouts(current=Depends(get_current_user), limit: int = 24):
+    if not is_provider(current):
+        raise HTTPException(status_code=403, detail="Provider access only")
+    pid = current.get("provider_id")
+    items = await db.payouts.find({"provider_id": pid}, {"_id": 0}).sort("period_end", -1).limit(limit).to_list(limit)
+    return {"items": items, "total": len(items)}
+
+
+@api.get("/provider/invoice/{payout_id}")
+async def provider_invoice(payout_id: str, current=Depends(get_current_user)):
+    """Returns a printable HTML invoice for one payout, scoped to the calling provider."""
+    if not is_provider(current):
+        raise HTTPException(status_code=403, detail="Provider access only")
+    pid = current.get("provider_id")
+    payout = await db.payouts.find_one({"id": payout_id, "provider_id": pid}, {"_id": 0})
+    if not payout:
+        raise HTTPException(status_code=404, detail="Payout not found")
+    contact = await db.contacts.find_one({"id": pid}, {"_id": 0}) or {}
+
+    rows = (
+        f"<tr><td>{payout['activity_count']} fulfilled activities ({payout['period_start'][:10]} → {payout['period_end'][:10]})</td>"
+        f"<td style='text-align:right'>₹{payout['gross']:,.2f}</td></tr>"
+        f"<tr><td>Platform fee ({payout['fee_pct']}%)</td>"
+        f"<td style='text-align:right;color:#FF5630'>-₹{payout['fee']:,.2f}</td></tr>"
+    )
+    html = f"""<!doctype html><html><head><meta charset='utf-8'><title>Invoice {payout['invoice_number']}</title>
+<style>
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#091E42;max-width:780px;margin:40px auto;padding:0 24px;}}
+.hd{{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #091E42;padding-bottom:16px;margin-bottom:24px;}}
+.brand{{font-weight:900;font-size:24px;letter-spacing:-.02em;}} .brand small{{font-weight:600;color:#5E6C84;font-size:11px;letter-spacing:.12em;text-transform:uppercase;display:block;}}
+.meta{{text-align:right;font-size:12px;color:#5E6C84;}} .meta b{{color:#091E42;display:block;font-size:14px;}}
+h2{{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#5E6C84;margin:24px 0 8px;}}
+table{{width:100%;border-collapse:collapse;margin-bottom:24px;}} td{{padding:10px 0;border-bottom:1px solid #DFE1E6;font-size:14px;}}
+.totals{{margin-top:8px;font-size:14px;}} .totals .row{{display:flex;justify-content:space-between;padding:6px 0;}}
+.net{{font-weight:900;font-size:20px;background:#091E42;color:#fff;padding:14px 16px;border-radius:6px;display:flex;justify-content:space-between;margin-top:12px;}}
+.stamp{{display:inline-block;padding:4px 10px;border:2px solid #36B37E;color:#36B37E;border-radius:4px;font-weight:700;letter-spacing:.1em;font-size:12px;text-transform:uppercase;}}
+.foot{{margin-top:48px;font-size:11px;color:#5E6C84;border-top:1px solid #DFE1E6;padding-top:12px;}}
+@media print {{ body {{margin:0;}} }}
+</style></head><body>
+<div class='hd'>
+  <div class='brand'>TrataHealth<small>Payout Statement</small></div>
+  <div class='meta'><b>{payout['invoice_number']}</b>Issued {payout.get('paid_at', payout.get('created_at',''))[:10]}<br/>Status: {payout['status'].upper()}</div>
+</div>
+<h2>Billed to</h2>
+<div style='font-size:15px;font-weight:700;'>{contact.get('name','—')}</div>
+<div style='font-size:13px;color:#5E6C84;'>{(contact.get('type') or '').replace('_',' ').title()} · {contact.get('city','')}, {contact.get('state','')} · +91 {contact.get('phone','')}</div>
+{('<div style="font-size:13px;color:#5E6C84;">License: ' + (contact.get('meta') or {}).get('license_number','—') + '</div>') if contact.get('meta') else ''}
+
+<h2>Period</h2>
+<table><tr><td>From {payout['period_start'][:10]} to {payout['period_end'][:10]}</td><td style='text-align:right'>{payout['activity_count']} transactions</td></tr></table>
+
+<h2>Breakdown</h2>
+<table>{rows}</table>
+
+<div class='net'><span>Net Payout</span><span>₹{payout['net']:,.2f}</span></div>
+
+<h2>Settlement</h2>
+<table>
+  <tr><td>Method</td><td style='text-align:right'>UPI / NEFT</td></tr>
+  <tr><td>UTR / Reference</td><td style='text-align:right;font-family:monospace'>{payout.get('utr','—')}</td></tr>
+  <tr><td>Scheduled for</td><td style='text-align:right'>{payout.get('paid_at') or payout.get('scheduled_for','—')}</td></tr>
+  <tr><td>Status</td><td style='text-align:right'>{'<span class=stamp>Paid</span>' if payout['status']=='paid' else payout['status'].upper()}</td></tr>
+</table>
+
+<div class='foot'>This is a system-generated statement. For any disputes, write to billing@tratahealth.com within 7 days of issue.</div>
+<script>window.onload=()=>{{try{{window.focus();}}catch(e){{}}}};</script>
+</body></html>"""
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=html)
+
+
 # ---------- AI ----------
 @api.post("/ai/insight")
 async def ai_insight(data: AISummaryRequest, current=Depends(get_current_user)):
@@ -1211,11 +1378,11 @@ async def _do_seed(force: bool = False) -> dict:
         ("ambulance", "9000020003", "Ambulance Fleet Owner"),
         ("pathology", "9000020004", "Path Lab Owner"),
     ]
+    provider_owners = []
     for ptype, phone, label in demo_provider_seed:
         if await db.crm_users.find_one({"phone": phone}):
             continue
         ctype = PROVIDER_TYPE_TO_CONTACT_TYPE[ptype]
-        # Pick a verified contact of that type to act as their business
         candidates = [c for c in contacts if c["type"] == ctype and c.get("is_verified")]
         if not candidates:
             candidates = [c for c in contacts if c["type"] == ctype]
@@ -1236,6 +1403,46 @@ async def _do_seed(force: bool = False) -> dict:
             "password_hash": demo_pw,
             "created_at": now_iso(),
         })
+        provider_owners.append((ptype, contact))
+
+    # Seed past PAYOUTS for each demo provider — weekly payouts for the last ~10 weeks
+    await db.payouts.delete_many({"provider_id": {"$in": [c["id"] for _, c in provider_owners]}})
+    payouts_seeded = 0
+    for ptype, contact in provider_owners:
+        pid = contact["id"]
+        # Use existing activity revenue to make payouts feel plausible
+        all_acts = [a for a in activities if pid in (a.get("provider_ids") or []) and (a.get("amount") or 0) > 0
+                    and a.get("status") in PAID_STATUSES]
+        now = datetime.now(timezone.utc)
+        for week in range(2, 12):  # weeks 2..11 ago are PAID; the current open week is the upcoming payout
+            period_end = now - timedelta(days=now.weekday() + 7 * (week - 1))  # last Monday minus N weeks
+            period_start = period_end - timedelta(days=7)
+            window = [a for a in all_acts if period_start.isoformat() <= a["created_at"] < period_end.isoformat()]
+            if not window:
+                continue
+            gross = round(sum(a["amount"] for a in window), 2)
+            fee = round(gross * PLATFORM_FEE_PCT / 100, 2)
+            net = round(gross - fee, 2)
+            paid_at = (period_end + timedelta(hours=11)).isoformat()
+            await db.payouts.insert_one({
+                "id": str(uuid.uuid4()),
+                "provider_id": pid,
+                "provider_type": ptype,
+                "period_start": period_start.isoformat(),
+                "period_end": period_end.isoformat(),
+                "activity_count": len(window),
+                "gross": gross,
+                "fee": fee,
+                "fee_pct": PLATFORM_FEE_PCT,
+                "net": net,
+                "currency": "INR",
+                "status": "paid",
+                "paid_at": paid_at,
+                "utr": f"UPI{random.randint(100000000000, 999999999999)}",
+                "invoice_number": f"TH-INV-{period_end.strftime('%Y%m')}-{random.randint(100, 999)}",
+                "created_at": paid_at,
+            })
+            payouts_seeded += 1
 
     return {
         "success": True,
@@ -1243,6 +1450,7 @@ async def _do_seed(force: bool = False) -> dict:
         "activities": len(activities),
         "tasks": len(tasks),
         "notifications": len(notifs),
+        "payouts": payouts_seeded,
         "demo_providers": [p[1] for p in demo_provider_seed],
     }
 

@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity,
   BarChart3, UserCog, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
-  Building2, ClipboardList, IdCard,
+  Building2, ClipboardList, IdCard, Wallet,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import api from "../lib/api";
@@ -22,6 +22,7 @@ const ADMIN_NAV = [
 const PROVIDER_NAV = [
   { to: "/provider", label: "My Dashboard", icon: LayoutDashboard, exact: true },
   { to: "/provider/activities", label: "My Activities", icon: Activity },
+  { to: "/provider/earnings", label: "Earnings & Payouts", icon: Wallet },
   { to: "/provider/profile", label: "Profile & KYC", icon: IdCard },
   { to: "/tasks", label: "Tasks", icon: ListChecks },
 ];

@@ -31,6 +31,15 @@ Login, Dashboard, Contacts/Detail, Pipeline, Activities, Tasks, Analytics, Team,
 ### Iteration 3 (2026-06-01) — Mobile UX + PWA
 Hamburger drawer, condensed top bar, horizontal-scroll Kanban, manifest.json + service worker + install prompt (Chrome banner + iOS Add-to-Home tip).
 
+### Iteration 5 (2026-06-01) — Earnings & Payouts 💰
+- New backend endpoints: `GET /api/provider/earnings?period=7d|30d|90d|all`, `GET /api/provider/payouts`, `GET /api/provider/invoice/{payout_id}` (HTML invoice).
+- Earnings response: period summary (gross/fee/net/transactions), lifetime, next payout (auto-scheduled for next Monday 11:00 IST, based on activity since last paid period), revenue by category, daily series.
+- Platform fee: 15% (constant `PLATFORM_FEE_PCT`).
+- Seed: ~6 weeks of historical weekly payouts per provider (status `paid` + UTR + invoice number).
+- New frontend page `/provider/earnings` with: green-gradient hero next-payout card, 4 KPIs (gross / fee / net / past payouts), period tabs (7d/30d/90d/all), daily revenue area chart, revenue-mix progress bars, payouts history table with one-click invoice download (opens printable HTML in new tab).
+- Sidebar nav gains "Earnings & Payouts" item between My Activities and Profile & KYC.
+- Scope: each provider sees only their own earnings & payouts; cross-provider invoice access returns 404. Admin gets 403.
+
 ### Iteration 4 (2026-06-01) — Multi-tenant provider portal ✨
 - **Roles**: `admin` / `manager` / `sales_rep` / `ops_rep` / `provider_owner`. New `provider_type` (`hospital|clinic|ambulance|pathology`) + `provider_id` linkage.
 - **Auth**: 3-step phone+OTP+password; bcrypt; access vs temp token types.

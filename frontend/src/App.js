@@ -16,6 +16,7 @@ import Team from "./pages/Team";
 import ProviderDashboard from "./pages/ProviderDashboard";
 import ProviderActivities from "./pages/ProviderActivities";
 import ProviderProfile from "./pages/ProviderProfile";
+import ProviderEarnings from "./pages/ProviderEarnings";
 import { Toaster } from "sonner";
 import { registerSW } from "./lib/registerSW";
 
@@ -62,6 +63,7 @@ function App() {
           {/* Provider routes */}
           <Route path="/provider" element={<RequireAuth providerOnly><ProviderDashboard /></RequireAuth>} />
           <Route path="/provider/activities" element={<RequireAuth providerOnly><ProviderActivities /></RequireAuth>} />
+          <Route path="/provider/earnings" element={<RequireAuth providerOnly><ProviderEarnings /></RequireAuth>} />
           <Route path="/provider/profile" element={<RequireAuth providerOnly><ProviderProfile /></RequireAuth>} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
