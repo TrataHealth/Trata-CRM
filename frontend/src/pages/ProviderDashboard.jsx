@@ -3,8 +3,8 @@ import api from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useNavigate } from "react-router-dom";
 import {
-  Activity as ActivityIcon, Briefcase, CheckCircle2, Clock, Building2, Stethoscope,
-  Ambulance, FlaskConical, ArrowRight, Sparkles, AlertTriangle, BedDouble, Timer, Truck,
+  Activity as ActivityIcon, Briefcase, CheckCircle2, Clock, Ambulance,
+  Sparkles, AlertTriangle, Timer, Truck,
 } from "lucide-react";
 import { fmtCurrency, relativeTime, statusColor, ACTIVITY_CATEGORIES } from "../lib/constants";
 import {
@@ -13,10 +13,7 @@ import {
 } from "recharts";
 
 const TYPE_THEME = {
-  hospital:  { color: "#0052CC", icon: Building2,   label: "Hospital" },
-  clinic:    { color: "#6554C0", icon: Stethoscope, label: "Clinic" },
-  ambulance: { color: "#FF5630", icon: Ambulance,   label: "Ambulance Fleet" },
-  pathology: { color: "#36B37E", icon: FlaskConical, label: "Pathology Lab" },
+  ambulance: { color: "#FF5630", icon: Ambulance, label: "Ambulance Fleet" },
 };
 
 export default function ProviderDashboard() {
@@ -204,18 +201,6 @@ function KPI({ icon: Icon, label, value, accent = "#0052CC", testid }) {
 }
 
 function TypeSpecificKpis({ ptype, kpis }) {
-  if (ptype === "hospital") {
-    const free = kpis.available_beds ?? 0;
-    const total = kpis.total_beds ?? 0;
-    const occ = kpis.occupancy_pct ?? 0;
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 lg:gap-4" data-testid="hospital-kpis">
-        <BigStat icon={BedDouble} label="Beds" value={`${free} / ${total}`} sub="Available · Total" />
-        <Occupancy occ={occ} />
-        <BigStat icon={ActivityIcon} label="Incoming now" value={kpis.incoming_today || 0} sub="Ambulances dispatched / on the way to you" accent="#FF5630" />
-      </div>
-    );
-  }
   if (ptype === "ambulance") {
     return (
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3 lg:gap-4" data-testid="ambulance-kpis">
@@ -223,23 +208,6 @@ function TypeSpecificKpis({ ptype, kpis }) {
         <BigStat icon={Timer} label="Avg response" value={kpis.avg_response_min != null ? `${kpis.avg_response_min}m` : "—"} sub="last 30 days" />
         <BigStat icon={ActivityIcon} label="Live trips" value={kpis.live_trips || 0} sub="dispatched / on the way" accent="#FF5630" />
         <BigStat icon={CheckCircle2} label="Trips completed" value={kpis.trips_completed || 0} sub="all-time" accent="#36B37E" />
-      </div>
-    );
-  }
-  if (ptype === "clinic") {
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 lg:gap-4" data-testid="clinic-kpis">
-        <BigStat icon={ActivityIcon} label="Appointments · 24h" value={kpis.appointments_today || 0} sub="new bookings today" />
-        <BigStat icon={AlertTriangle} label="No-show rate" value={`${kpis.no_show_rate_pct ?? 0}%`} sub="all-time" accent="#FFAB00" />
-      </div>
-    );
-  }
-  if (ptype === "pathology") {
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 lg:gap-4" data-testid="pathology-kpis">
-        <BigStat icon={Clock} label="Pending bookings" value={kpis.pending_bookings || 0} sub="awaiting sample" accent="#FFAB00" />
-        <BigStat icon={ActivityIcon} label="Samples collected" value={kpis.samples_collected || 0} sub="awaiting report" />
-        <BigStat icon={CheckCircle2} label="Reports ready" value={kpis.reports_ready || 0} sub="delivered to patient" accent="#36B37E" />
       </div>
     );
   }
@@ -255,22 +223,6 @@ function BigStat({ icon: Icon, label, value, sub, accent = "#0052CC" }) {
       </div>
       <div className="font-heading text-3xl font-bold text-[#091E42] mt-2 tracking-tight">{value}</div>
       <div className="text-xs text-[#5E6C84] mt-1">{sub}</div>
-    </div>
-  );
-}
-
-function Occupancy({ occ }) {
-  const color = occ >= 85 ? "#FF5630" : occ >= 65 ? "#FFAB00" : "#36B37E";
-  return (
-    <div className="bg-white border border-[#DFE1E6] rounded-md p-4">
-      <div className="flex items-center justify-between">
-        <div className="overline">Bed Occupancy</div>
-        <Sparkles className="h-4 w-4" style={{ color }} />
-      </div>
-      <div className="font-heading text-3xl font-bold text-[#091E42] mt-2 tracking-tight">{occ}%</div>
-      <div className="mt-2 h-2 rounded-full bg-[#F1F2F4] overflow-hidden">
-        <div className="h-full transition-all" style={{ width: `${Math.min(occ, 100)}%`, background: color }} />
-      </div>
     </div>
   );
 }

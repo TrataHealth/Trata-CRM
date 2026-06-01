@@ -91,11 +91,12 @@ export default function Login() {
           <div className="mt-auto space-y-6">
             <h1 className="font-heading text-5xl font-black tracking-tight leading-[1.05]">
               One console.<br />
-              <span className="text-[#79E2F2]">Every provider.</span><br />
-              Every activity.
+              <span className="text-[#79E2F2]">Every fleet.</span><br />
+              Every trip.
             </h1>
             <p className="text-base text-white/70 max-w-md leading-relaxed">
-              HQ team sees the whole network. Hospital, clinic, ambulance and lab owners see exactly their own world — real-time activity, KYC, earnings and AI insights tailored to their role.
+              For TrataHealth HQ and ambulance fleet partners. Run live SOS dispatch, KYC, fleet utilisation, earnings and AI insights from one place.
+              <span className="block mt-2 text-white/50 text-sm">Hospitals, clinics and path labs — please continue using the Trata HMS.</span>
             </p>
             <div className="grid grid-cols-3 gap-4 pt-4">
               {[
@@ -247,12 +248,12 @@ function DemoCreds() {
     <div className="mt-6 p-3 bg-[#F8F9FA] border border-dashed border-[#DFE1E6] rounded-md text-[11px] text-[#42526E] leading-relaxed">
       <div className="font-semibold text-[#091E42] mb-1">Demo accounts (OTP: 123456):</div>
       <ul className="space-y-0.5 font-mono">
-        <li>9873117605 · Master admin (set pw)</li>
-        <li>9000020001 · Hospital owner · <span className="text-[#091E42]">Trata@123</span></li>
-        <li>9000020002 · Clinic doctor · <span className="text-[#091E42]">Trata@123</span></li>
+        <li>9873117605 · Master admin (set pw on first login)</li>
         <li>9000020003 · Ambulance owner · <span className="text-[#091E42]">Trata@123</span></li>
-        <li>9000020004 · Path lab owner · <span className="text-[#091E42]">Trata@123</span></li>
       </ul>
+      <div className="mt-2 text-[10px] text-[#5E6C84] font-sans">
+        Hospital / clinic / path-lab owners → use the Trata HMS instead.
+      </div>
     </div>
   );
 }

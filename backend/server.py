@@ -53,12 +53,11 @@ def now_iso():
 # ---------- Roles & Scopes ----------
 INTERNAL_ROLES = {"admin", "manager", "sales_rep", "ops_rep"}
 PROVIDER_ROLES = {"provider_owner"}
+# This app only supports ambulance providers. Hospital / clinic / pathology owners use the separate HMS.
 PROVIDER_TYPE_TO_CONTACT_TYPE = {
-    "hospital": "hospital",
-    "clinic": "doctor",   # clinic is run by a doctor in this MVP
     "ambulance": "ambulance_provider",
-    "pathology": "pathologist",
 }
+SUPPORTED_PROVIDER_TYPES = set(PROVIDER_TYPE_TO_CONTACT_TYPE.keys())
 
 
 def is_internal(user: dict) -> bool:
@@ -261,6 +260,14 @@ async def verify_otp(data: LoginVerifyOTP):
             await db.crm_users.insert_one(user.copy())
         else:
             raise HTTPException(status_code=403, detail="Phone not authorized. Contact master admin to be added.")
+
+    # Guard: only ambulance provider portals are supported here. Hospital/clinic/path-lab owners
+    # belong to the separate HMS and must not be allowed to log in.
+    if user.get("role") == "provider_owner" and user.get("provider_type") not in SUPPORTED_PROVIDER_TYPES:
+        raise HTTPException(
+            status_code=403,
+            detail="This portal is for Trata Health admin and ambulance providers only. Please use the Hospital Management System for your account.",
+        )
 
     needs_setup = not user.get("password_hash")
     # Short-lived temp token good only for the next step (set/verify password)
@@ -792,40 +799,17 @@ async def provider_dashboard(current=Depends(get_current_user)):
     for cat in ["emergency_case", "appointment", "ambulance_booking", "lab_booking", "pathology_booking", "kyc"]:
         by_category[cat] = await db.activities.count_documents({**scope, "category": cat})
 
-    # Type-specific KPIs
+    # Type-specific KPIs (ambulance only — hospital/clinic/path-lab use their HMS)
     extras: Dict[str, Any] = {}
-    if ptype == "hospital":
-        meta = contact.get("meta") or {}
-        extras["total_beds"] = meta.get("total_beds") or 0
-        extras["available_beds"] = meta.get("available_beds") or 0
-        extras["occupancy_pct"] = (
-            round(100 * (1 - (extras["available_beds"] / extras["total_beds"])), 1)
-            if extras["total_beds"] else 0
-        )
-        extras["incoming_today"] = await db.activities.count_documents({
-            **scope, "category": "emergency_case",
-            "status": {"$in": ["AMBULANCE_DISPATCHED", "ON_THE_WAY"]},
-        })
-    elif ptype == "ambulance":
+    if ptype == "ambulance":
         meta = contact.get("meta") or {}
         extras["fleet_size"] = meta.get("ambulance_count") or 0
-        # avg response time
         rt = []
         async for d in db.activities.find({**scope, "response_time_minutes": {"$exists": True, "$ne": None}}, {"response_time_minutes": 1, "_id": 0}):
             rt.append(d["response_time_minutes"])
         extras["avg_response_min"] = round(sum(rt) / len(rt), 1) if rt else None
         extras["trips_completed"] = await db.activities.count_documents({**scope, "category": {"$in": ["ambulance_booking", "emergency_case"]}, "status": {"$in": ["completed", "COMPLETED"]}})
         extras["live_trips"] = await db.activities.count_documents({**scope, "category": "emergency_case", "status": {"$in": ["AMBULANCE_DISPATCHED", "ON_THE_WAY", "REACHED"]}})
-    elif ptype == "clinic":
-        extras["appointments_today"] = await db.activities.count_documents({
-            **scope, "category": "appointment",
-            "created_at": {"$gte": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()},
-        })
-        extras["no_show_rate_pct"] = await _no_show_rate(scope)
-    elif ptype == "pathology":
-        extras["samples_collected"] = await db.activities.count_documents({**scope, "status": "sample_collected"})
-        extras["reports_ready"] = await db.activities.count_documents({**scope, "status": "report_ready"})
-        extras["pending_bookings"] = await db.activities.count_documents({**scope, "status": "booked"})
 
     return {
         "contact": contact,
@@ -840,14 +824,6 @@ async def provider_dashboard(current=Depends(get_current_user)):
         "trend_14d": trend,
         "by_category": by_category,
     }
-
-
-async def _no_show_rate(scope: dict) -> float:
-    total = await db.activities.count_documents({**scope, "category": "appointment"})
-    if not total:
-        return 0.0
-    no_show = await db.activities.count_documents({**scope, "category": "appointment", "status": "no_show"})
-    return round(100 * no_show / total, 1)
 
 
 @api.get("/provider/activities")
@@ -1370,13 +1346,11 @@ async def _do_seed(force: bool = False) -> dict:
             m_full = {**m, "id": str(uuid.uuid4()), "is_master_admin": False, "is_active": True, "created_at": now_iso()}
             await db.crm_users.insert_one(m_full)
 
-    # Seed demo PROVIDER OWNER accounts — one per provider type, linked to a verified contact
+    # Seed demo PROVIDER OWNER accounts — ambulance only. Hospital/clinic/pathology
+    # owners use the separate Hospital Management System.
     demo_pw = hash_password("Trata@123")
     demo_provider_seed = [
-        ("hospital",  "9000020001", "Apollo Hospital Owner"),
-        ("clinic",    "9000020002", "Clinic Doctor Owner"),
         ("ambulance", "9000020003", "Ambulance Fleet Owner"),
-        ("pathology", "9000020004", "Path Lab Owner"),
     ]
     provider_owners = []
     for ptype, phone, label in demo_provider_seed:
