@@ -9,7 +9,7 @@ import { PIPELINE_STAGES, relativeTime } from "../lib/constants";
 import { Avatar } from "./Contacts";
 import {
   Activity, Clock, AlertTriangle, CheckCircle2, Phone, Plus, Briefcase, MapPin,
-  ListChecks, Loader2,
+  ListChecks, Loader2, Sparkles,
 } from "lucide-react";
 import QuickLogModal from "../components/QuickLogModal";
 
@@ -167,6 +167,9 @@ export default function AgentDashboard() {
         <LeadsCard title="⚠️ Stale leads" subtitle="No touch in 7+ days — chase today" leads={dash.stale_leads_list} onLog={openQuickLog} navigate={navigate} testid="stale-leads" />
       </div>
 
+      {/* AI End-of-day digest */}
+      <DigestCard />
+
       {/* Floating mobile FAB */}
       <button
         onClick={() => openQuickLog()}
@@ -229,6 +232,79 @@ function LeadsCard({ title, subtitle, leads, onLog, navigate, testid }) {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+
+function DigestCard() {
+  const [digest, setDigest] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  const generate = async () => {
+    setErr(""); setLoading(true);
+    try {
+      const { data } = await api.post("/agent/digest");
+      setDigest(data);
+    } catch (e) {
+      setErr(e?.response?.data?.detail || "Could not generate digest");
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div
+      className="rounded-md p-5 border border-[#6554C0]/30 bg-gradient-to-br from-[#F4F1FD] via-white to-[#EAE6FB]"
+      data-testid="agent-digest-card"
+    >
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <div className="overline flex items-center gap-1.5 text-[#6554C0]">
+            <Sparkles className="h-3 w-3" /> AI End-of-day digest
+          </div>
+          <div className="font-heading text-lg font-bold text-[#091E42] mt-1">Your workday wrap-up</div>
+          <p className="text-xs text-[#5E6C84] mt-0.5">Claude reads today&apos;s activity and writes a 4-line summary with tomorrow&apos;s #1 action.</p>
+        </div>
+        <button
+          onClick={generate}
+          disabled={loading}
+          data-testid="digest-generate-btn"
+          className="flex items-center gap-2 px-3 py-2 text-sm font-semibold bg-[#6554C0] hover:bg-[#5243AA] text-white rounded-md disabled:opacity-60"
+        >
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+          {digest ? "Regenerate" : "Generate today's digest"}
+        </button>
+      </div>
+
+      {err && <div className="mt-3 text-sm text-[#FF5630]" data-testid="digest-error">{err}</div>}
+
+      {digest && (
+        <div className="mt-4 space-y-3" data-testid="digest-content">
+          <pre className="whitespace-pre-wrap font-sans text-sm text-[#091E42] bg-white border border-[#DFE1E6] rounded-md p-3 leading-relaxed">
+            {digest.text}
+          </pre>
+          <div className="flex flex-wrap gap-2">
+            <Pill label="Activities" value={digest.stats?.activities ?? 0} />
+            <Pill label="Onboarded" value={digest.stats?.onboarded ?? 0} accent="#36B37E" />
+            <Pill label="Tasks done" value={digest.stats?.tasks_done ?? 0} accent="#0052CC" />
+            {!digest.success && (
+              <span className="px-2 py-1 rounded text-[10px] uppercase tracking-wider font-semibold bg-[#FFFAE6] text-[#974F0C] border border-[#FFC400]/40">
+                AI offline · raw stats shown
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Pill({ label, value, accent = "#5E6C84" }) {
+  return (
+    <div className="inline-flex items-baseline gap-1.5 px-2.5 py-1 bg-white border border-[#DFE1E6] rounded">
+      <span className="text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold">{label}</span>
+      <span className="font-heading font-bold text-sm" style={{ color: accent }}>{value}</span>
     </div>
   );
 }

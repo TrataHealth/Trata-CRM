@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity,
   BarChart3, UserCog, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
-  Building2, ClipboardList, IdCard, Wallet, Compass,
+  Building2, ClipboardList, IdCard, Wallet, Compass, Trophy,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import api from "../lib/api";
@@ -16,12 +16,13 @@ const ADMIN_NAV = [
   { to: "/activities", label: "Activities", icon: Activity },
   { to: "/tasks", label: "Tasks", icon: ListChecks },
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
+  { to: "/agent/leaderboard", label: "Leaderboard", icon: Trophy },
   { to: "/team", label: "Team & Roles", icon: UserCog },
 ];
 
 const SALES_NAV = [
   { to: "/agent", label: "My Day", icon: Compass, exact: true },
-  { to: "/contacts", label: "My Leads", icon: Users },
+  { to: "/agent/leads", label: "My Leads", icon: Users },
   { to: "/pipeline", label: "My Pipeline", icon: GitBranch },
   { to: "/activities", label: "My Activity Log", icon: Activity },
   { to: "/tasks", label: "My Tasks", icon: ListChecks },

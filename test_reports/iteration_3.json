@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 3: tested new Sales Agent feature set — AgentLeads page, AI Digest card, GPS check-in on QuickLogModal (site_visit only), monthly Leaderboard for admin/manager, /api/agent/* endpoints. Backend: 23/23 pytest tests passed covering 3-step auth (admin/manager/rep/provider), /api/agent/dashboard, /api/agent/leads (with stage/provider_type/last_touched/q filters + pagination), /api/agent/leads/map, /api/agent/quick-log (incl. gps persistence on site_visit, auto-advance kyc_collected→kyc_submitted with DB persistence verified via GET /contacts/:id, follow-up task creation), /api/agent/digest (success=true with Claude text + stats), /api/agent/targets, /api/agent/leaderboard (admin & manager allowed, sales_rep 403, provider 403). Frontend: 16/17 playwright checks passed — Rohan logs in and lands on /agent; sidebar shows exactly [My Day, My Leads, My Pipeline, My Activity Log, My Tasks] with NO Leaderboard; AgentDigest card renders, clicking 'Generate today's digest' fills digest-content; /agent/leads loads with search + 3 filters + clickable rows that navigate to /contacts/:id; QuickLogModal shows GPS block ONLY for site_visit activity type and hides it when switching back to cold_call; admin login lands on / with Leaderboard in sidebar and /agent/leaderboard renders the ranked table; sales rep is correctly redirected away from /agent/leaderboard; provider redirected from /agent/leads. The 1 FAIL is a REAL product bug — provider accessing /agent is NOT redirected (only the page sub-routes are guarded), so AgentDashboard mounts under provider's Layout, fires /api/agent/dashboard + /api/agent/leads/map which return 403, and CRA dev overlay throws an uncaught AxiosError runtime-error screen.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Role routing — Provider hitting /agent",
+        "issue": "/agent route in /app/frontend/src/App.js line 69 is wrapped in <RequireAuth> only (no internalOnly). Providers landing on /agent are NOT redirected to /provider; AgentDashboard mounts, fires GET /api/agent/dashboard + /api/agent/leads/map → both 403, surfacing an uncaught AxiosError runtime-error overlay. Both other agent routes (/agent/leads, /agent/leaderboard) are correctly guarded.",
+        "affected_selectors": ["AgentDashboard"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_agent_features.py",
+    "/app/test_reports/pytest/agent_features.xml"
+  ],
+  "action_items": [
+    "Add internalOnly to the /agent route guard in /app/frontend/src/App.js line 69: change <Route path=\"/agent\" element={<RequireAuth><AgentDashboard /></RequireAuth>} /> → <Route path=\"/agent\" element={<RequireAuth internalOnly><AgentDashboard /></RequireAuth>} />. This will redirect providers to /provider, matching how /agent/leads and the other internal pages are guarded."
+  ],
+  "critical_code_review_comments": [
+    "/agent route lacks internalOnly guard — see action item above. One-line fix.",
+    "AgentDashboard does not defensively swallow 403s from /api/agent/dashboard or /api/agent/leads/map — when an unauthorized user briefly mounts the component (e.g. during a redirect), CRA's dev runtime-error overlay renders. Consider try/catch in load() to silently bail rather than letting axios errors bubble.",
+    "server.py is now 1949 lines (was 1336 last iteration) — agent endpoints are inlined alongside provider/contact/auth/seed. Strongly recommend splitting into routers/agent.py, routers/provider.py, routers/auth.py, db/seed.py before further growth.",
+    "/api/agent/digest depends on EMERGENT_LLM_KEY + emergentintegrations. The graceful fallback (success:false, text=context) is correct, but during this test run AI returned success:true so the fallback path was not exercised in production traffic — fine since fallback logic is simple.",
+    "Mock OTP message still exposes the OTP value in /api/auth/send-otp response ('use 123456 for testing') — already flagged in iter-2, still present. Acceptable while mock=true but must be gated behind a dev flag before live OTP provider.",
+    "/api/agent/quick-log persists gps as a free-form dict — no validation on lat/lng numeric range or required keys. Pydantic GPS sub-model would be safer."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_agent_features.py (new — 23 tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (23/23)",
+    "frontend": "94% (16/17 — 1 real product bug: provider not redirected from /agent)"
+  },
+  "test_credentials": "Master admin 9873117605 / OTP 123456 / Master@123. Sales manager Priya 9000000001 / Trata@123. Sales rep Rohan 9000000002 / Trata@123. Ambulance owner 9000020003 / Trata@123. All OTPs are mock '123456'.",
+  "seed_data_creation": "Quick-log tests created two TEST_-tagged activities for Rohan's first lead (kyc_collection + site_visit) and one auto-generated follow-up task. Pipeline stage of that lead was advanced to kyc_submitted. These are not cleaned up — safe demo noise.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run REACT_APP_BACKEND_URL=https://patient-hub-133.preview.emergentagent.com pytest /app/backend/tests/test_agent_features.py -v for full agent feature regression (23 tests, ~13s). Existing test_multitenant.py + backend_test.py from prior iterations still relevant. Frontend testids added this iteration: agent-leads-page, agent-leads-table, agent-leads-search, filter-stage, filter-type, filter-touched, al-row-<id>, leaderboard-page, leaderboard-table, lb-row-<agent_id>, agent-digest-card, digest-generate-btn, digest-content, digest-error, ql-gps-block, ql-gps-capture, ql-gps-clear, ql-gps-error, ql-type-site_visit, ql-type-cold_call. Note: in QuickLogModal, ql-gps-block presence is the toggle indicator — count==0 means hidden. The one product bug to retest after fix: login as 9000020003, navigate to /agent, expect url to redirect to /provider and NO Uncaught runtime errors overlay.",
+  "rca of the issue": "Routing definition in App.js line 69 omitted the internalOnly flag (compare with neighbouring lines 70-71 which DO have internalOnly/adminOnly). Because <RequireAuth> without any flag only checks user!=null, a provider_owner passes through and mounts AgentDashboard. AgentDashboard's useEffect immediately calls GET /api/agent/dashboard and GET /api/agent/leads/map — both gated by is_sales_rep() server-side — which return 403. The axios errors are not caught in the component, so React's dev-mode error overlay surfaces. Fix is one line; after fix, retest by logging in as provider and navigating to /agent — expect Navigate to /provider and no overlay. Also recommend wrapping AgentDashboard.load() in try/catch as defence-in-depth so transient 403s during redirect chains never throw."
+}

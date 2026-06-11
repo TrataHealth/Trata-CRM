@@ -18,6 +18,8 @@ import ProviderActivities from "./pages/ProviderActivities";
 import ProviderProfile from "./pages/ProviderProfile";
 import ProviderEarnings from "./pages/ProviderEarnings";
 import AgentDashboard from "./pages/AgentDashboard";
+import AgentLeads from "./pages/AgentLeads";
+import Leaderboard from "./pages/Leaderboard";
 import { Toaster } from "sonner";
 import { registerSW } from "./lib/registerSW";
 
@@ -65,6 +67,8 @@ function App() {
 
           {/* Sales Agent routes */}
           <Route path="/agent" element={<RequireAuth><AgentDashboard /></RequireAuth>} />
+          <Route path="/agent/leads" element={<RequireAuth internalOnly><AgentLeads /></RequireAuth>} />
+          <Route path="/agent/leaderboard" element={<RequireAuth adminOnly><Leaderboard /></RequireAuth>} />
 
           {/* Provider routes */}
           <Route path="/provider" element={<RequireAuth providerOnly><ProviderDashboard /></RequireAuth>} />

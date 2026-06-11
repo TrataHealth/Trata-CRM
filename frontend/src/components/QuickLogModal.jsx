@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
-import { X, Loader2, Search, CalendarClock, Tag } from "lucide-react";
+import { X, Loader2, Search, CalendarClock, Tag, MapPin, CheckCircle2 } from "lucide-react";
 import { SALES_ACTIVITY_TYPES, SALES_OUTCOMES, PIPELINE_STAGES } from "../lib/constants";
 
 export default function QuickLogModal({ initialLead = null, onClose, onSaved }) {
@@ -14,6 +14,29 @@ export default function QuickLogModal({ initialLead = null, onClose, onSaved }) 
   const [nextDate, setNextDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
+  const [gps, setGps] = useState(null);
+  const [gpsBusy, setGpsBusy] = useState(false);
+  const [gpsErr, setGpsErr] = useState("");
+
+  const captureGps = () => {
+    setGpsErr("");
+    if (!navigator.geolocation) {
+      setGpsErr("Geolocation not supported on this device");
+      return;
+    }
+    setGpsBusy(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setGps({ lat: +pos.coords.latitude.toFixed(6), lng: +pos.coords.longitude.toFixed(6), accuracy: Math.round(pos.coords.accuracy || 0) });
+        setGpsBusy(false);
+      },
+      (e) => {
+        setGpsErr(e?.message || "Could not fetch location. Please allow location access.");
+        setGpsBusy(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  };
 
   // Lead autocomplete
   useEffect(() => {
@@ -40,6 +63,7 @@ export default function QuickLogModal({ initialLead = null, onClose, onSaved }) 
         outcome: outcome || null,
         notes,
         next_action_at: nextDate ? new Date(nextDate).toISOString() : null,
+        gps: gps ? { lat: gps.lat, lng: gps.lng } : null,
       });
       onSaved?.();
     } catch (e) {
@@ -129,6 +153,37 @@ export default function QuickLogModal({ initialLead = null, onClose, onSaved }) 
               ))}
             </div>
           </div>
+
+          {/* GPS Check-in (site visits only) */}
+          {activityType === "site_visit" && (
+            <div data-testid="ql-gps-block">
+              <div className="overline mb-2 flex items-center gap-1.5"><MapPin className="h-3 w-3" /> GPS Check-in</div>
+              {gps ? (
+                <div className="flex items-center justify-between bg-[#E3FCEF] border border-[#36B37E]/30 rounded-md p-2.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <CheckCircle2 className="h-4 w-4 text-[#36B37E] shrink-0" />
+                    <div className="text-xs">
+                      <div className="font-semibold text-[#006644]">Checked in at site</div>
+                      <div className="font-mono text-[10px] text-[#42526E]">{gps.lat}, {gps.lng} · ±{gps.accuracy}m</div>
+                    </div>
+                  </div>
+                  <button onClick={() => { setGps(null); setGpsErr(""); }} className="text-xs text-[#0052CC] font-semibold" data-testid="ql-gps-clear">Clear</button>
+                </div>
+              ) : (
+                <button
+                  onClick={captureGps}
+                  disabled={gpsBusy}
+                  data-testid="ql-gps-capture"
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 text-sm font-semibold border border-dashed border-[#0052CC]/40 text-[#0052CC] hover:bg-[#DEEBFF] rounded-md disabled:opacity-60"
+                >
+                  {gpsBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />}
+                  {gpsBusy ? "Getting your location…" : "Check in with GPS"}
+                </button>
+              )}
+              {gpsErr && <div className="text-[11px] text-[#FF5630] mt-1" data-testid="ql-gps-error">{gpsErr}</div>}
+              <div className="text-[11px] text-[#5E6C84] mt-1">Captures your live coordinates as proof of site visit.</div>
+            </div>
+          )}
 
           {/* Outcome */}
           <div>
