@@ -7,11 +7,14 @@ import os
 import logging
 import uuid
 import random
+import hmac
+import hashlib
+import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, Query, Request
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -35,6 +38,7 @@ MASTER_ADMIN_PHONE = os.environ['MASTER_ADMIN_PHONE']
 MASTER_ADMIN_OTP = os.environ['MASTER_ADMIN_OTP']
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 UPSTREAM_SYNC_INTERVAL_MIN = int(os.environ.get('UPSTREAM_SYNC_INTERVAL_MIN', '5'))
+PROVIDER_WEBHOOK_SECRET = os.environ.get('PROVIDER_WEBHOOK_SECRET', '')
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -1709,15 +1713,20 @@ async def _do_seed(force: bool = False) -> dict:
     # Seed team members (besides master admin) — passwords pre-set for demo
     sales_pw = hash_password("Trata@123")
     team_seed = [
-        {"name": "Priya Sales Lead", "phone": "9000000001", "email": "priya@tratahealth.com", "role": "manager"},
-        {"name": "Rohan Sales Rep", "phone": "9000000002", "email": "rohan@tratahealth.com", "role": "sales_rep"},
-        {"name": "Anita Ops", "phone": "9000000003", "email": "anita@tratahealth.com", "role": "ops_rep"},
+        {"name": "Priya Sales Lead", "phone": "9000000001", "email": "priya@tratahealth.com", "role": "manager", "territories": ["Mumbai", "Bengaluru", "Pune"]},
+        {"name": "Rohan Sales Rep", "phone": "9000000002", "email": "rohan@tratahealth.com", "role": "sales_rep", "territories": ["Delhi", "Gurugram", "Noida"]},
+        {"name": "Anita Ops", "phone": "9000000003", "email": "anita@tratahealth.com", "role": "ops_rep", "territories": []},
     ]
     sales_ids: dict = {}
     for m in team_seed:
         existing = await db.crm_users.find_one({"phone": m["phone"]})
         if existing:
             sales_ids[m["role"]] = existing["id"]
+            # Backfill territories on existing agents
+            await db.crm_users.update_one(
+                {"id": existing["id"]},
+                {"$set": {"territories": m.get("territories", [])}},
+            )
             continue
         m_full = {
             **m,
@@ -1886,6 +1895,333 @@ async def sync_run(current=Depends(get_current_user)):
     return res
 
 
+# ---------- Provider-App Webhook Bridge (Phase 5) ----------
+# Receives events from the Trata Provider App so the CRM lead pipeline can
+# auto-advance the moment a healthcare provider signs up or starts using the app.
+
+WEBHOOK_EVENT_TO_STAGE = {
+    "provider.signed_up": "verified",
+    "provider.first_use": "active",
+}
+
+
+def _normalize_phone(phone: Optional[str]) -> str:
+    if not phone:
+        return ""
+    s = "".join(ch for ch in str(phone) if ch.isdigit())
+    # Drop country code 91 if present and total length 12+
+    if len(s) == 12 and s.startswith("91"):
+        s = s[2:]
+    return s
+
+
+def _verify_webhook_signature(raw_body: bytes, signature_header: Optional[str]) -> bool:
+    if not PROVIDER_WEBHOOK_SECRET:
+        return False
+    if not signature_header:
+        return False
+    sig = signature_header.strip()
+    if sig.startswith("sha256="):
+        sig = sig[len("sha256="):]
+    expected = hmac.new(PROVIDER_WEBHOOK_SECRET.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, expected)
+
+
+def sign_webhook_payload(raw_body: bytes) -> str:
+    return "sha256=" + hmac.new(PROVIDER_WEBHOOK_SECRET.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+
+
+async def _pick_agent_for_territory(city: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Pick the next sales agent for a given city using round-robin within matching territories."""
+    city_l = (city or "").strip().lower()
+    agents = await db.crm_users.find(
+        {"role": {"$in": ["sales_rep", "manager"]}, "is_active": True},
+        {"_id": 0, "id": 1, "name": 1, "territories": 1, "role": 1},
+    ).to_list(200)
+    if not agents:
+        return None
+    matched = [a for a in agents if city_l and any(city_l == (t or "").strip().lower() for t in (a.get("territories") or []))]
+    pool = matched or agents  # fall back to all agents
+    # Round-robin counter keyed by territory bucket
+    bucket = (city_l if matched else "_global_")
+    ctr_doc = await db.webhook_counters.find_one_and_update(
+        {"_id": bucket},
+        {"$inc": {"n": 1}},
+        upsert=True, return_document=True,
+    ) or {"n": 1}
+    idx = (ctr_doc.get("n", 1) - 1) % len(pool)
+    return pool[idx]
+
+
+class ProviderWebhookBody(BaseModel):
+    event: str
+    occurred_at: Optional[str] = None
+    provider: Dict[str, Any]   # {phone, name, type, city, state, lat, lng, upstream_id, specialization, email}
+
+
+@api.post("/webhooks/provider-app")
+async def provider_app_webhook(
+    request: Request,
+    x_trata_signature: Optional[str] = Header(default=None, alias="X-Trata-Signature"),
+):
+    raw = await request.body()
+    if not _verify_webhook_signature(raw, x_trata_signature):
+        # Log failed attempt
+        await db.webhook_events.insert_one({
+            "id": str(uuid.uuid4()),
+            "event": "invalid_signature",
+            "status": "rejected",
+            "error": "Bad or missing X-Trata-Signature",
+            "payload": (raw[:512].decode("utf-8", errors="ignore") if raw else ""),
+            "created_at": now_iso(),
+        })
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    try:
+        body_dict = json.loads(raw.decode("utf-8") or "{}")
+        body = ProviderWebhookBody(**body_dict)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {e}")
+
+    if body.event not in WEBHOOK_EVENT_TO_STAGE:
+        raise HTTPException(status_code=400, detail=f"Unsupported event: {body.event}")
+
+    target_stage = WEBHOOK_EVENT_TO_STAGE[body.event]
+    provider = body.provider or {}
+    phone_norm = _normalize_phone(provider.get("phone"))
+    if not phone_norm:
+        raise HTTPException(status_code=400, detail="provider.phone is required")
+
+    # Match by normalized phone
+    contact = None
+    async for c in db.contacts.find({}, {"_id": 0}):
+        if _normalize_phone(c.get("phone")) == phone_norm:
+            contact = c
+            break
+
+    action = ""
+    created_new = False
+    prev_stage = contact.get("pipeline_stage") if contact else None
+
+    if not contact:
+        # Auto-create a brand-new lead and assign by territory round-robin
+        agent = await _pick_agent_for_territory(provider.get("city"))
+        contact = {
+            "id": str(uuid.uuid4()),
+            "name": provider.get("name") or f"Provider {phone_norm}",
+            "type": provider.get("type") or "ambulance_provider",
+            "phone": phone_norm,
+            "email": provider.get("email"),
+            "city": provider.get("city"),
+            "state": provider.get("state"),
+            "lat": provider.get("lat"),
+            "lng": provider.get("lng"),
+            "specialization": provider.get("specialization"),
+            "is_verified": target_stage in ("verified", "active"),
+            "is_active": target_stage == "active",
+            "pipeline_stage": target_stage,
+            "deal_value": 0,
+            "assigned_agent_id": agent["id"] if agent else None,
+            "assigned_agent_name": agent["name"] if agent else None,
+            "source": "provider_app_webhook",
+            "upstream_id": provider.get("upstream_id"),
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "avatar": None,
+        }
+        await db.contacts.insert_one(contact.copy())
+        contact.pop("_id", None)
+        created_new = True
+        action = f"created_lead_in_stage_{target_stage}"
+    else:
+        await db.contacts.update_one(
+            {"id": contact["id"]},
+            {"$set": {
+                "pipeline_stage": target_stage,
+                "is_verified": target_stage in ("verified", "active"),
+                "is_active": target_stage == "active",
+                "upstream_id": provider.get("upstream_id") or contact.get("upstream_id"),
+                "updated_at": now_iso(),
+            }},
+        )
+        action = f"advanced_{prev_stage}_to_{target_stage}"
+
+    # Log activity so it shows in feed + agent dashboard
+    activity = {
+        "id": str(uuid.uuid4()),
+        "category": "webhook_sync",
+        "subtype": body.event,
+        "outcome": target_stage,
+        "contact_id": contact["id"],
+        "contact_name": contact["name"],
+        "contact_type": contact.get("type"),
+        "city": contact.get("city"),
+        "title": f"Provider App: {body.event.replace('.', ' ').replace('_', ' ').title()} — {contact['name']}",
+        "description": f"Auto-advanced pipeline to {target_stage} via Trata Provider App webhook.",
+        "status": "completed",
+        "agent_id": contact.get("assigned_agent_id"),
+        "agent_name": contact.get("assigned_agent_name"),
+        "amount": 0,
+        "created_at": body.occurred_at or now_iso(),
+        "provider_ids": [contact["id"]],
+        "source": "provider_app_webhook",
+    }
+    await db.activities.insert_one(activity.copy())
+
+    # Persist webhook event record
+    event_record = {
+        "id": str(uuid.uuid4()),
+        "event": body.event,
+        "status": "accepted",
+        "contact_id": contact["id"],
+        "contact_name": contact["name"],
+        "action": action,
+        "stage": target_stage,
+        "created_new_lead": created_new,
+        "assigned_agent_name": contact.get("assigned_agent_name"),
+        "phone": phone_norm,
+        "city": provider.get("city"),
+        "created_at": now_iso(),
+    }
+    await db.webhook_events.insert_one(event_record.copy())
+    event_record.pop("_id", None)
+
+    return {"ok": True, "action": action, "contact_id": contact["id"], "pipeline_stage": target_stage, "created_new_lead": created_new}
+
+
+@api.get("/admin/webhooks/events")
+async def list_webhook_events(limit: int = 50, current=Depends(require_internal)):
+    items = await db.webhook_events.find({}, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 200))
+    return {"items": items, "total": len(items), "secret_configured": bool(PROVIDER_WEBHOOK_SECRET)}
+
+
+class WebhookTestSendBody(BaseModel):
+    event: str = "provider.signed_up"
+    phone: str
+    name: Optional[str] = None
+    type: Optional[str] = "ambulance_provider"
+    city: Optional[str] = None
+    state: Optional[str] = None
+    upstream_id: Optional[str] = None
+
+
+@api.post("/admin/webhooks/test-send")
+async def webhook_test_send(data: WebhookTestSendBody, current=Depends(require_internal)):
+    """Admin-only: signs a mock provider-app event with our shared secret and processes it."""
+    if data.event not in WEBHOOK_EVENT_TO_STAGE:
+        raise HTTPException(status_code=400, detail=f"Unsupported event: {data.event}. Use {list(WEBHOOK_EVENT_TO_STAGE)}")
+    payload = {
+        "event": data.event,
+        "occurred_at": now_iso(),
+        "provider": {
+            "phone": data.phone,
+            "name": data.name,
+            "type": data.type,
+            "city": data.city,
+            "state": data.state,
+            "upstream_id": data.upstream_id or f"mock-{uuid.uuid4().hex[:8]}",
+        },
+    }
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    signature = sign_webhook_payload(raw)
+    # Process inline as if the upstream had POSTed it — easier than self-HTTP.
+    body_obj = ProviderWebhookBody(**payload)
+    if not _verify_webhook_signature(raw, signature):
+        raise HTTPException(status_code=500, detail="Internal: signature self-verification failed (check PROVIDER_WEBHOOK_SECRET)")
+
+    phone_norm = _normalize_phone(body_obj.provider.get("phone"))
+    if not phone_norm:
+        raise HTTPException(status_code=400, detail="phone is required")
+    target_stage = WEBHOOK_EVENT_TO_STAGE[body_obj.event]
+    contact = None
+    async for c in db.contacts.find({}, {"_id": 0}):
+        if _normalize_phone(c.get("phone")) == phone_norm:
+            contact = c
+            break
+    prev_stage = contact.get("pipeline_stage") if contact else None
+    created_new = False
+    if not contact:
+        agent = await _pick_agent_for_territory(body_obj.provider.get("city"))
+        contact = {
+            "id": str(uuid.uuid4()),
+            "name": body_obj.provider.get("name") or f"Provider {phone_norm}",
+            "type": body_obj.provider.get("type") or "ambulance_provider",
+            "phone": phone_norm,
+            "city": body_obj.provider.get("city"),
+            "state": body_obj.provider.get("state"),
+            "specialization": body_obj.provider.get("specialization"),
+            "is_verified": True,
+            "is_active": target_stage == "active",
+            "pipeline_stage": target_stage,
+            "deal_value": 0,
+            "assigned_agent_id": agent["id"] if agent else None,
+            "assigned_agent_name": agent["name"] if agent else None,
+            "source": "provider_app_webhook",
+            "upstream_id": body_obj.provider.get("upstream_id"),
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "avatar": None,
+        }
+        await db.contacts.insert_one(contact.copy())
+        created_new = True
+        action = f"created_lead_in_stage_{target_stage}"
+    else:
+        await db.contacts.update_one(
+            {"id": contact["id"]},
+            {"$set": {
+                "pipeline_stage": target_stage,
+                "is_verified": target_stage in ("verified", "active"),
+                "is_active": target_stage == "active",
+                "upstream_id": body_obj.provider.get("upstream_id") or contact.get("upstream_id"),
+                "updated_at": now_iso(),
+            }},
+        )
+        action = f"advanced_{prev_stage}_to_{target_stage}"
+
+    await db.activities.insert_one({
+        "id": str(uuid.uuid4()),
+        "category": "webhook_sync",
+        "subtype": body_obj.event,
+        "outcome": target_stage,
+        "contact_id": contact["id"],
+        "contact_name": contact["name"],
+        "contact_type": contact.get("type"),
+        "city": contact.get("city"),
+        "title": f"Provider App: {body_obj.event.replace('.', ' ').replace('_', ' ').title()} — {contact['name']}",
+        "description": f"Auto-advanced pipeline to {target_stage} via Trata Provider App webhook (test send).",
+        "status": "completed",
+        "agent_id": contact.get("assigned_agent_id"),
+        "agent_name": contact.get("assigned_agent_name"),
+        "amount": 0,
+        "created_at": now_iso(),
+        "provider_ids": [contact["id"]],
+        "source": "provider_app_webhook_test",
+    })
+    await db.webhook_events.insert_one({
+        "id": str(uuid.uuid4()),
+        "event": body_obj.event,
+        "status": "accepted",
+        "contact_id": contact["id"],
+        "contact_name": contact["name"],
+        "action": action,
+        "stage": target_stage,
+        "created_new_lead": created_new,
+        "assigned_agent_name": contact.get("assigned_agent_name"),
+        "phone": phone_norm,
+        "city": body_obj.provider.get("city"),
+        "test_send": True,
+        "created_at": now_iso(),
+    })
+    return {
+        "ok": True,
+        "action": action,
+        "contact_id": contact["id"],
+        "pipeline_stage": target_stage,
+        "created_new_lead": created_new,
+        "signed_payload": payload,
+        "signature": signature,
+    }
+
+
 # ---------- Startup ----------
 @app.on_event("startup")
 async def startup():
@@ -1895,6 +2231,16 @@ async def startup():
         logger.info("No contacts found, seeding demo data...")
         result = await _do_seed(force=True)
         logger.info(f"Seeded: {result}")
+    # Backfill agent territories for Phase-5 webhook bridge (idempotent)
+    territory_backfill = [
+        ("9000000001", ["Mumbai", "Bengaluru", "Pune"]),
+        ("9000000002", ["Delhi", "Gurugram", "Noida"]),
+    ]
+    for phone, terr in territory_backfill:
+        await db.crm_users.update_one(
+            {"phone": phone, "$or": [{"territories": {"$exists": False}}, {"territories": {"$size": 0}}]},
+            {"$set": {"territories": terr}},
+        )
     # Ensure master admin exists
     if not await db.crm_users.find_one({"phone": MASTER_ADMIN_PHONE}):
         await db.crm_users.insert_one({

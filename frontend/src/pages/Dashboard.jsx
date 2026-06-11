@@ -6,6 +6,7 @@ import {
   Stethoscope, Building2, Ambulance, FlaskConical, Cross, User as UserIcon,
 } from "lucide-react";
 import { fmtCurrency, relativeTime, ACTIVITY_CATEGORIES, statusColor, typeLabel } from "../lib/constants";
+import WebhookBridgePanel from "../components/WebhookBridgePanel";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, BarChart, Bar, CartesianGrid,
@@ -190,6 +191,9 @@ export default function Dashboard() {
           </ul>
         </div>
       </div>
+
+      {/* Phase 5: Provider App webhook bridge */}
+      <WebhookBridgePanel />
     </div>
   );
 }

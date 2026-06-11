@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 4: Tested Phase 5 — Provider-App Webhook Bridge. Backend: 21/22 pytest tests passed in /app/backend/tests/test_webhook_bridge.py covering HMAC-SHA256 signature validation (missing/bad → 401 + 'invalid_signature' rejected event logged), event processing (provider.signed_up → verified, provider.first_use → active, unsupported event → 400, missing phone → 400), phone normalization (+91/spaces stripped, matches existing contact), territory round-robin (Delhi→Rohan Sales Rep, Bengaluru→Priya Sales Lead, unknown city Atlantis falls back to a sales rep/manager), activity insertion (category='webhook_sync' linked to contact), /api/admin/webhooks/events list (internal users 200 with {items,total,secret_configured:true}, provider 403), /api/admin/webhooks/test-send (Master Admin returns ok+signed_payload+signature, provider 403), and Rohan's /api/agent/dashboard total_leads increments when a Delhi lead is auto-created via webhook. Frontend: 100% playwright pass — Master Admin Webhook Bridge Panel renders, secret status green 'HMAC secret configured', empty-phone validation shows 'Phone is required', sending a signed webhook with event=provider.first_use & city=Delhi creates a new lead in stage=active, recent events refresh with a new 'test'-tagged row. Provider lands on /provider (no panel), Sales Rep Rohan lands on /agent (no panel) and is correctly redirected away from / so panel never reaches non-admin views.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/admin/webhooks/test-send",
+        "issue": "Review_request states 'Sales rep/provider get 403' but the implementation guards with require_internal (server.py:2108), which includes sales_rep. Sales rep Rohan can successfully call this endpoint and create leads (verified: returned 200 with full signed_payload + signature). Provider correctly gets 403. Either tighten the dep to is_admin_or_manager / master-only, or update the spec. Same applies to GET /api/admin/webhooks/events — sales reps can list all webhook events including ones for leads not assigned to them (potential PII over-exposure)."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_webhook_bridge.py",
+    "/app/test_reports/pytest/webhook_bridge.xml"
+  ],
+  "action_items": [
+    "Tighten /api/admin/webhooks/test-send and /api/admin/webhooks/events to admin/manager only (or master-only) so sales reps cannot trigger lead creation or view the full webhook stream. Replace Depends(require_internal) with a new require_admin_or_manager / require_master check OR explicitly raise 403 inside the handler when user.role == 'sales_rep' and not is_master_admin.",
+    "Fix the un-related PAGEERROR: AxiosError that surfaces when a provider user lands on /provider (visible in this run's provider login — likely an unrelated 403 swallow gap, pre-existing — see iter-3 action item for the AgentDashboard 403 overlay).",
+    "Minor: prior iteration_3 action item (Add internalOnly to the /agent route guard in App.js:69) is STILL OPEN — providers visiting /agent still won't redirect. Out-of-scope for Phase 5 but unfixed."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 2295 lines — auth, contacts, agent, provider, webhooks, sync, seed all in one file. Strongly recommend splitting routers (auth.py, agent.py, provider.py, webhooks.py, admin.py, seed.py) before Phase 6.",
+    "/api/webhooks/provider-app does a full contacts collection scan (`async for c in db.contacts.find({}, {'_id': 0}): if _normalize_phone(c.phone) == phone_norm`) — O(N) per webhook. For 182 contacts it's fine; at 10k+ contacts this will get slow. Suggest storing a `phone_norm` field on contacts (computed at insert/update time) with a unique sparse index so matching becomes O(1).",
+    "The test-send endpoint (server.py:2107-2222) duplicates ~75 lines of business logic from provider_app_webhook (server.py:1962-2088). DRY violation: extract a shared `_process_provider_event(body_obj)` helper and call it from both, instead of two parallel branches.",
+    "ProviderWebhookBody.provider is typed as Dict[str,Any] — no Pydantic validation of phone/name/city. Consider a nested ProviderInfo Pydantic model so bad payloads fail fast at parse time rather than via the manual 'provider.phone is required' check.",
+    "Round-robin counter doc is keyed by lowercased city in db.webhook_counters — uses _id as the bucket name. If a new agent is added mid-cycle, the modulo index may briefly assign the same agent twice; not a correctness bug but worth a comment.",
+    "WebhookBridgePanel.jsx Field component lives at the bottom of the same file — fine but consider moving to /lib/ui or using existing shadcn Input for consistency with the rest of the app."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_webhook_bridge.py (NEW — 22 tests across 8 classes covering signature, event processing, phone normalization, round-robin, activity, events list, test-send, dashboard delta)"
+  ],
+  "success_rate": {
+    "backend": "95% (21/22 — 1 failure is a real spec/impl mismatch on test-send role authorization, not a test bug)",
+    "frontend": "100% (all panel render, validation, send, and role-visibility checks passed)"
+  },
+  "test_credentials": "Master admin 9873117605 / OTP 123456 / Master@123. Sales manager Priya 9000000001 / Trata@123. Sales rep Rohan 9000000002 / Trata@123. Ambulance owner 9000020003 / Trata@123. PROVIDER_WEBHOOK_SECRET=trata-provider-webhook-secret-2026.",
+  "seed_data_creation": "Created ~15 TEST_-prefixed contacts via webhook (TEST_SignedUp Delhi, TEST_NormBase, TEST_DelhiRR, TEST_BluruRR, TEST_DelhiRR2, TEST_UnknownCity, TEST_ActivityCheck, TEST_AdminSend, TEST_AdminFirstUse, TEST_DashIncr, TEST_PWLead, plus a few rejected webhook_events with status='rejected'). All under source='provider_app_webhook' so easy to clean: `db.contacts.deleteMany({source:'provider_app_webhook', name:/^TEST_/})`. Same for activities (category='webhook_sync', source∈{'provider_app_webhook','provider_app_webhook_test'}).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "To re-run: `REACT_APP_BACKEND_URL=https://patient-hub-133.preview.emergentagent.com pytest /app/backend/tests/test_webhook_bridge.py -v` (~5s). Tests are idempotent — they use time-based unique phones for create-paths and stash phone via class attr (TestEventProcessing.shared_phone) for the verified→active continuation. The one failing test 'test_test_send_rep_forbidden' is intentionally left failing because it reflects the spec; once main agent tightens the dep (require_admin_or_manager), it should pass without test changes. FE testids added this iteration: webhook-bridge-panel, webhook-secret-status, webhook-test-sender, wh-event-provider.signed_up, wh-event-provider.first_use, wh-phone, wh-name, wh-city, wh-state, wh-send-btn, wh-error, wh-result, webhook-recent-events, wh-event-row-<id>. The /api/contacts/{id} endpoint returns nested {contact, activities, notes, tasks} — use the helper sa_get_contact() in test_webhook_bridge.py rather than direct .json().get('assigned_agent_name').",
+  "rca of the issue": "Spec said '/api/admin/webhooks/test-send by Master Admin processes a mock event...Sales rep/provider get 403' but server.py:2108 uses `current=Depends(require_internal)` which evaluates `is_internal(user) = user.role in INTERNAL_ROLES or is_master_admin` and INTERNAL_ROLES includes 'sales_rep'. Hence sales rep Rohan (role=sales_rep, is_master_admin=False) passes the dep and gets 200 instead of the expected 403. This grants every sales rep the ability to (a) view the entire firm-wide webhook event stream including leads not assigned to them and (b) trigger creation of leads in any city via the test-send endpoint, bypassing normal lead assignment policy. Fix: introduce `require_admin_or_manager` (or reuse is_admin_or_manager()) on these two endpoints, OR add an explicit `if current.get('role') == 'sales_rep' and not current.get('is_master_admin'): raise HTTPException(403)` guard. Reproduction: log in as 9000000002/Trata@123, POST /api/admin/webhooks/test-send with body {event:'provider.signed_up', phone:'<unique>', city:'Delhi'} → 200 with full signed_payload."
+}
