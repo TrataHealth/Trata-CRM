@@ -53,6 +53,19 @@ export function AuthProvider({ children }) {
     setUser(u);
   };
 
+  const refresh = async () => {
+    try {
+      const { data } = await api.get("/auth/me");
+      if (data?.user) {
+        localStorage.setItem("trata_user", JSON.stringify(data.user));
+        setUser(data.user);
+      }
+      return data?.user;
+    } catch {
+      return null;
+    }
+  };
+
   const logout = () => {
     localStorage.removeItem("trata_token");
     localStorage.removeItem("trata_user");
@@ -69,7 +82,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={{
-      user, loading, sendOtp, verifyOtp, setPassword, loginPassword, logout,
+      user, loading, sendOtp, verifyOtp, setPassword, loginPassword, logout, refresh,
       isInternal, isProvider, isSalesRep, isAdmin,
     }}>
       {children}

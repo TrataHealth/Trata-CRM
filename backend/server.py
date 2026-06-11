@@ -39,6 +39,12 @@ MASTER_ADMIN_OTP = os.environ['MASTER_ADMIN_OTP']
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 UPSTREAM_SYNC_INTERVAL_MIN = int(os.environ.get('UPSTREAM_SYNC_INTERVAL_MIN', '5'))
 PROVIDER_WEBHOOK_SECRET = os.environ.get('PROVIDER_WEBHOOK_SECRET', '')
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev')
+
+if RESEND_API_KEY:
+    import resend as _resend
+    _resend.api_key = RESEND_API_KEY
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -239,6 +245,13 @@ def _safe_user(u: dict) -> dict:
     u = {**u}
     u.pop("password_hash", None)
     u.pop("_id", None)
+    sec = u.pop("security_questions", None) or []
+    u.pop("reset_code_hash", None)
+    u.pop("reset_code_expires_at", None)
+    u.pop("reset_code_sent_at", None)
+    u["has_security_questions"] = len(sec) >= 2
+    u["has_recovery_email"] = bool(u.get("recovery_email"))
+    u["security_setup_required"] = not (u["has_security_questions"] and u["has_recovery_email"])
     return u
 
 
@@ -294,6 +307,8 @@ async def verify_otp(data: LoginVerifyOTP):
             "phone": user["phone"],
             "role": user.get("role"),
             "provider_type": user.get("provider_type"),
+            "has_recovery_email": bool(user.get("recovery_email")),
+            "has_security_questions": len(user.get("security_questions") or []) >= 2,
         },
     }
 
@@ -342,7 +357,254 @@ async def login_password(data: PasswordLogin, authorization: Optional[str] = Hea
 
 @api.get("/auth/me")
 async def me(current=Depends(get_current_user)):
-    return {"user": current}
+    return {"user": _safe_user(current)}
+
+
+# ---------- Security questions + Password reset (Resend) ----------
+SECURITY_QUESTIONS = [
+    {"id": "q1", "text": "What city were you born in?"},
+    {"id": "q2", "text": "What is the name of your first school?"},
+    {"id": "q3", "text": "What is your mother's maiden name?"},
+    {"id": "q4", "text": "What was the name of your first pet?"},
+    {"id": "q5", "text": "What is your favourite movie?"},
+    {"id": "q6", "text": "In which city did your parents meet?"},
+    {"id": "q7", "text": "What was the model of your first car or two-wheeler?"},
+    {"id": "q8", "text": "What is the name of your childhood best friend?"},
+]
+SECURITY_QUESTION_TEXT = {q["id"]: q["text"] for q in SECURITY_QUESTIONS}
+
+
+def _norm_answer(ans: str) -> str:
+    return " ".join((ans or "").strip().lower().split())
+
+
+class SecuritySetupItem(BaseModel):
+    question_id: str
+    answer: str
+
+
+class SecuritySetupBody(BaseModel):
+    recovery_email: str
+    questions: List[SecuritySetupItem]
+
+
+class ForgotStartBody(BaseModel):
+    phone: str
+
+
+class ForgotRequestCodeBody(BaseModel):
+    phone: str
+    answers: List[SecuritySetupItem]   # at least 1 of 2 must be correct
+
+
+class ForgotResetBody(BaseModel):
+    phone: str
+    code: str
+    new_password: str
+
+
+def _mask_email(email: Optional[str]) -> str:
+    if not email or "@" not in email:
+        return ""
+    local, domain = email.split("@", 1)
+    keep = local[:2] if len(local) > 2 else local[:1]
+    return f"{keep}{'*' * max(2, len(local) - len(keep))}@{domain}"
+
+
+def _is_valid_email(email: str) -> bool:
+    import re
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", (email or "").strip()))
+
+
+async def _send_reset_email_resend(to_email: str, agent_name: str, code: str) -> bool:
+    """Send a 6-digit reset code via Resend. Returns True on success, False otherwise."""
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not configured — printing reset code instead")
+        logger.info(f"[DEV ONLY] Password reset code for {to_email}: {code}")
+        return False
+    html = f"""
+    <div style="font-family: Arial, Helvetica, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; color: #091E42;">
+      <div style="font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: #5E6C84;">Trata Health CRM</div>
+      <h1 style="font-size: 22px; margin: 8px 0 4px 0;">Password reset code</h1>
+      <p style="color: #42526E; font-size: 14px; line-height: 1.5; margin: 12px 0;">
+        Hi {agent_name or "there"},<br>
+        Use the code below to reset your TrataHealth CRM password. This code expires in <b>15 minutes</b>.
+      </p>
+      <div style="font-family: 'Courier New', monospace; font-size: 32px; letter-spacing: 12px; font-weight: bold;
+                  background: #F4F5F7; border: 1px solid #DFE1E6; border-radius: 8px; padding: 16px 24px;
+                  text-align: center; margin: 20px 0; color: #0052CC;">
+        {code}
+      </div>
+      <p style="color: #5E6C84; font-size: 12px; line-height: 1.5;">
+        If you did not request this, ignore this email — your password has not been changed. For security, never share this code.
+      </p>
+      <hr style="border: none; border-top: 1px solid #DFE1E6; margin: 24px 0;">
+      <div style="font-size: 11px; color: #5E6C84;">Trata Health · Automated email</div>
+    </div>
+    """
+    text = (
+        f"Trata Health CRM password reset\n\n"
+        f"Hi {agent_name or 'there'},\n"
+        f"Use this 6-digit code to reset your password: {code}\n"
+        f"It expires in 15 minutes.\n\n"
+        f"If you did not request this, ignore this email."
+    )
+    params = {
+        "from": f"Trata Health CRM <{SENDER_EMAIL}>",
+        "to": [to_email],
+        "subject": f"Your Trata CRM password reset code: {code}",
+        "html": html,
+        "text": text,
+    }
+    try:
+        import asyncio
+        result = await asyncio.to_thread(_resend.Emails.send, params)
+        logger.info(f"Resend email sent: id={result.get('id') if isinstance(result, dict) else result}")
+        return True
+    except Exception as e:
+        logger.error(f"Resend send failed: {e}")
+        return False
+
+
+@api.get("/auth/security-questions")
+async def list_security_questions():
+    return {"items": SECURITY_QUESTIONS}
+
+
+@api.get("/auth/security-status")
+async def security_status(current=Depends(get_current_user)):
+    sec = current.get("security_questions") or []
+    return {
+        "has_recovery_email": bool(current.get("recovery_email")),
+        "has_security_questions": len(sec) >= 2,
+        "recovery_email_masked": _mask_email(current.get("recovery_email")),
+        "questions_set": [{"id": s.get("question_id"), "text": SECURITY_QUESTION_TEXT.get(s.get("question_id"), "")} for s in sec],
+    }
+
+
+@api.post("/auth/security-setup")
+async def security_setup(data: SecuritySetupBody, current=Depends(get_current_user)):
+    if not _is_valid_email(data.recovery_email):
+        raise HTTPException(status_code=400, detail="Enter a valid recovery email")
+    if len(data.questions) != 2:
+        raise HTTPException(status_code=400, detail="Pick exactly 2 security questions")
+    ids = [q.question_id for q in data.questions]
+    if len(set(ids)) != 2:
+        raise HTTPException(status_code=400, detail="Pick two different questions")
+    for q in data.questions:
+        if q.question_id not in SECURITY_QUESTION_TEXT:
+            raise HTTPException(status_code=400, detail=f"Unknown question id: {q.question_id}")
+        if len(_norm_answer(q.answer)) < 2:
+            raise HTTPException(status_code=400, detail="Answers must be at least 2 characters")
+    stored = [
+        {"question_id": q.question_id, "answer_hash": hash_password(_norm_answer(q.answer))}
+        for q in data.questions
+    ]
+    await db.crm_users.update_one(
+        {"id": current["id"]},
+        {"$set": {
+            "recovery_email": data.recovery_email.strip().lower(),
+            "security_questions": stored,
+            "security_set_at": now_iso(),
+        }},
+    )
+    return {"success": True, "recovery_email_masked": _mask_email(data.recovery_email)}
+
+
+@api.post("/auth/forgot/start")
+async def forgot_start(data: ForgotStartBody):
+    """Step 1 of forgot-password. Returns the 2 security questions for this user
+    (so the UI can prompt them) plus a masked recovery email."""
+    phone = normalize_phone(data.phone)
+    user = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
+    if not user:
+        # Don't leak account existence — return a neutral OK
+        return {"ok": False, "reason": "not_recoverable", "message": "If this account is registered, recovery info will be shown."}
+    sec = user.get("security_questions") or []
+    if len(sec) < 2 or not user.get("recovery_email"):
+        return {"ok": False, "reason": "no_recovery_set", "message": "This account has not set up password recovery. Please contact your admin."}
+    return {
+        "ok": True,
+        "name": user.get("name"),
+        "recovery_email_masked": _mask_email(user.get("recovery_email")),
+        "questions": [{"id": s["question_id"], "text": SECURITY_QUESTION_TEXT.get(s["question_id"], "")} for s in sec],
+    }
+
+
+@api.post("/auth/forgot/request-code")
+async def forgot_request_code(data: ForgotRequestCodeBody):
+    """Step 2: verify at least 1 of 2 security answers, then email a 6-digit code."""
+    phone = normalize_phone(data.phone)
+    user = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
+    if not user or not user.get("security_questions") or not user.get("recovery_email"):
+        raise HTTPException(status_code=400, detail="Recovery is not available for this account")
+
+    # Rate-limit: 30s between sends
+    last = user.get("reset_code_sent_at")
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(last)
+            if (datetime.now(timezone.utc) - last_dt).total_seconds() < 30:
+                raise HTTPException(status_code=429, detail="Please wait a few seconds before requesting another code")
+        except (ValueError, TypeError):
+            pass
+
+    # Verify ≥1 of 2 answers
+    stored_by_qid = {s["question_id"]: s["answer_hash"] for s in user["security_questions"]}
+    correct = 0
+    for ans in data.answers:
+        h = stored_by_qid.get(ans.question_id)
+        if h and verify_password(_norm_answer(ans.answer), h):
+            correct += 1
+    if correct < 1:
+        raise HTTPException(status_code=403, detail="Security answers do not match")
+
+    # Generate code, hash, store, email
+    code = f"{random.randint(0, 999999):06d}"
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
+    await db.crm_users.update_one(
+        {"id": user["id"]},
+        {"$set": {
+            "reset_code_hash": hash_password(code),
+            "reset_code_expires_at": expires_at,
+            "reset_code_sent_at": now_iso(),
+        }},
+    )
+    sent = await _send_reset_email_resend(user["recovery_email"], user.get("name") or "", code)
+    return {
+        "success": True,
+        "email_sent": sent,
+        "recovery_email_masked": _mask_email(user.get("recovery_email")),
+        "expires_in_minutes": 15,
+        # For dev: when Resend isn't configured, this lets the frontend show the code anyway
+        "dev_code": code if not sent else None,
+    }
+
+
+@api.post("/auth/forgot/reset")
+async def forgot_reset(data: ForgotResetBody):
+    """Step 3: verify code + set the new password."""
+    if len(data.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    phone = normalize_phone(data.phone)
+    user = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
+    if not user or not user.get("reset_code_hash") or not user.get("reset_code_expires_at"):
+        raise HTTPException(status_code=400, detail="No active reset code. Request a new one.")
+    try:
+        exp = datetime.fromisoformat(user["reset_code_expires_at"])
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid reset code state")
+    if datetime.now(timezone.utc) > exp:
+        await db.crm_users.update_one({"id": user["id"]}, {"$unset": {"reset_code_hash": "", "reset_code_expires_at": ""}})
+        raise HTTPException(status_code=400, detail="Code expired. Request a new one.")
+    if not verify_password((data.code or "").strip(), user["reset_code_hash"]):
+        raise HTTPException(status_code=403, detail="Incorrect reset code")
+    await db.crm_users.update_one(
+        {"id": user["id"]},
+        {"$set": {"password_hash": hash_password(data.new_password), "password_changed_at": now_iso()},
+         "$unset": {"reset_code_hash": "", "reset_code_expires_at": "", "reset_code_sent_at": ""}},
+    )
+    return {"success": True, "message": "Password has been reset. Please log in."}
 
 
 # ---------- Dashboard ----------

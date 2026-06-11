@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity,
   BarChart3, UserCog, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
-  Building2, ClipboardList, IdCard, Wallet, Compass, Trophy,
+  Building2, ClipboardList, IdCard, Wallet, Compass, Trophy, Settings as SettingsIcon,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import api from "../lib/api";
@@ -162,6 +162,18 @@ export default function Layout({ children }) {
           >
             <LogOut className="h-4 w-4" /> Logout
           </button>
+          <NavLink
+            to="/settings"
+            onClick={() => setNavOpen(false)}
+            data-testid="nav-settings"
+            className={({ isActive }) =>
+              `mt-1 w-full flex items-center justify-center gap-2 px-3 py-2 text-xs rounded-md transition-colors ${
+                isActive ? "bg-[#0052CC] text-white" : "text-[#5E6C84] hover:text-[#091E42] hover:bg-white"
+              }`
+            }
+          >
+            <SettingsIcon className="h-3.5 w-3.5" /> Account settings
+          </NavLink>
         </div>
       </aside>
 

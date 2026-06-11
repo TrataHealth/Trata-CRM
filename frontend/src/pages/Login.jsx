@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { ShieldCheck, ArrowRight, Loader2, Lock, KeyRound } from "lucide-react";
 
@@ -17,7 +17,10 @@ export default function Login() {
   const [err, setErr] = useState("");
 
   React.useEffect(() => {
-    if (user) navigate(user.role === "provider_owner" ? "/provider" : "/");
+    if (user) {
+      if (user.security_setup_required) navigate("/security-setup");
+      else navigate(user.role === "provider_owner" ? "/provider" : user.role === "sales_rep" ? "/agent" : "/");
+    }
   }, [user, navigate]);
 
   const onSendOtp = async (e) => {
@@ -54,7 +57,11 @@ export default function Login() {
       const u = needsSetup
         ? await setPassword(tempToken, password)
         : await loginPassword(tempToken, password);
-      navigate(u.role === "provider_owner" ? "/provider" : "/");
+      if (u.security_setup_required) {
+        navigate("/security-setup");
+      } else {
+        navigate(u.role === "provider_owner" ? "/provider" : u.role === "sales_rep" ? "/agent" : "/");
+      }
     } catch (e) { setErr(e?.response?.data?.detail || "Password failed"); }
     setLoading(false);
   };
@@ -214,9 +221,16 @@ export default function Login() {
               <SubmitBtn loading={loading} testid={needsSetup ? "login-set-password-btn" : "login-password-btn"}>
                 {needsSetup ? "Set Password & Enter" : "Sign in"} <ArrowRight className="h-4 w-4" />
               </SubmitBtn>
-              <button type="button" onClick={() => { setStep("otp"); setPasswordN(""); }} className="w-full text-xs text-[#5E6C84] hover:text-[#091E42] py-1">
-                Back
-              </button>
+              <div className="flex items-center justify-between">
+                <button type="button" onClick={() => { setStep("otp"); setPasswordN(""); }} className="text-xs text-[#5E6C84] hover:text-[#091E42] py-1">
+                  Back
+                </button>
+                {!needsSetup && (
+                  <Link to="/forgot" data-testid="login-forgot-link" className="text-xs text-[#0052CC] hover:text-[#0747A6] font-semibold py-1">
+                    Forgot password?
+                  </Link>
+                )}
+              </div>
             </form>
           )}
 

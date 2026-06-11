@@ -20,15 +20,19 @@ import ProviderEarnings from "./pages/ProviderEarnings";
 import AgentDashboard from "./pages/AgentDashboard";
 import AgentLeads from "./pages/AgentLeads";
 import Leaderboard from "./pages/Leaderboard";
+import ForgotPassword from "./pages/ForgotPassword";
+import SecuritySetup from "./pages/SecuritySetup";
+import Settings from "./pages/Settings";
 import { Toaster } from "sonner";
 import { registerSW } from "./lib/registerSW";
 
 registerSW();
 
-function RequireAuth({ children, internalOnly = false, providerOnly = false, adminOnly = false }) {
+function RequireAuth({ children, internalOnly = false, providerOnly = false, adminOnly = false, allowSetupGate = false }) {
   const { user, loading, isInternal, isProvider, isAdmin, isSalesRep } = useAuth();
   if (loading) return <div className="p-10 text-sm text-[#5E6C84]">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
+  if (!allowSetupGate && user.security_setup_required) return <Navigate to="/security-setup" replace />;
   if (adminOnly && !isAdmin) return <Navigate to={isSalesRep ? "/agent" : "/provider"} replace />;
   if (internalOnly && !isInternal) return <Navigate to="/provider" replace />;
   if (providerOnly && !isProvider) return <Navigate to={isSalesRep ? "/agent" : "/"} replace />;
@@ -39,9 +43,21 @@ function RoleRoot() {
   const { user, loading, isProvider, isSalesRep } = useAuth();
   if (loading) return null;
   if (!user) return <Navigate to="/login" replace />;
+  if (user.security_setup_required) return <Navigate to="/security-setup" replace />;
   if (isProvider) return <Navigate to="/provider" replace />;
   if (isSalesRep) return <Navigate to="/agent" replace />;
   return <Dashboard />;
+}
+
+function SecuritySetupRoute() {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/login" replace />;
+  if (!user.security_setup_required) {
+    // Already set up — bounce to home
+    return <Navigate to="/" replace />;
+  }
+  return <SecuritySetup />;
 }
 
 function App() {
@@ -52,6 +68,9 @@ function App() {
         <InstallPrompt />
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/forgot" element={<ForgotPassword />} />
+          <Route path="/security-setup" element={<SecuritySetupRoute />} />
+          <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
 
           {/* Admin / internal routes */}
           <Route path="/" element={<RequireAuth><RoleRoot /></RequireAuth>} />
