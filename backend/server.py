@@ -2089,7 +2089,9 @@ async def provider_app_webhook(
 
 
 @api.get("/admin/webhooks/events")
-async def list_webhook_events(limit: int = 50, current=Depends(require_internal)):
+async def list_webhook_events(limit: int = 50, current=Depends(get_current_user)):
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Admin/manager only")
     items = await db.webhook_events.find({}, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 200))
     return {"items": items, "total": len(items), "secret_configured": bool(PROVIDER_WEBHOOK_SECRET)}
 
@@ -2105,8 +2107,10 @@ class WebhookTestSendBody(BaseModel):
 
 
 @api.post("/admin/webhooks/test-send")
-async def webhook_test_send(data: WebhookTestSendBody, current=Depends(require_internal)):
-    """Admin-only: signs a mock provider-app event with our shared secret and processes it."""
+async def webhook_test_send(data: WebhookTestSendBody, current=Depends(get_current_user)):
+    """Admin/manager-only: signs a mock provider-app event with our shared secret and processes it."""
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Admin/manager only")
     if data.event not in WEBHOOK_EVENT_TO_STAGE:
         raise HTTPException(status_code=400, detail=f"Unsupported event: {data.event}. Use {list(WEBHOOK_EVENT_TO_STAGE)}")
     payload = {

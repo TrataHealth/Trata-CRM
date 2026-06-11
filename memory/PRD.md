@@ -52,6 +52,15 @@ Removed Hospital/Clinic/Pathology provider portals. Live Fleet Map (Leaflet) add
 - **Targets** — `GET /api/agent/targets` returns month-to-date actuals vs targets.
 - Tested: 23/23 backend pytest + 17/17 frontend playwright (after fixing /agent route guard).
 
+### Iter 9 (2026-06-11) — Phase 5 Provider-App webhook bridge
+- New: `POST /api/webhooks/provider-app` — HMAC-SHA256 signed (`X-Trata-Signature` header, `PROVIDER_WEBHOOK_SECRET` in `.env`).
+- Events: `provider.signed_up` → stage `verified`; `provider.first_use` → stage `active`.
+- Match by normalized phone (strips +91/spaces). Unknown phone → auto-create lead, assign by territory round-robin (Rohan: Delhi/Gurugram/Noida; Priya: Mumbai/Bengaluru/Pune; fallback: global RR).
+- Logs activity `category='webhook_sync'` + `webhook_events` collection. Bad signatures → 401 + rejected event recorded.
+- Admin-only endpoints: `GET /api/admin/webhooks/events` + `POST /api/admin/webhooks/test-send` (admin/manager only; sales_rep gets 403).
+- Frontend: `WebhookBridgePanel` on Master Dashboard with signed test sender + live event feed.
+- Tested: 22/22 backend pytest + 100% frontend playwright (after tightening role guard).
+
 ## Backlog / Next
 
 ### P1
