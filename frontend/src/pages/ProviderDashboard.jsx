@@ -11,6 +11,7 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, CartesianGrid,
 } from "recharts";
+import FleetMap from "../components/FleetMap";
 
 const TYPE_THEME = {
   ambulance: { color: "#FF5630", icon: Ambulance, label: "Ambulance Fleet" },
@@ -86,6 +87,9 @@ export default function ProviderDashboard() {
 
       {/* Type-specific extras */}
       <TypeSpecificKpis ptype={data.provider_type} kpis={k} />
+
+      {/* Live fleet map (ambulance only) */}
+      {data.provider_type === "ambulance" && <FleetMap />}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 bg-white border border-[#DFE1E6] rounded-md p-5">

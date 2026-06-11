@@ -949,6 +949,38 @@ async def provider_payouts(current=Depends(get_current_user), limit: int = 24):
     return {"items": items, "total": len(items)}
 
 
+# ---------- Fleet (ambulance live map) ----------
+@api.get("/provider/fleet")
+async def provider_fleet(current=Depends(get_current_user)):
+    if not is_provider(current):
+        raise HTTPException(status_code=403, detail="Provider access only")
+    if current.get("provider_type") != "ambulance":
+        raise HTTPException(status_code=400, detail="Fleet map is for ambulance providers only")
+    pid = current.get("provider_id")
+
+    vehicles = await db.fleet_vehicles.find({"provider_id": pid}, {"_id": 0}).to_list(200)
+    active_states = ["AMBULANCE_DISPATCHED", "ON_THE_WAY", "REACHED"]
+    sos = await db.activities.find(
+        {"provider_ids": pid, "category": "emergency_case", "status": {"$in": active_states}},
+        {"_id": 0, "id": 1, "title": 1, "status": 1, "priority": 1, "contact_name": 1, "city": 1, "response_time_minutes": 1, "created_at": 1, "lat": 1, "lng": 1},
+    ).sort("created_at", -1).to_list(50)
+
+    provider = await db.contacts.find_one({"id": pid}, {"_id": 0, "lat": 1, "lng": 1, "city": 1})
+    base_lat = (provider or {}).get("lat")
+    base_lng = (provider or {}).get("lng")
+    for s in sos:
+        if not s.get("lat") or not s.get("lng"):
+            if base_lat and base_lng:
+                s["lat"] = base_lat + random.uniform(-0.04, 0.04)
+                s["lng"] = base_lng + random.uniform(-0.04, 0.04)
+
+    return {
+        "center": {"lat": base_lat, "lng": base_lng} if base_lat else None,
+        "vehicles": vehicles,
+        "sos": sos,
+    }
+
+
 @api.get("/provider/invoice/{payout_id}")
 async def provider_invoice(payout_id: str, current=Depends(get_current_user)):
     """Returns a printable HTML invoice for one payout, scoped to the calling provider."""
@@ -1379,6 +1411,35 @@ async def _do_seed(force: bool = False) -> dict:
         })
         provider_owners.append((ptype, contact))
 
+    # Seed fleet VEHICLES for each ambulance provider — coordinates clustered near their city
+    await db.fleet_vehicles.delete_many({"provider_id": {"$in": [c["id"] for _, c in provider_owners]}})
+    plates = ["MH 01 AB", "MH 02 CD", "DL 03 EF", "DL 04 GH", "KA 05 JK", "TN 06 LM", "WB 07 NP", "GJ 08 QR"]
+    veh_types = ["BLS", "ALS", "Patient Transport", "Cardiac"]
+    fleet_count = 0
+    for ptype, contact in provider_owners:
+        if ptype != "ambulance":
+            continue
+        meta = contact.get("meta") or {}
+        n = meta.get("ambulance_count") or random.randint(8, 18)
+        for i in range(n):
+            state = random.choices(
+                ["available", "on_trip", "off_duty", "maintenance"],
+                weights=[55, 25, 15, 5],
+            )[0]
+            await db.fleet_vehicles.insert_one({
+                "id": str(uuid.uuid4()),
+                "provider_id": contact["id"],
+                "plate_number": f"{random.choice(plates)} {random.randint(1000, 9999)}",
+                "vehicle_type": random.choice(veh_types),
+                "driver_name": random.choice(indian_first_names) + " " + random.choice(indian_last_names),
+                "state": state,
+                "lat": (contact["lat"] or 19.07) + random.uniform(-0.08, 0.08),
+                "lng": (contact["lng"] or 72.87) + random.uniform(-0.08, 0.08),
+                "speed_kmh": random.randint(0, 65) if state == "on_trip" else 0,
+                "last_updated": now_iso(),
+            })
+            fleet_count += 1
+
     # Seed past PAYOUTS for each demo provider — weekly payouts for the last ~10 weeks
     await db.payouts.delete_many({"provider_id": {"$in": [c["id"] for _, c in provider_owners]}})
     payouts_seeded = 0
@@ -1425,6 +1486,7 @@ async def _do_seed(force: bool = False) -> dict:
         "tasks": len(tasks),
         "notifications": len(notifs),
         "payouts": payouts_seeded,
+        "fleet_vehicles": fleet_count,
         "demo_providers": [p[1] for p in demo_provider_seed],
     }
 
