@@ -52,6 +52,16 @@ Removed Hospital/Clinic/Pathology provider portals. Live Fleet Map (Leaflet) add
 - **Targets** — `GET /api/agent/targets` returns month-to-date actuals vs targets.
 - Tested: 23/23 backend pytest + 17/17 frontend playwright (after fixing /agent route guard).
 
+### Iter 10 (2026-06-11) — Phase 7 Password recovery + Security questions (Resend)
+- New backend endpoints: `/auth/security-questions`, `/auth/security-status`, `/auth/security-setup`, `/auth/forgot/start`, `/auth/forgot/request-code`, `/auth/forgot/reset`.
+- 8 preset security questions. User picks 2; answers hashed with bcrypt (case-insensitive, whitespace-trimmed). Reset flow requires only 1-of-2 correct.
+- 6-digit code, hashed at rest, 15-min expiry, 30s rate-limit between sends.
+- Email via **Resend** SDK (key in `.env`). When delivery fails (e.g. test-mode recipient restriction) the API surfaces `dev_code` so QA/dev can complete the flow without inbox access.
+- `_safe_user` redacts `password_hash`, `security_questions`, `reset_code_*` fields and adds `has_recovery_email`, `has_security_questions`, `security_setup_required`.
+- Frontend: new pages `/forgot` (3-step), `/security-setup` (forced after first password set), `/settings` (overview + update). Login page now has `Forgot password?` link. Sidebar shows `Account settings` link. Post-login redirect honours `security_setup_required`.
+- Tests: 23/23 backend pytest + 100% playwright frontend.
+- Known UX note: Master Admin and Provider Owner must complete `/security-setup` once on next login.
+
 ### Iter 9 (2026-06-11) — Phase 5 Provider-App webhook bridge
 - New: `POST /api/webhooks/provider-app` — HMAC-SHA256 signed (`X-Trata-Signature` header, `PROVIDER_WEBHOOK_SECRET` in `.env`).
 - Events: `provider.signed_up` → stage `verified`; `provider.first_use` → stage `active`.

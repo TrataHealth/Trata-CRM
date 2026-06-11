@@ -590,6 +590,9 @@ async def forgot_reset(data: ForgotResetBody):
     user = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
     if not user or not user.get("reset_code_hash") or not user.get("reset_code_expires_at"):
         raise HTTPException(status_code=400, detail="No active reset code. Request a new one.")
+    code_clean = (data.code or "").strip()
+    if not (4 <= len(code_clean) <= 12):
+        raise HTTPException(status_code=400, detail="Invalid code")
     try:
         exp = datetime.fromisoformat(user["reset_code_expires_at"])
     except (ValueError, TypeError):
@@ -597,7 +600,7 @@ async def forgot_reset(data: ForgotResetBody):
     if datetime.now(timezone.utc) > exp:
         await db.crm_users.update_one({"id": user["id"]}, {"$unset": {"reset_code_hash": "", "reset_code_expires_at": ""}})
         raise HTTPException(status_code=400, detail="Code expired. Request a new one.")
-    if not verify_password((data.code or "").strip(), user["reset_code_hash"]):
+    if not verify_password(code_clean, user["reset_code_hash"]):
         raise HTTPException(status_code=403, detail="Incorrect reset code")
     await db.crm_users.update_one(
         {"id": user["id"]},
