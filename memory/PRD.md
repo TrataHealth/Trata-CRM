@@ -1,78 +1,82 @@
-# TrataHealth Master Admin CRM + Provider Portal — PRD
+# TrataHealth CRM — PRD
 
 ## Original Problem Statement
-User shared `https://github.com/TrataHealth` (healthcare emergency platform — SanjeevaniX) and asked for a full-fledged CRM at the master-admin level. Then asked to evolve it into a multi-tenant activity tracker so Ambulance / Clinic / Hospital / Pathology owners can each log in and see only their own world, with phone + OTP + password as the unique key linking this CRM to the Trata Provider app.
+User shared `https://github.com/TrataHealth` (healthcare emergency platform — SanjeevaniX) and asked for a full-fledged CRM at the master-admin level. Then asked to evolve into a multi-tenant activity tracker for providers (phone+OTP+password as the unique key), then pivoted again to make the CRM a **Sales Agent driver tool** for onboarding healthcare providers (Ambulance fleet partners) onto the Trata Provider App.
 
 ## Personas
-- **Master Admin** — full network view.
-- **Internal team** (Manager / Sales Rep / Ops Rep) — full read-only / pipeline control across providers.
-- **Provider Owner** (NEW) — Hospital / Clinic / Ambulance / Pathology owner; sees ONLY their own contact, activities, KYC, and a type-tailored dashboard.
+- **Master Admin / Manager** — full network view + Leaderboard.
+- **Sales Agent (sales_rep)** — primary persona. Onboards ambulance providers.
+- **Provider Owner (Ambulance)** — sees only their own fleet, earnings, KYC.
 
 ## Architecture
-- **Backend** — FastAPI (`server.py`) + `upstream_sync.py`, MongoDB via Motor, JWT (PyJWT) with **access** (30d) + **temp** (10m) token types, bcrypt password hashing, server-side scope filter on every endpoint. Anthropic Claude Sonnet via Emergentintegrations.
-- **Frontend** — React 19 + Tailwind + Recharts + lucide-react. 3-step login (phone → OTP → password). Role-aware sidebar / router. PWA-installable. Service worker registered in production.
-- **DB** — `tratacrm_db`. Collections: `contacts`, `activities` (with `provider_ids` array linking to providers), `tasks`, `notes`, `notifications`, `crm_users` (now with `role`, `provider_type`, `provider_id`, `password_hash`), `sync_status`.
+- **Backend** — FastAPI (`/app/backend/server.py` ~1949 lines) + `upstream_sync.py`, MongoDB (Motor), JWT (PyJWT) access (30d) + temp (10m) tokens, bcrypt password hashing. Anthropic Claude (Sonnet 4.6) via `emergentintegrations` for AI digest.
+- **Frontend** — React 19 + Tailwind + Shadcn UI + Recharts + lucide-react + react-leaflet. 3-step login (phone → OTP → password). Role-aware sidebar/router. PWA-installable.
+- **DB** — `tratacrm_db`. Collections: `contacts`, `activities`, `tasks`, `notes`, `notifications`, `crm_users`, `sync_status`, `targets`, `fleet`.
 
 ## Auth (3-step)
-1. `POST /api/auth/send-otp {phone}` → mock OK
-2. `POST /api/auth/verify-otp {phone, otp}` → `{temp_token, needs_password_setup, user}` (or 400/403)
-3a. First time: `POST /api/auth/set-password {password}` with `Authorization: Bearer <temp>`
-3b. Returning: `POST /api/auth/login-password {password}` with `Authorization: Bearer <temp>`
-→ returns final access JWT + user.
+1. `POST /api/auth/send-otp {phone}` — mock; only `123456` accepted
+2. `POST /api/auth/verify-otp {phone, otp}` → `{temp_token, needs_password_setup, user}`
+3a. `POST /api/auth/set-password` (first time) or `POST /api/auth/login-password` (returning) with `Authorization: Bearer <temp_token>`
 
 ## What's Implemented
 
-### Iteration 1 (2026-05-27) — MVP
-Login, Dashboard, Contacts/Detail, Pipeline, Activities, Tasks, Analytics, Team, AI insights, auto-seeded data, mobile-responsive.
+### Iter 1 (2026-05-27) — Master-admin CRM MVP
+Login, Dashboard, Contacts, Pipeline, Activities, Tasks, Analytics, Team, AI insights, seeded data, mobile responsive. 33/33 tests pass.
 
-### Iteration 2 (2026-05-27) — Live upstream sync
-`upstream_sync.py` + `/api/admin/sync/*` endpoints + `DataSourceBadge` UI. Activates via `UPSTREAM_API_URL` env var.
+### Iter 2 (2026-05-27) — Live upstream sync
+`upstream_sync.py` + `/api/admin/sync/*` + DataSourceBadge. Activates via `UPSTREAM_API_URL`.
 
-### Iteration 3 (2026-06-01) — Mobile UX + PWA
-Hamburger drawer, condensed top bar, horizontal-scroll Kanban, manifest.json + service worker + install prompt (Chrome banner + iOS Add-to-Home tip).
+### Iter 3 (2026-06-01) — Mobile UX + PWA
+Hamburger drawer, condensed top bar, Kanban horizontal-scroll, manifest + service worker + install prompt.
 
-### Iteration 5 (2026-06-01) — Earnings & Payouts 💰
-- New backend endpoints: `GET /api/provider/earnings?period=7d|30d|90d|all`, `GET /api/provider/payouts`, `GET /api/provider/invoice/{payout_id}` (HTML invoice).
-- Earnings response: period summary (gross/fee/net/transactions), lifetime, next payout (auto-scheduled for next Monday 11:00 IST, based on activity since last paid period), revenue by category, daily series.
-- Platform fee: 15% (constant `PLATFORM_FEE_PCT`).
-- Seed: ~6 weeks of historical weekly payouts per provider (status `paid` + UTR + invoice number).
-- New frontend page `/provider/earnings` with: green-gradient hero next-payout card, 4 KPIs (gross / fee / net / past payouts), period tabs (7d/30d/90d/all), daily revenue area chart, revenue-mix progress bars, payouts history table with one-click invoice download (opens printable HTML in new tab).
-- Sidebar nav gains "Earnings & Payouts" item between My Activities and Profile & KYC.
-- Scope: each provider sees only their own earnings & payouts; cross-provider invoice access returns 404. Admin gets 403.
+### Iter 4 (2026-06-01) — Multi-tenant provider portal
+Roles `admin / manager / sales_rep / ops_rep / provider_owner` + `provider_type` + `provider_id`. Scope filters on all endpoints. Provider dashboard with type-themed KPIs.
 
-### Iteration 4 (2026-06-01) — Multi-tenant provider portal ✨
-- **Roles**: `admin` / `manager` / `sales_rep` / `ops_rep` / `provider_owner`. New `provider_type` (`hospital|clinic|ambulance|pathology`) + `provider_id` linkage.
-- **Auth**: 3-step phone+OTP+password; bcrypt; access vs temp token types.
-- **Scope enforcement**: `require_internal` dep on admin endpoints (`/dashboard/*`, `/pipeline`, `/team`, `/analytics/*`, `/export/*`, `PATCH /contacts/{id}`, `/admin/*`). Scope filter on `/contacts` (provider sees only self), `/activities` (only where `provider_ids` contains their id), `/search` (results filtered), `/contacts/{id}` (403 if not owner), `/activities/{id}` (403 if not linked).
-- **Provider endpoints**: `GET /api/provider/me`, `GET /api/provider/dashboard` (with type-tailored extras), `GET /api/provider/activities`.
-- **Provider Dashboard UI**: type-themed gradient banner, 4 generic KPIs, type-specific cards:
-  - Hospital → beds (available/total) + occupancy bar + incoming ambulances
-  - Ambulance → fleet size + avg response time + live trips + completed trips
-  - Clinic → appointments today + no-show rate
-  - Pathology → pending bookings / samples collected / reports ready
-  - 14-day activity area chart, activity-mix donut, live feed (30-sec polling).
-- **Provider Activities** page — scoped table with category filters.
-- **Provider Profile & KYC** page — verified/pending badge, meta grid (license, beds/fleet/experience…), KYC history timeline.
-- **Role-aware Layout/Sidebar** — provider sees only 4 nav items; admin sees 7. DataSourceBadge hidden for providers.
-- **Route guards** — provider hitting `/contacts`/`/pipeline`/etc. → redirect to `/provider`. Admin hitting `/provider` → redirect to `/`.
-- **Seed** — 4 demo provider owners with `password=Trata@123` linked to verified contacts (Hospital / Clinic / Ambulance / Pathology). `provider_ids` populated on every activity at seed time.
+### Iter 5 (2026-06-01) — Earnings & Payouts
+`/api/provider/earnings`, `/api/provider/payouts`, `/api/provider/invoice/{id}`. 15% platform fee. Weekly Monday payouts. PDF invoice download.
 
-## Tested
-- **Iteration 1**: 33/33 backend tests pass.
-- **Iteration 4**: 30/30 multi-tenant backend tests pass + 15/16 frontend playwright (single FE failure was test-script artifact, not product bug).
-- Total: zero open product issues.
+### Iter 6 (2026-06-08) — Scope narrowed to Ambulance only
+Removed Hospital/Clinic/Pathology provider portals. Live Fleet Map (Leaflet) added (`/provider`).
+
+### Iter 7 (2026-06-10) — Sales Agent pivot
+- `AgentDashboard` (`/agent`) with KPI strip, funnel by stage, map of my leads, today's tasks, hot/stale lead cards.
+- `QuickLogModal` — typed activities (cold_call, pitch_meeting, site_visit, demo, kyc_collection, app_training, follow_up, whatsapp, email, note) + outcome-driven stage auto-advance.
+- New endpoints: `/api/agent/dashboard`, `/api/agent/leads`, `/api/agent/leads/map`, `/api/agent/quick-log`.
+- New seed: 3 sales agents (Rohan / Priya manager / one more), leads assigned, activities seeded.
+
+### Iter 8 (2026-06-11) — Phase 8 Agent toolkit (current)
+- `/agent/leads` — full filterable My Leads list page (search, stage, type, last-touched filters).
+- `/agent/leaderboard` — admin/manager-only monthly leaderboard (calls/meetings/onboarded/leads).
+- **AI Digest** — `POST /api/agent/digest` (Claude Sonnet) renders end-of-day workday summary card on AgentDashboard.
+- **GPS Check-in** — Browser Geolocation API capture inside QuickLogModal, shown only for `site_visit` activities. Persisted as `activity.gps {lat,lng}`.
+- **Targets** — `GET /api/agent/targets` returns month-to-date actuals vs targets.
+- Tested: 23/23 backend pytest + 17/17 frontend playwright (after fixing /agent route guard).
 
 ## Backlog / Next
-- **P1** Wire federated OTP through upstream Trata-admin backend (`UPSTREAM_API_URL` + auto-forward `/auth/*` calls).
-- **P1** Per-provider scoped sync from upstream (`/api/hospital/{id}/cases`, `/api/ambulance/{id}/bookings`, etc.) instead of one-shot full sync.
-- **P2** WebSocket / SSE for sub-second SOS push to provider dashboards (replace 30s poll).
-- **P2** Web Push notifications (uses installed PWA) for CRITICAL emergencies.
-- **P2** Bulk actions for HQ (assign tasks to multiple providers, bulk KYC approval).
-- **P3** Staff sub-role (driver / paramedic / doctor under a provider) — defer.
-- **P3** Medical Store & Diagnostic Centre provider types — defer.
-- **P3** Split `server.py` into module files (`auth.py`, `provider.py`, `internal.py`, `seed.py`) — code-organization.
+
+### P1
+- **Phase 5 — Provider-App bridge**: Webhook from Trata Provider App that auto-advances pipeline stage to `verified` / `active` when an onboarded provider signs up on the app.
+- Federate OTP through live Trata-admin backend (`UPSTREAM_API_URL`).
+- Voice notes on QuickLogModal (skipped this iteration per user choice).
+
+### P2
+- **Phase 6 — KYC docs upload**: Attach PDFs/images per lead, admin review + approval flow.
+- **Phase 9 — Manager intelligence**: Funnel conversion per agent, time-in-stage, stale-lead alerts, territory heat-map, AI coaching nudges.
+- Offline PWA queue for quick-log when network drops.
+- Push notifications for stale leads / today's tasks.
+
+### P3
+- Split `server.py` into `routers/{auth,agent,provider,admin}.py` + `db/seed.py`.
+- Defensive try/catch in AgentDashboard.load() against transient 403s.
+- Pydantic GPS sub-model for stricter quick-log validation.
 
 ## Notes / Mocks
-- OTP is MOCKED — only `123456` works. Set `UPSTREAM_API_URL` to federate.
-- Provider data still SEEDED — set upstream URL to mirror live.
-- AI uses Emergent LLM key (Claude Sonnet 4.6).
+- OTP is MOCKED — only `123456` works.
+- Provider data is SEEDED — set `UPSTREAM_API_URL` to mirror live.
+- AI uses Emergent LLM key (Claude Sonnet 4.6) for `/api/agent/digest`.
+
+## Critical seed
+- Master Admin `9873117605` (needs first-time pw set).
+- Sales Agent (Rohan) `9000000002` · `Trata@123`.
+- Sales Manager (Priya) `9000000001` · `Trata@123`.
+- Ambulance Owner `9000020003` · `Trata@123`.
