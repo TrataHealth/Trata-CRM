@@ -17,25 +17,28 @@ import ProviderDashboard from "./pages/ProviderDashboard";
 import ProviderActivities from "./pages/ProviderActivities";
 import ProviderProfile from "./pages/ProviderProfile";
 import ProviderEarnings from "./pages/ProviderEarnings";
+import AgentDashboard from "./pages/AgentDashboard";
 import { Toaster } from "sonner";
 import { registerSW } from "./lib/registerSW";
 
 registerSW();
 
-function RequireAuth({ children, internalOnly = false, providerOnly = false }) {
-  const { user, loading, isInternal, isProvider } = useAuth();
+function RequireAuth({ children, internalOnly = false, providerOnly = false, adminOnly = false }) {
+  const { user, loading, isInternal, isProvider, isAdmin, isSalesRep } = useAuth();
   if (loading) return <div className="p-10 text-sm text-[#5E6C84]">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
+  if (adminOnly && !isAdmin) return <Navigate to={isSalesRep ? "/agent" : "/provider"} replace />;
   if (internalOnly && !isInternal) return <Navigate to="/provider" replace />;
-  if (providerOnly && !isProvider) return <Navigate to="/" replace />;
+  if (providerOnly && !isProvider) return <Navigate to={isSalesRep ? "/agent" : "/"} replace />;
   return <Layout>{children}</Layout>;
 }
 
 function RoleRoot() {
-  const { user, loading, isProvider } = useAuth();
+  const { user, loading, isProvider, isSalesRep } = useAuth();
   if (loading) return null;
   if (!user) return <Navigate to="/login" replace />;
   if (isProvider) return <Navigate to="/provider" replace />;
+  if (isSalesRep) return <Navigate to="/agent" replace />;
   return <Dashboard />;
 }
 
@@ -54,11 +57,14 @@ function App() {
           <Route path="/contacts/:id" element={<RequireAuth internalOnly><ContactDetail /></RequireAuth>} />
           <Route path="/pipeline" element={<RequireAuth internalOnly><Pipeline /></RequireAuth>} />
           <Route path="/activities" element={<RequireAuth internalOnly><Activities /></RequireAuth>} />
-          <Route path="/analytics" element={<RequireAuth internalOnly><Analytics /></RequireAuth>} />
-          <Route path="/team" element={<RequireAuth internalOnly><Team /></RequireAuth>} />
+          <Route path="/analytics" element={<RequireAuth adminOnly><Analytics /></RequireAuth>} />
+          <Route path="/team" element={<RequireAuth adminOnly><Team /></RequireAuth>} />
 
-          {/* Shared (admins + providers) */}
+          {/* Shared (admins + providers + sales reps) */}
           <Route path="/tasks" element={<RequireAuth><Tasks /></RequireAuth>} />
+
+          {/* Sales Agent routes */}
+          <Route path="/agent" element={<RequireAuth><AgentDashboard /></RequireAuth>} />
 
           {/* Provider routes */}
           <Route path="/provider" element={<RequireAuth providerOnly><ProviderDashboard /></RequireAuth>} />

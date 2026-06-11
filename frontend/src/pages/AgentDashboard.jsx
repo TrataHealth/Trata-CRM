@@ -1,0 +1,234 @@
+import React, { useEffect, useState } from "react";
+import api from "../lib/api";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../lib/auth";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import { PIPELINE_STAGES, relativeTime } from "../lib/constants";
+import { Avatar } from "./Contacts";
+import {
+  Activity, Clock, AlertTriangle, CheckCircle2, Phone, Plus, Briefcase, MapPin,
+  ListChecks, Loader2,
+} from "lucide-react";
+import QuickLogModal from "../components/QuickLogModal";
+
+const STAGE_COLOR = Object.fromEntries(PIPELINE_STAGES.map((s) => [s.value, s.color]));
+const STAGE_LABEL = Object.fromEntries(PIPELINE_STAGES.map((s) => [s.value, s.label]));
+
+const PIN = (color) =>
+  L.divIcon({
+    className: "",
+    html: `<div style="background:${color};width:18px;height:18px;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(9,30,66,.3)"></div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+  });
+
+function FitBounds({ points }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!points.length) return;
+    map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 12 });
+  }, [points, map]);
+  return null;
+}
+
+export default function AgentDashboard() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const [dash, setDash] = useState(null);
+  const [mapData, setMapData] = useState(null);
+  const [quickLogLead, setQuickLogLead] = useState(null);
+  const [quickLogOpen, setQuickLogOpen] = useState(false);
+
+  const load = async () => {
+    const [d, m] = await Promise.all([
+      api.get("/agent/dashboard"),
+      api.get("/agent/leads/map"),
+    ]);
+    setDash(d.data);
+    setMapData(m.data);
+  };
+  useEffect(() => { load(); }, []);
+
+  if (!dash) return <div className="p-8 text-sm text-[#5E6C84]" data-testid="agent-dashboard-loading">Loading your day…</div>;
+
+  const k = dash.kpis;
+  const openQuickLog = (lead = null) => { setQuickLogLead(lead); setQuickLogOpen(true); };
+
+  return (
+    <div className="p-4 sm:p-6 lg:p-8 space-y-6 pb-24" data-testid="agent-dashboard-page">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="overline">Sales Agent · {user?.name?.split(" ")[0]}</div>
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">My Day</h1>
+          <p className="text-sm text-[#5E6C84] mt-1">Onboarding healthcare providers onto the Trata app. Plan your route, log every touch.</p>
+        </div>
+        <button
+          onClick={() => openQuickLog()}
+          data-testid="quick-log-fab-desktop"
+          className="hidden sm:flex items-center gap-2 px-4 py-2 bg-[#0052CC] hover:bg-[#0747A6] text-white rounded-md text-sm font-semibold shadow-sm">
+          <Plus className="h-4 w-4" /> Log Activity
+        </button>
+      </div>
+
+      {/* KPI strip */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 lg:gap-4" data-testid="agent-kpis">
+        <KPI icon={Briefcase} label="My Leads" value={k.total_leads} sub="assigned to you" accent="#0052CC" testid="kpi-leads" />
+        <KPI icon={Activity} label="Today's Touches" value={k.today_activities} sub="activities logged today" accent="#36B37E" testid="kpi-today" />
+        <KPI icon={CheckCircle2} label="Onboarded · 7d" value={k.onboarded_this_week} sub="signed up on app" accent="#FFAB00" testid="kpi-onboarded" />
+        <KPI icon={AlertTriangle} label="Stale Leads" value={k.stale_leads} sub="no touch in 7+ days" accent="#FF5630" testid="kpi-stale" />
+        <KPI icon={ListChecks} label="Pending Tasks" value={dash.today_tasks.length} sub="due today / overdue" accent="#6554C0" testid="kpi-tasks" />
+      </div>
+
+      {/* Funnel by stage */}
+      <div className="bg-white border border-[#DFE1E6] rounded-md p-5" data-testid="agent-funnel">
+        <div className="overline mb-2">My Pipeline</div>
+        <div className="font-heading text-lg font-bold text-[#091E42] mb-3">Onboarding funnel</div>
+        <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
+          {PIPELINE_STAGES.map((s) => (
+            <button
+              key={s.value}
+              onClick={() => navigate(`/contacts?stage=${s.value}`)}
+              data-testid={`funnel-stage-${s.value}`}
+              className="text-left rounded-md p-3 hover:shadow-sm transition-all border"
+              style={{ borderColor: `${s.color}30`, background: `${s.color}08` }}
+            >
+              <div className="overline" style={{ color: s.color }}>{s.label}</div>
+              <div className="font-heading text-2xl font-bold mt-1 text-[#091E42]">{dash.by_stage[s.value] || 0}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Map + Today tasks side by side */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 bg-white border border-[#DFE1E6] rounded-md overflow-hidden" data-testid="agent-map">
+          <div className="p-4 border-b border-[#DFE1E6]">
+            <div className="overline flex items-center gap-1.5"><MapPin className="h-3 w-3" /> Today's Field Plan</div>
+            <div className="font-heading text-lg font-bold text-[#091E42] mt-1">My leads on the map</div>
+          </div>
+          <div style={{ height: 380 }}>
+            {!mapData ? (
+              <div className="h-full flex items-center justify-center text-sm text-[#5E6C84]"><Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading map…</div>
+            ) : !mapData.center ? (
+              <div className="h-full flex items-center justify-center text-sm text-[#5E6C84]">No leads with location yet.</div>
+            ) : (
+              <MapContainer center={[mapData.center.lat, mapData.center.lng]} zoom={5} style={{ height: "100%", width: "100%" }} scrollWheelZoom={false}>
+                <TileLayer
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                {mapData.leads.map((l) => (
+                  <Marker key={l.id} position={[l.lat, l.lng]} icon={PIN(STAGE_COLOR[l.pipeline_stage] || "#5E6C84")}>
+                    <Popup>
+                      <b>{l.name}</b><br />
+                      {l.type} · {l.city}<br />
+                      Stage: <b style={{ color: STAGE_COLOR[l.pipeline_stage] }}>{STAGE_LABEL[l.pipeline_stage]}</b><br />
+                      <a href={`/contacts/${l.id}`} style={{ color: "#0052CC", fontWeight: 600 }}>Open lead →</a>
+                    </Popup>
+                  </Marker>
+                ))}
+                <FitBounds points={mapData.leads.map((l) => [l.lat, l.lng])} />
+              </MapContainer>
+            )}
+          </div>
+          <div className="px-4 py-2 border-t border-[#DFE1E6] flex flex-wrap items-center gap-3 text-[11px]">
+            {PIPELINE_STAGES.map((s) => (
+              <div key={s.value} className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
+                <span className="text-[#42526E]">{s.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white border border-[#DFE1E6] rounded-md p-5" data-testid="agent-today-tasks">
+          <div className="overline">Today's Tasks</div>
+          <div className="font-heading text-lg font-bold text-[#091E42] mt-1 mb-3">{dash.today_tasks.length} pending</div>
+          {dash.today_tasks.length === 0 ? (
+            <div className="py-8 text-center text-sm text-[#5E6C84]">All clear. Log an activity to schedule next touch.</div>
+          ) : (
+            <ul className="space-y-2">
+              {dash.today_tasks.slice(0, 8).map((t) => (
+                <li key={t.id} className="p-2.5 border border-[#DFE1E6] rounded hover:border-[#0052CC] transition-colors" data-testid={`task-${t.id}`}>
+                  <div className="text-sm font-semibold text-[#091E42]">{t.title}</div>
+                  <div className="text-[11px] text-[#5E6C84] mt-1">due {relativeTime(t.due_date)}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      {/* Hot leads + Stale leads */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <LeadsCard title="🔥 Hot leads" subtitle="Most recent touchpoints" leads={dash.hot_leads} onLog={openQuickLog} navigate={navigate} testid="hot-leads" />
+        <LeadsCard title="⚠️ Stale leads" subtitle="No touch in 7+ days — chase today" leads={dash.stale_leads_list} onLog={openQuickLog} navigate={navigate} testid="stale-leads" />
+      </div>
+
+      {/* Floating mobile FAB */}
+      <button
+        onClick={() => openQuickLog()}
+        data-testid="quick-log-fab-mobile"
+        className="sm:hidden fixed bottom-5 right-5 h-14 w-14 rounded-full bg-[#0052CC] hover:bg-[#0747A6] text-white shadow-2xl flex items-center justify-center z-40">
+        <Plus className="h-6 w-6" />
+      </button>
+
+      {/* Quick log modal */}
+      {quickLogOpen && (
+        <QuickLogModal
+          initialLead={quickLogLead}
+          onClose={() => setQuickLogOpen(false)}
+          onSaved={() => { setQuickLogOpen(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function KPI({ icon: Icon, label, value, sub, accent, testid }) {
+  return (
+    <div className="bg-white border border-[#DFE1E6] rounded-md p-3 lg:p-4" data-testid={testid}>
+      <div className="flex items-start justify-between">
+        <div className="overline truncate">{label}</div>
+        <Icon className="h-4 w-4 shrink-0" style={{ color: accent }} strokeWidth={1.75} />
+      </div>
+      <div className="font-heading text-2xl lg:text-3xl font-bold text-[#091E42] mt-1 tracking-tight">{value}</div>
+      <div className="text-[11px] text-[#5E6C84] mt-1 truncate">{sub}</div>
+    </div>
+  );
+}
+
+function LeadsCard({ title, subtitle, leads, onLog, navigate, testid }) {
+  return (
+    <div className="bg-white border border-[#DFE1E6] rounded-md p-5" data-testid={testid}>
+      <div className="overline">{title}</div>
+      <div className="font-heading text-lg font-bold text-[#091E42] mt-1">{subtitle}</div>
+      {leads.length === 0 ? (
+        <div className="py-6 text-center text-sm text-[#5E6C84]">Nothing here.</div>
+      ) : (
+        <ul className="mt-3 divide-y divide-[#F1F2F4]">
+          {leads.slice(0, 6).map((l) => (
+            <li key={l.id} className="py-2.5 flex items-center gap-3" data-testid={`lead-${l.id}`}>
+              <Avatar name={l.name} size={32} />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-[#091E42] truncate">{l.name}</div>
+                <div className="text-[11px] text-[#5E6C84] truncate">{l.city} · {l.specialization || l.type}</div>
+              </div>
+              <span className="text-[11px] uppercase tracking-wider font-semibold rounded px-1.5 py-0.5"
+                    style={{ background: `${STAGE_COLOR[l.pipeline_stage]}15`, color: STAGE_COLOR[l.pipeline_stage] }}>
+                {STAGE_LABEL[l.pipeline_stage]}
+              </span>
+              <button onClick={() => onLog(l)} data-testid={`log-${l.id}`}
+                className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-[#0052CC] hover:bg-[#DEEBFF] rounded">
+                <Phone className="h-3.5 w-3.5" /> Log
+              </button>
+              <button onClick={() => navigate(`/contacts/${l.id}`)} className="text-[#5E6C84] hover:text-[#091E42] text-xs">→</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}

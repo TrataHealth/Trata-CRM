@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity,
   BarChart3, UserCog, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
-  Building2, ClipboardList, IdCard, Wallet,
+  Building2, ClipboardList, IdCard, Wallet, Compass,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import api from "../lib/api";
@@ -19,6 +19,14 @@ const ADMIN_NAV = [
   { to: "/team", label: "Team & Roles", icon: UserCog },
 ];
 
+const SALES_NAV = [
+  { to: "/agent", label: "My Day", icon: Compass, exact: true },
+  { to: "/contacts", label: "My Leads", icon: Users },
+  { to: "/pipeline", label: "My Pipeline", icon: GitBranch },
+  { to: "/activities", label: "My Activity Log", icon: Activity },
+  { to: "/tasks", label: "My Tasks", icon: ListChecks },
+];
+
 const PROVIDER_NAV = [
   { to: "/provider", label: "My Dashboard", icon: LayoutDashboard, exact: true },
   { to: "/provider/activities", label: "My Activities", icon: Activity },
@@ -28,8 +36,8 @@ const PROVIDER_NAV = [
 ];
 
 export default function Layout({ children }) {
-  const { user, logout, isProvider } = useAuth();
-  const NAV = isProvider ? PROVIDER_NAV : ADMIN_NAV;
+  const { user, logout, isProvider, isSalesRep } = useAuth();
+  const NAV = isProvider ? PROVIDER_NAV : isSalesRep ? SALES_NAV : ADMIN_NAV;
   const navigate = useNavigate();
   const [query, setQuery] = React.useState("");
   const [results, setResults] = React.useState(null);

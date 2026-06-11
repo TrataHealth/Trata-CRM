@@ -64,6 +64,14 @@ def is_internal(user: dict) -> bool:
     return user.get("role") in INTERNAL_ROLES or user.get("is_master_admin")
 
 
+def is_sales_rep(user: dict) -> bool:
+    return user.get("role") == "sales_rep" and not user.get("is_master_admin")
+
+
+def is_admin_or_manager(user: dict) -> bool:
+    return user.get("is_master_admin") or user.get("role") in ("admin", "manager")
+
+
 def is_provider(user: dict) -> bool:
     return user.get("role") in PROVIDER_ROLES
 
@@ -443,9 +451,11 @@ async def list_contacts(
             {"email": {"$regex": q, "$options": "i"}},
             {"specialization": {"$regex": q, "$options": "i"}},
         ]
-    # Scope: providers only see themselves (everything else hidden)
+    # Scope: providers only see themselves; sales reps only see leads assigned to them
     if is_provider(current):
         qry["id"] = current.get("provider_id")
+    elif is_sales_rep(current):
+        qry["assigned_agent_id"] = current["id"]
     total = await db.contacts.count_documents(qry)
     items = (
         await db.contacts.find(qry, {"_id": 0})
@@ -461,6 +471,8 @@ async def get_contact(contact_id: str, current=Depends(get_current_user)):
     c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
     if not c:
         raise HTTPException(status_code=404, detail="Contact not found")
+    if is_sales_rep(current) and c.get("assigned_agent_id") != current["id"]:
+        raise HTTPException(status_code=403, detail="This lead is not assigned to you")
     acts = await db.activities.find({"contact_id": contact_id}, {"_id": 0}).sort("created_at", -1).limit(100).to_list(100)
     notes = await db.notes.find({"contact_id": contact_id}, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
     tasks = await db.tasks.find({"contact_id": contact_id}, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
@@ -468,16 +480,44 @@ async def get_contact(contact_id: str, current=Depends(get_current_user)):
 
 
 @api.patch("/contacts/{contact_id}")
-async def update_contact(contact_id: str, data: ContactStatusUpdate, current=Depends(require_internal)):
+async def update_contact(contact_id: str, data: ContactStatusUpdate, current=Depends(get_current_user)):
+    c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    # Sales reps can only update their own assigned leads
+    if is_sales_rep(current):
+        if c.get("assigned_agent_id") != current["id"]:
+            raise HTTPException(status_code=403, detail="This lead is not assigned to you")
+    elif not is_internal(current):
+        raise HTTPException(status_code=403, detail="Forbidden")
     update = {k: v for k, v in data.dict().items() if v is not None}
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
     update["updated_at"] = now_iso()
-    r = await db.contacts.update_one({"id": contact_id}, {"$set": update})
-    if r.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Contact not found")
+    await db.contacts.update_one({"id": contact_id}, {"$set": update})
     c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
     return {"success": True, "contact": c}
+
+
+class AssignLead(BaseModel):
+    agent_id: Optional[str] = None  # None = unassign
+
+
+@api.patch("/contacts/{contact_id}/assign")
+async def assign_lead(contact_id: str, data: AssignLead, current=Depends(get_current_user)):
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Only admins/managers can assign leads")
+    agent_name = None
+    if data.agent_id:
+        agent = await db.crm_users.find_one({"id": data.agent_id, "role": {"$in": ["sales_rep", "manager"]}}, {"_id": 0})
+        if not agent:
+            raise HTTPException(status_code=404, detail="Sales agent not found")
+        agent_name = agent.get("name")
+    await db.contacts.update_one(
+        {"id": contact_id},
+        {"$set": {"assigned_agent_id": data.agent_id, "assigned_agent_name": agent_name, "updated_at": now_iso()}},
+    )
+    return {"success": True, "agent_id": data.agent_id, "agent_name": agent_name}
 
 
 # ---------- Pipeline ----------
@@ -520,6 +560,8 @@ async def list_activities(
         ]
     if is_provider(current):
         qry["provider_ids"] = current.get("provider_id")
+    elif is_sales_rep(current):
+        qry["agent_id"] = current["id"]
     total = await db.activities.count_documents(qry)
     items = await db.activities.find(qry, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
     return {"items": items, "total": total}
@@ -554,6 +596,10 @@ async def list_tasks(
         qry["contact_id"] = contact_id
     items = await db.tasks.find(qry, {"_id": 0}).sort("due_date", 1).skip(skip).limit(limit).to_list(limit)
     total = await db.tasks.count_documents(qry)
+    # sales reps see only their tasks
+    if is_sales_rep(current):
+        items = [t for t in items if t.get("assigned_to") == current["id"] or (t.get("created_by") == current["id"])]
+        total = len(items)
     return {"items": items, "total": total}
 
 
@@ -748,6 +794,184 @@ async def global_search(q: str, current=Depends(get_current_user)):
         {"_id": 0, "id": 1, "title": 1, "status": 1, "priority": 1, "due_date": 1},
     ).limit(10).to_list(10)
     return {"contacts": contacts, "activities": activities, "tasks": tasks}
+
+
+# ---------- Sales Agent (onboarding workflow) ----------
+class QuickLogActivity(BaseModel):
+    contact_id: str
+    activity_type: str       # cold_call | pitch_meeting | site_visit | demo | kyc_collection | app_training | follow_up | whatsapp | email | note
+    outcome: Optional[str] = None
+    notes: Optional[str] = ""
+    next_action_at: Optional[str] = None  # ISO date — auto-creates a follow-up task
+    advance_to_stage: Optional[str] = None  # explicit stage move
+    gps: Optional[Dict[str, float]] = None  # {lat, lng} for site visits
+
+
+SALES_ACTIVITY_TYPES = {
+    "cold_call", "pitch_meeting", "site_visit", "demo",
+    "kyc_collection", "app_training", "follow_up", "whatsapp", "email", "note",
+}
+OUTCOME_TO_STAGE = {
+    "not_interested": "churned",
+    "interested": "contacted",
+    "meeting_scheduled": "contacted",
+    "pitched": "contacted",
+    "kyc_pending": "contacted",
+    "kyc_collected": "kyc_submitted",
+    "signed_on_app": "verified",
+    "first_use": "active",
+}
+
+
+@api.post("/agent/quick-log")
+async def quick_log(data: QuickLogActivity, current=Depends(get_current_user)):
+    if not is_sales_rep(current) and not is_internal(current):
+        raise HTTPException(status_code=403, detail="Agent or admin only")
+    if data.activity_type not in SALES_ACTIVITY_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unknown activity type: {data.activity_type}")
+    contact = await db.contacts.find_one({"id": data.contact_id}, {"_id": 0})
+    if not contact:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if is_sales_rep(current) and contact.get("assigned_agent_id") != current["id"]:
+        raise HTTPException(status_code=403, detail="This lead is not assigned to you")
+
+    activity = {
+        "id": str(uuid.uuid4()),
+        "category": "sales_activity",
+        "subtype": data.activity_type,
+        "outcome": data.outcome,
+        "contact_id": contact["id"],
+        "contact_name": contact["name"],
+        "contact_type": contact["type"],
+        "city": contact.get("city"),
+        "title": f"{data.activity_type.replace('_', ' ').title()} — {contact['name']}",
+        "description": data.notes or "",
+        "status": data.outcome or "logged",
+        "agent_id": current["id"],
+        "agent_name": current.get("name"),
+        "gps": data.gps,
+        "amount": 0,
+        "created_at": now_iso(),
+        "provider_ids": [],
+    }
+    await db.activities.insert_one(activity.copy())
+    activity.pop("_id", None)
+
+    # Auto-advance pipeline stage
+    target_stage = data.advance_to_stage or OUTCOME_TO_STAGE.get(data.outcome or "")
+    if target_stage:
+        await db.contacts.update_one(
+            {"id": contact["id"]},
+            {"$set": {"pipeline_stage": target_stage, "updated_at": now_iso()}},
+        )
+
+    # Auto-create follow-up task
+    task = None
+    if data.next_action_at:
+        task = {
+            "id": str(uuid.uuid4()),
+            "title": f"Follow up with {contact['name']}",
+            "description": f"Auto-created from {data.activity_type} on {now_iso()[:10]}",
+            "contact_id": contact["id"],
+            "assigned_to": current["id"],
+            "priority": "medium",
+            "status": "open",
+            "due_date": data.next_action_at,
+            "created_by": current["id"],
+            "created_by_name": current.get("name"),
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+        }
+        await db.tasks.insert_one(task.copy())
+        task.pop("_id", None)
+
+    return {"success": True, "activity": activity, "advanced_to_stage": target_stage, "follow_up_task": task}
+
+
+@api.get("/agent/dashboard")
+async def agent_dashboard(current=Depends(get_current_user)):
+    if not is_sales_rep(current):
+        raise HTTPException(status_code=403, detail="Sales rep only")
+    aid = current["id"]
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+
+    total_leads = await db.contacts.count_documents({"assigned_agent_id": aid})
+    stale_leads = await db.contacts.count_documents({
+        "assigned_agent_id": aid,
+        "pipeline_stage": {"$in": ["lead", "contacted"]},
+        "$or": [{"updated_at": {"$lt": week_ago}}, {"updated_at": {"$exists": False}}],
+    })
+    by_stage = {}
+    for stage in ["lead", "contacted", "kyc_submitted", "verified", "active", "churned"]:
+        by_stage[stage] = await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": stage})
+
+    today_activities = await db.activities.count_documents({"agent_id": aid, "created_at": {"$gte": today_start}})
+    week_activities = await db.activities.count_documents({"agent_id": aid, "created_at": {"$gte": week_ago}})
+    onboarded_this_week = await db.contacts.count_documents({
+        "assigned_agent_id": aid, "pipeline_stage": {"$in": ["verified", "active"]},
+        "updated_at": {"$gte": week_ago},
+    })
+
+    # Today's pending tasks
+    tasks = await db.tasks.find(
+        {"assigned_to": aid, "status": {"$ne": "done"}},
+        {"_id": 0},
+    ).sort("due_date", 1).limit(20).to_list(20)
+
+    # Hot leads = mine in stages contacted/kyc_submitted, most recent first
+    hot = await db.contacts.find(
+        {"assigned_agent_id": aid, "pipeline_stage": {"$in": ["contacted", "kyc_submitted", "verified"]}},
+        {"_id": 0, "id": 1, "name": 1, "type": 1, "phone": 1, "city": 1, "pipeline_stage": 1, "updated_at": 1, "deal_value": 1, "avatar": 1, "specialization": 1},
+    ).sort("updated_at", -1).limit(10).to_list(10)
+
+    # Stale leads needing attention
+    stale = await db.contacts.find(
+        {"assigned_agent_id": aid, "pipeline_stage": {"$in": ["lead", "contacted"]},
+         "$or": [{"updated_at": {"$lt": week_ago}}, {"updated_at": {"$exists": False}}]},
+        {"_id": 0, "id": 1, "name": 1, "type": 1, "phone": 1, "city": 1, "pipeline_stage": 1, "updated_at": 1, "specialization": 1},
+    ).sort("created_at", 1).limit(10).to_list(10)
+
+    return {
+        "kpis": {
+            "total_leads": total_leads,
+            "stale_leads": stale_leads,
+            "today_activities": today_activities,
+            "week_activities": week_activities,
+            "onboarded_this_week": onboarded_this_week,
+        },
+        "by_stage": by_stage,
+        "today_tasks": tasks,
+        "hot_leads": hot,
+        "stale_leads_list": stale,
+    }
+
+
+@api.get("/agent/leads/map")
+async def agent_leads_map(current=Depends(get_current_user)):
+    if not is_sales_rep(current):
+        raise HTTPException(status_code=403, detail="Sales rep only")
+    leads = await db.contacts.find(
+        {"assigned_agent_id": current["id"], "lat": {"$ne": None}},
+        {"_id": 0, "id": 1, "name": 1, "type": 1, "phone": 1, "city": 1, "lat": 1, "lng": 1, "pipeline_stage": 1, "updated_at": 1, "specialization": 1},
+    ).limit(500).to_list(500)
+    if not leads:
+        return {"center": None, "leads": []}
+    avg_lat = sum(l["lat"] for l in leads) / len(leads)
+    avg_lng = sum(l["lng"] for l in leads) / len(leads)
+    return {"center": {"lat": avg_lat, "lng": avg_lng}, "leads": leads}
+
+
+@api.get("/agent/team")
+async def list_agents(current=Depends(get_current_user)):
+    """Used by admin assignment UI."""
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Admin only")
+    items = await db.crm_users.find(
+        {"role": {"$in": ["sales_rep", "manager"]}, "is_active": True},
+        {"_id": 0, "id": 1, "name": 1, "phone": 1, "role": 1},
+    ).to_list(100)
+    return {"items": items}
 
 
 # ---------- Provider (multi-tenant) ----------
@@ -1366,17 +1590,45 @@ async def _do_seed(force: bool = False) -> dict:
         })
     await db.notifications.insert_many([n.copy() for n in notifs])
 
-    # Seed team members (besides master admin)
+    # Seed team members (besides master admin) — passwords pre-set for demo
+    sales_pw = hash_password("Trata@123")
     team_seed = [
         {"name": "Priya Sales Lead", "phone": "9000000001", "email": "priya@tratahealth.com", "role": "manager"},
         {"name": "Rohan Sales Rep", "phone": "9000000002", "email": "rohan@tratahealth.com", "role": "sales_rep"},
         {"name": "Anita Ops", "phone": "9000000003", "email": "anita@tratahealth.com", "role": "ops_rep"},
     ]
+    sales_ids: dict = {}
     for m in team_seed:
         existing = await db.crm_users.find_one({"phone": m["phone"]})
-        if not existing:
-            m_full = {**m, "id": str(uuid.uuid4()), "is_master_admin": False, "is_active": True, "created_at": now_iso()}
-            await db.crm_users.insert_one(m_full)
+        if existing:
+            sales_ids[m["role"]] = existing["id"]
+            continue
+        m_full = {
+            **m,
+            "id": str(uuid.uuid4()),
+            "is_master_admin": False,
+            "is_active": True,
+            "password_hash": sales_pw,
+            "created_at": now_iso(),
+        }
+        await db.crm_users.insert_one(m_full)
+        sales_ids[m["role"]] = m_full["id"]
+
+    # Auto-assign provider-type contacts to sales agents (round-robin Rohan + Priya)
+    sales_agent_ids = [sales_ids.get("sales_rep"), sales_ids.get("manager")]
+    sales_agent_ids = [x for x in sales_agent_ids if x]
+    name_by_id = {}
+    async for u in db.crm_users.find({"id": {"$in": sales_agent_ids}}, {"_id": 0, "id": 1, "name": 1}):
+        name_by_id[u["id"]] = u["name"]
+    provider_contacts_for_sales = [c for c in contacts if c["type"] in ("hospital", "doctor", "ambulance_provider", "pathologist", "paramedic")]
+    for idx, c in enumerate(provider_contacts_for_sales):
+        if not sales_agent_ids:
+            break
+        aid = sales_agent_ids[idx % len(sales_agent_ids)]
+        await db.contacts.update_one(
+            {"id": c["id"]},
+            {"$set": {"assigned_agent_id": aid, "assigned_agent_name": name_by_id.get(aid)}},
+        )
 
     # Seed demo PROVIDER OWNER accounts — ambulance only. Hospital/clinic/pathology
     # owners use the separate Hospital Management System.

@@ -10,10 +10,36 @@ export const CONTACT_TYPES = [
 export const PIPELINE_STAGES = [
   { value: "lead", label: "Lead", color: "#5E6C84" },
   { value: "contacted", label: "Contacted", color: "#00B8D9" },
-  { value: "kyc_submitted", label: "KYC Submitted", color: "#FFC400" },
-  { value: "verified", label: "Verified", color: "#36B37E" },
-  { value: "active", label: "Active", color: "#0052CC" },
-  { value: "churned", label: "Churned", color: "#FF5630" },
+  { value: "kyc_submitted", label: "KYC Collected", color: "#FFC400" },
+  { value: "verified", label: "App Onboarded", color: "#36B37E" },
+  { value: "active", label: "Live on App", color: "#0052CC" },
+  { value: "churned", label: "Dropped", color: "#FF5630" },
+];
+
+export const SALES_ACTIVITY_TYPES = [
+  { value: "cold_call",       label: "Cold Call",        color: "#0052CC", icon: "Phone" },
+  { value: "follow_up",       label: "Follow-up",        color: "#00B8D9", icon: "PhoneCall" },
+  { value: "pitch_meeting",   label: "Pitch Meeting",    color: "#6554C0", icon: "Presentation" },
+  { value: "site_visit",      label: "Site Visit",       color: "#FFAB00", icon: "MapPin" },
+  { value: "demo",            label: "App Demo",         color: "#FF8B00", icon: "MonitorPlay" },
+  { value: "kyc_collection",  label: "KYC Collection",   color: "#FFC400", icon: "FileText" },
+  { value: "app_training",    label: "App Training",     color: "#36B37E", icon: "GraduationCap" },
+  { value: "whatsapp",        label: "WhatsApp",         color: "#25D366", icon: "MessageCircle" },
+  { value: "email",           label: "Email",            color: "#5E6C84", icon: "Mail" },
+  { value: "note",            label: "Note",             color: "#42526E", icon: "StickyNote" },
+];
+
+export const SALES_OUTCOMES = [
+  { value: "connected",          label: "Connected",            stage: null },
+  { value: "no_answer",          label: "No answer",            stage: null },
+  { value: "not_interested",     label: "Not interested",       stage: "churned" },
+  { value: "interested",         label: "Interested",           stage: "contacted" },
+  { value: "meeting_scheduled",  label: "Meeting scheduled",    stage: "contacted" },
+  { value: "pitched",            label: "Pitched",              stage: "contacted" },
+  { value: "kyc_pending",        label: "KYC pending",          stage: "contacted" },
+  { value: "kyc_collected",      label: "KYC collected",        stage: "kyc_submitted" },
+  { value: "signed_on_app",      label: "Signed on app",        stage: "verified" },
+  { value: "first_use",          label: "Live on app",          stage: "active" },
 ];
 
 export const ACTIVITY_CATEGORIES = [

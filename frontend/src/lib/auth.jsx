@@ -64,11 +64,13 @@ export function AuthProvider({ children }) {
     ["admin", "manager", "sales_rep", "ops_rep"].includes(user.role)
   );
   const isProvider = user?.role === "provider_owner";
+  const isSalesRep = !!user && user.role === "sales_rep" && !user.is_master_admin;
+  const isAdmin = !!user && (user.is_master_admin || ["admin", "manager"].includes(user.role));
 
   return (
     <AuthContext.Provider value={{
       user, loading, sendOtp, verifyOtp, setPassword, loginPassword, logout,
-      isInternal, isProvider,
+      isInternal, isProvider, isSalesRep, isAdmin,
     }}>
       {children}
     </AuthContext.Provider>

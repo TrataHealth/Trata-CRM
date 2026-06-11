@@ -249,6 +249,8 @@ function DemoCreds() {
       <div className="font-semibold text-[#091E42] mb-1">Demo accounts (OTP: 123456):</div>
       <ul className="space-y-0.5 font-mono">
         <li>9873117605 · Master admin (set pw on first login)</li>
+        <li>9000000002 · Sales Agent (Rohan) · <span className="text-[#091E42]">Trata@123</span></li>
+        <li>9000000001 · Sales Manager (Priya) · <span className="text-[#091E42]">Trata@123</span></li>
         <li>9000020003 · Ambulance owner · <span className="text-[#091E42]">Trata@123</span></li>
       </ul>
       <div className="mt-2 text-[10px] text-[#5E6C84] font-sans">
