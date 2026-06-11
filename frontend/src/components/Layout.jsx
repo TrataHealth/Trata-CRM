@@ -106,7 +106,7 @@ export default function Layout({ children }) {
             <img src="/brand/shield.png" alt="" className="h-9 w-9 object-contain shrink-0" />
             <div className="min-w-0">
               <div className="font-heading font-bold text-[#091E42] leading-none truncate">Trata Health</div>
-              <div className="text-[10px] text-[#5E6C84] tracking-wider uppercase mt-0.5 truncate">Provider CRM</div>
+              <div className="text-[10px] text-[#5E6C84] tracking-wider uppercase mt-0.5 truncate">CRM</div>
             </div>
           </div>
           <button
