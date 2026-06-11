@@ -974,6 +974,122 @@ async def list_agents(current=Depends(get_current_user)):
     return {"items": items}
 
 
+@api.get("/agent/leads")
+async def agent_leads(
+    stage: Optional[str] = None,
+    city: Optional[str] = None,
+    provider_type: Optional[str] = None,
+    last_touched: Optional[str] = None,  # 'today' | '7d' | '30d' | 'stale'
+    q: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    current=Depends(get_current_user),
+):
+    if not is_sales_rep(current):
+        raise HTTPException(status_code=403, detail="Sales rep only")
+    qry: Dict[str, Any] = {"assigned_agent_id": current["id"]}
+    if stage: qry["pipeline_stage"] = stage
+    if city: qry["city"] = {"$regex": city, "$options": "i"}
+    if provider_type: qry["type"] = provider_type
+    if q:
+        qry["$or"] = [
+            {"name": {"$regex": q, "$options": "i"}},
+            {"phone": {"$regex": q, "$options": "i"}},
+            {"specialization": {"$regex": q, "$options": "i"}},
+        ]
+    now = datetime.now(timezone.utc)
+    if last_touched == "today":
+        qry["updated_at"] = {"$gte": now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()}
+    elif last_touched == "7d":
+        qry["updated_at"] = {"$gte": (now - timedelta(days=7)).isoformat()}
+    elif last_touched == "30d":
+        qry["updated_at"] = {"$gte": (now - timedelta(days=30)).isoformat()}
+    elif last_touched == "stale":
+        qry["$or"] = [{"updated_at": {"$lt": (now - timedelta(days=7)).isoformat()}}, {"updated_at": {"$exists": False}}]
+    total = await db.contacts.count_documents(qry)
+    items = await db.contacts.find(qry, {"_id": 0}).sort("updated_at", -1).skip(skip).limit(limit).to_list(limit)
+    return {"items": items, "total": total}
+
+
+@api.post("/agent/digest")
+async def agent_digest(current=Depends(get_current_user)):
+    if not is_sales_rep(current):
+        raise HTTPException(status_code=403, detail="Sales rep only")
+    aid = current["id"]
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    activities = await db.activities.find({"agent_id": aid, "created_at": {"$gte": today_start}}, {"_id": 0}).to_list(200)
+    onboarded = await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": {"$in": ["verified", "active"]}, "updated_at": {"$gte": today_start}})
+    tasks_done = await db.tasks.count_documents({"assigned_to": aid, "status": "done", "updated_at": {"$gte": today_start}})
+
+    by_type: Dict[str, int] = {}
+    for a in activities:
+        st = a.get("subtype") or a.get("category")
+        by_type[st] = by_type.get(st, 0) + 1
+
+    summary_lines = [f"- {n}× {t.replace('_', ' ').title()}" for t, n in by_type.items()]
+    context = (
+        f"Sales agent: {current.get('name')}\n"
+        f"Date: {datetime.now(timezone.utc).date().isoformat()}\n"
+        f"Activities logged today ({len(activities)}):\n" + "\n".join(summary_lines) + "\n"
+        f"Providers onboarded today: {onboarded}\n"
+        f"Tasks completed today: {tasks_done}\n"
+    )
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"digest-{aid}-{datetime.now(timezone.utc).date()}",
+            system_message="You are a sales coach for healthcare-provider onboarding agents at TrataHealth. Be concise, motivating and practical.",
+        ).with_model("anthropic", "claude-sonnet-4-6")
+        msg = UserMessage(text=f"Write a 4-line end-of-day digest for this agent. Line 1: numbers summary. Line 2: a win to celebrate. Line 3: a gap to address tomorrow. Line 4: the single highest-leverage action for tomorrow morning.\n\n---\n{context}")
+        text = await chat.send_message(msg)
+        return {"success": True, "text": str(text), "stats": {"activities": len(activities), "by_type": by_type, "onboarded": onboarded, "tasks_done": tasks_done}}
+    except Exception as e:
+        logger.error(f"Digest AI error: {e}")
+        return {"success": False, "text": context, "stats": {"activities": len(activities), "by_type": by_type, "onboarded": onboarded, "tasks_done": tasks_done}}
+
+
+@api.get("/agent/targets")
+async def agent_targets(current=Depends(get_current_user)):
+    if not is_sales_rep(current) and not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    aid = current["id"]
+    t = await db.targets.find_one({"agent_id": aid}, {"_id": 0})
+    if not t:
+        t = {"agent_id": aid, "month_calls": 80, "month_meetings": 24, "month_kyc": 8, "month_onboarded": 5}
+    # Compute actuals month-to-date
+    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    actual = {
+        "calls": await db.activities.count_documents({"agent_id": aid, "subtype": {"$in": ["cold_call", "follow_up"]}, "created_at": {"$gte": month_start}}),
+        "meetings": await db.activities.count_documents({"agent_id": aid, "subtype": {"$in": ["pitch_meeting", "site_visit", "demo"]}, "created_at": {"$gte": month_start}}),
+        "kyc": await db.activities.count_documents({"agent_id": aid, "subtype": "kyc_collection", "created_at": {"$gte": month_start}}),
+        "onboarded": await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": {"$in": ["verified", "active"]}, "updated_at": {"$gte": month_start}}),
+    }
+    return {"target": t, "actual": actual, "month_start": month_start}
+
+
+@api.get("/agent/leaderboard")
+async def agent_leaderboard(current=Depends(get_current_user)):
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Admin/manager only")
+    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    agents = await db.crm_users.find({"role": {"$in": ["sales_rep", "manager"]}, "is_active": True}, {"_id": 0}).to_list(100)
+    rows = []
+    for a in agents:
+        aid = a["id"]
+        rows.append({
+            "agent_id": aid,
+            "name": a.get("name"),
+            "role": a.get("role"),
+            "calls": await db.activities.count_documents({"agent_id": aid, "subtype": {"$in": ["cold_call", "follow_up"]}, "created_at": {"$gte": month_start}}),
+            "meetings": await db.activities.count_documents({"agent_id": aid, "subtype": {"$in": ["pitch_meeting", "site_visit", "demo"]}, "created_at": {"$gte": month_start}}),
+            "onboarded": await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": {"$in": ["verified", "active"]}, "updated_at": {"$gte": month_start}}),
+            "leads": await db.contacts.count_documents({"assigned_agent_id": aid}),
+        })
+    rows.sort(key=lambda r: (r["onboarded"], r["meetings"], r["calls"]), reverse=True)
+    return {"items": rows, "month_start": month_start}
+
+
 # ---------- Provider (multi-tenant) ----------
 @api.get("/provider/me")
 async def provider_me(current=Depends(get_current_user)):
