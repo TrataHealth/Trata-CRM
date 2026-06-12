@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
-import { ShieldCheck, ArrowRight, Loader2, Lock, KeyRound } from "lucide-react";
+import { ShieldCheck, ArrowRight, Loader2, Lock, KeyRound, Eye, EyeOff } from "lucide-react";
 
 export default function Login() {
   const { sendOtp, verifyOtp, setPassword, loginPassword, user } = useAuth();
@@ -10,6 +10,7 @@ export default function Login() {
   const [phone, setPhoneN] = useState("9873117605");
   const [otp, setOtp] = useState("123456");
   const [password, setPasswordN] = useState("");
+  const [showPwd, setShowPwd] = useState(false);
   const [tempToken, setTempToken] = useState(null);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [previewUser, setPreviewUser] = useState(null);
@@ -210,11 +211,21 @@ export default function Login() {
                     data-testid="login-password-input"
                     value={password}
                     onChange={(e) => setPasswordN(e.target.value)}
-                    type="password"
+                    type={showPwd ? "text" : "password"}
                     autoComplete={needsSetup ? "new-password" : "current-password"}
                     placeholder={needsSetup ? "Choose a strong password" : "Enter your password"}
-                    className="pl-9 w-full px-3 py-2.5 text-sm bg-white border border-[#DFE1E6] rounded-md focus:border-[#4C9AFF] focus:ring-2 focus:ring-[#4C9AFF]/30 outline-none"
+                    className="pl-9 pr-11 w-full px-3 py-2.5 text-sm bg-white border border-[#DFE1E6] rounded-md focus:border-[#4C9AFF] focus:ring-2 focus:ring-[#4C9AFF]/30 outline-none"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPwd((v) => !v)}
+                    aria-label={showPwd ? "Hide password" : "Show password"}
+                    data-testid="login-password-toggle"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-[#5E6C84] hover:text-[#091E42] rounded"
+                    tabIndex={-1}
+                  >
+                    {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
                 </div>
               </label>
               {err && <div className="text-sm text-[#FF5630]" data-testid="login-error">{err}</div>}

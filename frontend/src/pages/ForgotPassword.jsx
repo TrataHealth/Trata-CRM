@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import api from "../lib/api";
-import { ShieldCheck, ArrowRight, Loader2, KeyRound, Mail, Lock } from "lucide-react";
+import { ShieldCheck, ArrowRight, Loader2, KeyRound, Mail, Lock, Eye, EyeOff } from "lucide-react";
 
 export default function ForgotPassword() {
   const navigate = useNavigate();
@@ -12,6 +12,7 @@ export default function ForgotPassword() {
   const [code, setCode] = useState("");
   const [devCode, setDevCode] = useState(null);
   const [newPassword, setNewPassword] = useState("");
+  const [showPwd, setShowPwd] = useState(false);
   const [emailMasked, setEmailMasked] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -176,12 +177,22 @@ export default function ForgotPassword() {
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#5E6C84]" />
                 <input
                   data-testid="fp-newpass-input"
-                  type="password"
+                  type={showPwd ? "text" : "password"}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   placeholder="Choose a new password"
-                  className="pl-9 w-full px-3 py-2.5 text-sm bg-white border border-[#DFE1E6] rounded-md focus:border-[#4C9AFF] outline-none"
+                  className="pl-9 pr-11 w-full px-3 py-2.5 text-sm bg-white border border-[#DFE1E6] rounded-md focus:border-[#4C9AFF] outline-none"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPwd((v) => !v)}
+                  aria-label={showPwd ? "Hide password" : "Show password"}
+                  data-testid="fp-newpass-toggle"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-[#5E6C84] hover:text-[#091E42] rounded"
+                  tabIndex={-1}
+                >
+                  {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
               </div>
             </label>
             {err && <div className="text-sm text-[#FF5630]" data-testid="fp-error">{err}</div>}
