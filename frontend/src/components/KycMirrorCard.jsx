@@ -59,8 +59,16 @@ export default function KycMirrorCard({ contactId }) {
     setAiScanning(true);
     setState((s) => ({ ...s, err: "" }));
     try {
-      await api.post(`/contacts/${contactId}/kyc-ai-prescreen`);
-      await load(false);
+      const { data } = await api.post(`/contacts/${contactId}/kyc-ai-prescreen`);
+      // Optimistic merge so the docs section doesn't flicker back to its loading skeleton
+      setState((s) => ({
+        ...s,
+        contact: {
+          ...(s.contact || {}),
+          ai_doc_prescreens: data.ai_doc_prescreens || {},
+          ai_prescreen_summary: data.ai_prescreen_summary || null,
+        },
+      }));
     } catch (e) {
       setState((s) => ({ ...s, err: e?.response?.data?.detail || "AI pre-screen failed" }));
     }
