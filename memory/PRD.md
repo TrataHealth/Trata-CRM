@@ -52,6 +52,12 @@ Removed Hospital/Clinic/Pathology provider portals. Live Fleet Map (Leaflet) add
 - **Targets** — `GET /api/agent/targets` returns month-to-date actuals vs targets.
 - Tested: 23/23 backend pytest + 17/17 frontend playwright (after fixing /agent route guard).
 
+### Iter 15 (2026-06-12) — SLA timer + ops metric
+- New `SlaChip` component with auto-update every minute; color-coded urgency: green <12h, yellow 12-24h, red OVERDUE ≥24h.
+- Wired into 3 places: each KYC queue row, sales-rep review state in `KycMirrorCard`, master-admin awaiting-final state in `KycMirrorCard`.
+- KYC queue page shows ops summary: "Avg time-pending: 18.4h · ⚠ 2 overdue (>24h)" at the top.
+- Pure frontend (`slaInfo` helper in `constants.js` + `SlaChip.jsx` ~25 LOC). No backend changes needed — uses existing `created_at` and `kyc_agent_completed_at` timestamps.
+
 ### Iter 14 (2026-06-12) — Phase 6.5 Two-tier KYC workflow (sales rep → master admin)
 - **Per-document review by sales rep**: new endpoint `POST /api/contacts/{id}/kyc-doc-review` accepts `{doc_id, decision, notes}`, persists per-doc decisions on `contact.agent_doc_reviews`, emits `crm.kyc.doc_reviewed`. UI: each KYC doc gets inline ✓ Approve / ✗ Reject buttons + optional notes; once decided, shows the agent's verdict in green/red.
 - **Sales rep submission**: `POST /api/contacts/{id}/kyc-submit-for-admin` marks the lead `kyc_status='agent_reviewed'`, sets `kyc_agent_completed_at` + `kyc_agent_summary{approved,rejected,total}`, emits `crm.kyc.agent_completed` (maps to admin app's `kyc.review_requested`). "Submit to Master Admin" button is disabled until all docs are decided.

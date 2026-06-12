@@ -6,6 +6,7 @@ import {
   CheckCircle2, XCircle, FileText, FileQuestion, AlertCircle, MessagesSquare, Send, Sparkles, Crown,
 } from "lucide-react";
 import { relativeTime } from "../lib/constants";
+import SlaChip from "./SlaChip";
 
 const DOC_STATUS_STYLE = {
   approved: { color: "#36B37E", icon: CheckCircle2, label: "Approved" },
@@ -292,7 +293,8 @@ export default function KycMirrorCard({ contactId }) {
                   <div className="flex items-center gap-2 text-sm text-[#091E42] flex-wrap">
                     <Crown className="h-4 w-4 text-[#FFAB00]" />
                     <b>Master Admin: final approval</b>
-                    <span className="text-[#5E6C84] text-xs">— sales rep finished review: {c.kyc_agent_summary?.approved || 0} approved, {c.kyc_agent_summary?.rejected || 0} rejected · {relativeTime(c.kyc_agent_completed_at)}</span>
+                    <SlaChip since={c.kyc_agent_completed_at} threshold={24} prefix="Awaiting" testid="kyc-sla-admin" />
+                    <span className="text-[#5E6C84] text-xs">— sales rep finished: {c.kyc_agent_summary?.approved || 0} approved, {c.kyc_agent_summary?.rejected || 0} rejected</span>
                   </div>
                   {!adminForm.open ? (
                     <div className="flex gap-2 flex-wrap">
@@ -329,8 +331,10 @@ export default function KycMirrorCard({ contactId }) {
           return (
             <div className="space-y-2" data-testid="kyc-state-agent-reviewing">
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="text-sm text-[#091E42]">
-                  <b>Sales rep review:</b> <span className="text-[#5E6C84]">{docsReviewed} of {docsTotal} documents decided</span>
+                <div className="text-sm text-[#091E42] flex items-center gap-2 flex-wrap">
+                  <b>Sales rep review:</b>
+                  <span className="text-[#5E6C84]">{docsReviewed} of {docsTotal} documents decided</span>
+                  <SlaChip since={c.created_at || c.updated_at} threshold={24} prefix="Pending" testid="kyc-sla-agent" />
                 </div>
                 <button
                   onClick={submitForAdmin}

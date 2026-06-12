@@ -21,6 +21,30 @@ export const ROLE_META = Object.fromEntries(TEAM_ROLES.map((r) => [r.value, r]))
 export const roleLabel = (r) => ROLE_META[r]?.label || (r || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 export const roleColor = (r) => ROLE_META[r]?.color || "#42526E";
 
+/** SLA helper — returns {label, color, urgency:'fresh'|'warn'|'overdue', hours, days}.
+ * Used to render "Pending 14h" / "OVERDUE 2d 6h" chips with red urgency past 24h.
+ * @param {string} since ISO datetime
+ * @param {number} thresholdHours hours after which it's flagged "overdue" (default 24)
+ */
+export function slaInfo(since, thresholdHours = 24) {
+  if (!since) return { label: "—", color: "#5E6C84", urgency: "fresh", hours: 0, days: 0 };
+  const ms = Date.now() - new Date(since).getTime();
+  const totalMins = Math.max(0, Math.floor(ms / 60000));
+  const days = Math.floor(totalMins / 1440);
+  const hours = Math.floor((totalMins % 1440) / 60);
+  const mins  = totalMins % 60;
+  let label;
+  if (days >= 1) label = `${days}d ${hours}h`;
+  else if (hours >= 1) label = `${hours}h ${mins}m`;
+  else label = `${mins}m`;
+  const totalHours = totalMins / 60;
+  let urgency, color;
+  if (totalHours >= thresholdHours) { urgency = "overdue"; color = "#FF5630"; }
+  else if (totalHours >= thresholdHours * 0.5) { urgency = "warn"; color = "#FFAB00"; }
+  else { urgency = "fresh"; color = "#36B37E"; }
+  return { label, color, urgency, hours: totalHours, days };
+}
+
 
 export const PIPELINE_STAGES = [
   { value: "lead", label: "Lead", color: "#5E6C84" },
