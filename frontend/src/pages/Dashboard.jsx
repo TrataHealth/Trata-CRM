@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { fmtCurrency, relativeTime, ACTIVITY_CATEGORIES, statusColor, typeLabel } from "../lib/constants";
 import WebhookBridgePanel from "../components/WebhookBridgePanel";
+import AdminBridgePanel from "../components/AdminBridgePanel";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, BarChart, Bar, CartesianGrid,
@@ -194,6 +195,9 @@ export default function Dashboard() {
 
       {/* Phase 5: Provider App webhook bridge */}
       <WebhookBridgePanel />
+
+      {/* Phase 5b: Admin App two-way bridge */}
+      <AdminBridgePanel />
     </div>
   );
 }

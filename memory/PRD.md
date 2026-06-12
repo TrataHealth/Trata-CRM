@@ -52,6 +52,20 @@ Removed Hospital/Clinic/Pathology provider portals. Live Fleet Map (Leaflet) add
 - **Targets** — `GET /api/agent/targets` returns month-to-date actuals vs targets.
 - Tested: 23/23 backend pytest + 17/17 frontend playwright (after fixing /agent route guard).
 
+### Iter 12 (2026-06-12) — Trata Admin App ⇄ CRM two-way bridge
+- New module `/app/backend/admin_bridge.py`: HMAC sign+verify, lazy-env, async outbound queue with exponential backoff (max 6 attempts, capped at 5min), idempotency dedupe by `event.id`, background dispatcher loop polling every 30s.
+- New backend endpoints:
+  - `POST /api/webhooks/admin-app` — receives 7 inbound event types (provider.signed_up, .first_use, .kyc.submitted, .kyc.updated, .deactivated, .profile.updated, payout.processed). HMAC-verified. Replays return `409 duplicate_event`.
+  - `GET /api/admin/bridge/events` — admin/manager dashboard data (inbound + outbound + counts + config).
+  - `POST /api/admin/bridge/test-send` — queue a signed outbound event with one click.
+  - `POST /api/admin/bridge/retry/{id}` — manual retry of failed/retrying outbound.
+  - `POST /api/contacts/{id}/kyc-review` — Phase 6 sales-agent KYC decision; emits `crm.kyc.reviewed`.
+- Outbound emission hooked into existing flows: PATCH /contacts (deal.closed), PATCH /contacts/{id}/assign (lead.assigned), POST /agent/quick-log (activity.logged + deal.closed), POST /notes (note.added), POST /contacts/{id}/kyc-review (kyc.reviewed).
+- Loop prevention: inbound-created contacts get `source: 'trata_admin_webhook'` and outbound deal.closed is suppressed for those leads.
+- `.env`: TRATA_ADMIN_API_URL, TRATA_ADMIN_API_KEY (admin team to provide), TRATA_ADMIN_WEBHOOK_URL, ADMIN_CRM_WEBHOOK_SECRET=`trata-admin-crm-bridge-2026-r7Qx4n9Lm2pK8sVj`.
+- Frontend: new `AdminBridgePanel` on the Master Dashboard with HMAC status badges, live counters, outbound test sender, retry-now button on failed events, full inbound event log auto-refreshing every 8s.
+- Curl-verified: bad sig → 401, good sig → 200, replay → 409, KYC update → 200 + stage bump, outbound dispatcher fires + reports HTTP 404 from upstream (expected until admin team ships `/api/integrations/crm/webhook` per the spec we sent them).
+
 ### Iter 11 (2026-06-12) — Phase 9 Org hierarchy + clickable member detail
 - New strict hierarchy: Master Admin → National Manager → Regional Manager → Zonal Manager → Area Manager → Sales Rep/Ops Rep. Each role can ONLY report to the role immediately above (validated server-side with cycle detection).
 - New endpoint `GET /api/team/{id}` returns: profile, reports_chain (climbing to root), direct_reports[], providers_handled count, performance{} (self for sales rep / team-rollup for managers), recent_activities[], feedback[]. New `PATCH /api/team/{id}` for admins to update name/email/role/reports_to/territories. New `POST /api/team/{id}/feedback` + DELETE for manager-rated 1-5 + note feedback.

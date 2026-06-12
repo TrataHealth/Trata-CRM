@@ -26,6 +26,7 @@ import io
 import csv
 
 import upstream_sync as us
+import admin_bridge as ab
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -784,8 +785,21 @@ async def update_contact(contact_id: str, data: ContactStatusUpdate, current=Dep
         raise HTTPException(status_code=400, detail="No fields to update")
     update["updated_at"] = now_iso()
     await db.contacts.update_one({"id": contact_id}, {"$set": update})
-    c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
-    return {"success": True, "contact": c}
+    c2 = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    # Emit crm.deal.closed if the lead just reached verified/active from another stage (CRM side, not via inbound)
+    if (
+        update.get("pipeline_stage") in {"verified", "active"}
+        and c.get("pipeline_stage") != update["pipeline_stage"]
+        and c.get("source") not in {"trata_admin_webhook", "provider_app_webhook"}
+    ):
+        await ab.queue_outbound(db, "crm.deal.closed", {
+            "phone": c2.get("phone"),
+            "name": c2.get("name"),
+            "final_stage": update["pipeline_stage"],
+            "agent_phone": (await db.crm_users.find_one({"id": c2.get("assigned_agent_id")}, {"phone": 1}) or {}).get("phone"),
+            "updated_at": c2.get("updated_at"),
+        })
+    return {"success": True, "contact": c2}
 
 
 class AssignLead(BaseModel):
@@ -806,6 +820,19 @@ async def assign_lead(contact_id: str, data: AssignLead, current=Depends(get_cur
         {"id": contact_id},
         {"$set": {"assigned_agent_id": data.agent_id, "assigned_agent_name": agent_name, "updated_at": now_iso()}},
     )
+    # Emit lead.assigned outbound
+    c = await db.contacts.find_one({"id": contact_id}, {"_id": 0, "phone": 1, "name": 1, "city": 1, "type": 1})
+    old_agent = None
+    if data.agent_id and c:
+        new_agent = await db.crm_users.find_one({"id": data.agent_id}, {"phone": 1, "_id": 0})
+        old_agent_doc = await db.crm_users.find_one({"id": (await db.contacts.find_one({"id": contact_id}) or {}).get("assigned_agent_id")}, {"phone": 1, "_id": 0}) if False else None
+        await ab.queue_outbound(db, "crm.lead.assigned", {
+            "phone": c.get("phone") if c else None,
+            "name": c.get("name") if c else None,
+            "new_agent_phone": (new_agent or {}).get("phone"),
+            "old_agent_phone": (old_agent_doc or {}).get("phone"),
+            "assigned_at": now_iso(),
+        })
     return {"success": True, "agent_id": data.agent_id, "agent_name": agent_name}
 
 
@@ -935,7 +962,70 @@ async def create_note(data: NoteCreate, current=Depends(get_current_user)):
     }
     await db.notes.insert_one(note.copy())
     note.pop("_id", None)
+    # Emit outbound — note.added
+    c = await db.contacts.find_one({"id": data.contact_id}, {"_id": 0, "phone": 1, "name": 1})
+    if c:
+        await ab.queue_outbound(db, "crm.note.added", {
+            "phone": c.get("phone"),
+            "contact_name": c.get("name"),
+            "note_text": data.body,
+            "author_phone": current.get("phone"),
+            "created_at": note["created_at"],
+        })
     return {"success": True, "note": note}
+
+
+# ---------- KYC review (Phase 6 — CRM agent decision) ----------
+class KycReviewBody(BaseModel):
+    decision: str   # "approved" | "rejected" | "needs_more_info"
+    notes: Optional[str] = None
+
+
+@api.post("/contacts/{contact_id}/kyc-review")
+async def review_kyc(contact_id: str, data: KycReviewBody, current=Depends(get_current_user)):
+    if not is_internal(current):
+        raise HTTPException(status_code=403, detail="Internal users only")
+    if data.decision not in {"approved", "rejected", "needs_more_info"}:
+        raise HTTPException(status_code=400, detail="decision must be approved|rejected|needs_more_info")
+    c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if is_sales_rep(current) and c.get("assigned_agent_id") != current["id"]:
+        raise HTTPException(status_code=403, detail="Not your lead")
+    new_kyc = {"approved": "approved", "rejected": "rejected", "needs_more_info": "needs_more_info"}[data.decision]
+    set_doc: Dict[str, Any] = {"kyc_status": new_kyc, "kyc_reviewed_at": now_iso(), "kyc_review_notes": data.notes, "updated_at": now_iso()}
+    if data.decision == "approved":
+        # Bump pipeline forward if still pre-verified
+        if c.get("pipeline_stage") in {"lead", "contacted", "kyc_submitted"}:
+            set_doc["pipeline_stage"] = "verified"
+    await db.contacts.update_one({"id": contact_id}, {"$set": set_doc})
+
+    # Audit + outbound
+    await db.activities.insert_one({
+        "id": str(uuid.uuid4()),
+        "category": "kyc_review",
+        "subtype": data.decision,
+        "title": f"KYC {data.decision} — {c['name']}",
+        "description": data.notes or "",
+        "contact_id": contact_id,
+        "contact_name": c["name"],
+        "status": "completed",
+        "agent_id": current["id"],
+        "agent_name": current.get("name"),
+        "created_at": now_iso(),
+        "provider_ids": [contact_id],
+    })
+    await ab.queue_outbound(db, "crm.kyc.reviewed", {
+        "phone": c.get("phone"),
+        "contact_name": c["name"],
+        "decision": data.decision,
+        "reviewer_phone": current.get("phone"),
+        "reviewer_name": current.get("name"),
+        "notes": data.notes,
+        "reviewed_at": now_iso(),
+    })
+    c2 = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    return {"success": True, "contact": c2}
 
 
 # ---------- Team ----------
@@ -1388,6 +1478,17 @@ async def quick_log(data: QuickLogActivity, current=Depends(get_current_user)):
     await db.activities.insert_one(activity.copy())
     activity.pop("_id", None)
 
+    # Emit outbound — activity logged
+    await ab.queue_outbound(db, "crm.activity.logged", {
+        "phone": contact.get("phone"),
+        "contact_name": contact["name"],
+        "activity_type": data.activity_type,
+        "outcome": data.outcome,
+        "gps": data.gps,
+        "agent_phone": current.get("phone"),
+        "occurred_at": activity["created_at"],
+    })
+
     # Auto-advance pipeline stage
     target_stage = data.advance_to_stage or OUTCOME_TO_STAGE.get(data.outcome or "")
     if target_stage:
@@ -1395,6 +1496,14 @@ async def quick_log(data: QuickLogActivity, current=Depends(get_current_user)):
             {"id": contact["id"]},
             {"$set": {"pipeline_stage": target_stage, "updated_at": now_iso()}},
         )
+        if target_stage in {"verified", "active"} and contact.get("pipeline_stage") != target_stage:
+            await ab.queue_outbound(db, "crm.deal.closed", {
+                "phone": contact.get("phone"),
+                "name": contact["name"],
+                "final_stage": target_stage,
+                "agent_phone": current.get("phone"),
+                "updated_at": now_iso(),
+            })
 
     # Auto-create follow-up task
     task = None
@@ -2753,6 +2862,247 @@ async def webhook_test_send(data: WebhookTestSendBody, current=Depends(get_curre
     }
 
 
+# ---------- Trata Admin App ⇄ CRM Bridge ----------
+class AdminInboundBody(BaseModel):
+    event: str
+    id: str
+    timestamp: Optional[str] = None
+    data: Dict[str, Any]
+
+
+async def _handle_admin_event(body: AdminInboundBody) -> Dict[str, Any]:
+    """Apply the inbound event to CRM state. Mirrors Phase 5 webhook semantics for provider lifecycle."""
+    event = body.event
+    d = body.data or {}
+    phone = _normalize_phone(d.get("phone") or d.get("provider_phone"))
+    if event in {"provider.signed_up", "provider.first_use"} and phone:
+        stage = "verified" if event == "provider.signed_up" else "active"
+        contact = None
+        async for c in db.contacts.find({}, {"_id": 0}):
+            if _normalize_phone(c.get("phone")) == phone:
+                contact = c
+                break
+        if not contact:
+            agent = await _pick_agent_for_territory(d.get("city"))
+            contact = {
+                "id": str(uuid.uuid4()),
+                "name": d.get("name") or f"Provider {phone}",
+                "type": d.get("type") or "ambulance_provider",
+                "phone": phone,
+                "city": d.get("city"),
+                "state": d.get("state"),
+                "is_verified": True,
+                "is_active": stage == "active",
+                "pipeline_stage": stage,
+                "deal_value": 0,
+                "assigned_agent_id": agent["id"] if agent else None,
+                "assigned_agent_name": agent["name"] if agent else None,
+                "source": "trata_admin_webhook",
+                "upstream_id": d.get("upstream_id"),
+                "created_at": now_iso(),
+                "updated_at": now_iso(),
+                "avatar": None,
+            }
+            await db.contacts.insert_one(contact.copy())
+            return {"action": f"created_lead_in_stage_{stage}", "contact_id": contact["id"]}
+        await db.contacts.update_one({"id": contact["id"]}, {"$set": {
+            "pipeline_stage": stage,
+            "is_verified": True,
+            "is_active": stage == "active",
+            "upstream_id": d.get("upstream_id") or contact.get("upstream_id"),
+            "updated_at": now_iso(),
+        }})
+        return {"action": f"advanced_to_{stage}", "contact_id": contact["id"]}
+
+    if event in {"provider.kyc.submitted", "provider.kyc.updated"} and phone:
+        contact = await db.contacts.find_one({"phone": phone}, {"_id": 0, "id": 1, "name": 1})
+        if not contact:
+            return {"action": "ignored_unknown_phone"}
+        docs = d.get("docs") or []
+        kyc_status = "in_review" if event == "provider.kyc.submitted" else "updated"
+        await db.contacts.update_one({"id": contact["id"]}, {"$set": {
+            "kyc_status": kyc_status,
+            "kyc_docs": docs,
+            "kyc_updated_at": now_iso(),
+            "updated_at": now_iso(),
+        }})
+        # Stage bump if still in early stages
+        await db.contacts.update_one(
+            {"id": contact["id"], "pipeline_stage": {"$in": ["lead", "contacted"]}},
+            {"$set": {"pipeline_stage": "kyc_submitted"}},
+        )
+        return {"action": f"kyc_{kyc_status}", "contact_id": contact["id"], "docs_count": len(docs)}
+
+    if event == "provider.deactivated" and phone:
+        contact = await db.contacts.find_one({"phone": phone}, {"_id": 0, "id": 1})
+        if not contact:
+            return {"action": "ignored_unknown_phone"}
+        await db.contacts.update_one({"id": contact["id"]}, {"$set": {
+            "is_active": False,
+            "deactivated_at": now_iso(),
+            "deactivation_reason": d.get("reason"),
+            "updated_at": now_iso(),
+        }})
+        return {"action": "deactivated", "contact_id": contact["id"]}
+
+    if event == "provider.profile.updated" and phone:
+        contact = await db.contacts.find_one({"phone": phone}, {"_id": 0, "id": 1})
+        if not contact:
+            return {"action": "ignored_unknown_phone"}
+        allowed = {"name", "email", "city", "state", "specialization", "lat", "lng"}
+        changes = {k: v for k, v in (d.get("changed_fields") or {}).items() if k in allowed}
+        if changes:
+            changes["updated_at"] = now_iso()
+            await db.contacts.update_one({"id": contact["id"]}, {"$set": changes})
+        return {"action": "profile_updated", "contact_id": contact["id"], "fields": list(changes.keys())}
+
+    if event == "payout.processed" and phone:
+        # Just log it as an activity tied to the provider so it shows in their timeline.
+        contact = await db.contacts.find_one({"phone": phone}, {"_id": 0, "id": 1, "name": 1, "assigned_agent_id": 1, "assigned_agent_name": 1})
+        if not contact:
+            return {"action": "ignored_unknown_phone"}
+        await db.activities.insert_one({
+            "id": str(uuid.uuid4()),
+            "category": "payout",
+            "subtype": "processed",
+            "title": f"Weekly payout settled — ₹{d.get('amount', 0):,}",
+            "description": f"Period: {d.get('period', 'this week')}",
+            "contact_id": contact["id"],
+            "contact_name": contact["name"],
+            "amount": d.get("amount") or 0,
+            "status": "completed",
+            "agent_id": contact.get("assigned_agent_id"),
+            "agent_name": contact.get("assigned_agent_name"),
+            "created_at": now_iso(),
+            "provider_ids": [contact["id"]],
+            "source": "trata_admin_webhook",
+        })
+        return {"action": "payout_logged", "contact_id": contact["id"]}
+
+    return {"action": "ignored", "reason": "unsupported event or missing phone"}
+
+
+@api.post("/webhooks/admin-app")
+async def admin_app_webhook(
+    request: Request,
+    x_trata_signature: Optional[str] = Header(default=None, alias="X-Trata-Signature"),
+):
+    raw = await request.body()
+    if not ab.verify_signature(raw, x_trata_signature):
+        await db.admin_bridge_events.insert_one({
+            "id": str(uuid.uuid4()),
+            "direction": "inbound",
+            "status": "rejected",
+            "reason": "invalid_signature",
+            "raw": raw[:512].decode("utf-8", errors="ignore"),
+            "created_at": now_iso(),
+        })
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    try:
+        body_dict = json.loads(raw.decode("utf-8") or "{}")
+        body = AdminInboundBody(**body_dict)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {e}")
+    if body.event not in ab.INBOUND_EVENTS:
+        raise HTTPException(status_code=400, detail=f"Unsupported event: {body.event}")
+
+    # Idempotency dedupe by event.id
+    existing = await db.admin_bridge_events.find_one({"event_id": body.id, "direction": "inbound"}, {"_id": 0})
+    if existing:
+        return {"ok": False, "error": "duplicate_event", "received": False}
+
+    try:
+        result = await _handle_admin_event(body)
+    except Exception as e:
+        logger.exception("admin-app webhook handler failed")
+        await db.admin_bridge_events.insert_one({
+            "id": str(uuid.uuid4()),
+            "direction": "inbound",
+            "event_id": body.id,
+            "event": body.event,
+            "status": "errored",
+            "reason": str(e)[:200],
+            "data": body.data,
+            "created_at": now_iso(),
+        })
+        raise HTTPException(status_code=500, detail="Handler failed")
+
+    await db.admin_bridge_events.insert_one({
+        "id": str(uuid.uuid4()),
+        "direction": "inbound",
+        "event_id": body.id,
+        "event": body.event,
+        "status": "accepted",
+        "result": result,
+        "data": body.data,
+        "created_at": now_iso(),
+    })
+    return {"ok": True, "received": True, "result": result}
+
+
+@api.get("/admin/bridge/events")
+async def list_bridge_events(limit: int = 50, direction: Optional[str] = None, current=Depends(get_current_user)):
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Admin/manager only")
+    q: Dict[str, Any] = {}
+    if direction in ("inbound", "outbound"):
+        q["direction"] = direction
+    inbound = await db.admin_bridge_events.find(q or {}, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 200))
+    outbound = await db.admin_bridge_outbound.find({}, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 200))
+    counts = {
+        "outbound_pending": await db.admin_bridge_outbound.count_documents({"status": {"$in": ["pending", "retrying"]}}),
+        "outbound_sent": await db.admin_bridge_outbound.count_documents({"status": "sent"}),
+        "outbound_failed": await db.admin_bridge_outbound.count_documents({"status": "failed"}),
+        "inbound_total": await db.admin_bridge_events.count_documents({"direction": "inbound"}),
+    }
+    return {
+        "inbound": inbound,
+        "outbound": outbound,
+        "counts": counts,
+        "config": {
+            "admin_api_url": os.environ.get("TRATA_ADMIN_API_URL", ""),
+            "admin_webhook_url": os.environ.get("TRATA_ADMIN_WEBHOOK_URL", ""),
+            "secret_configured": bool(os.environ.get("ADMIN_CRM_WEBHOOK_SECRET")),
+            "admin_api_key_configured": bool(os.environ.get("TRATA_ADMIN_API_KEY")),
+        },
+    }
+
+
+class AdminBridgeTestSend(BaseModel):
+    event: str
+    data: Dict[str, Any]
+
+
+@api.post("/admin/bridge/test-send")
+async def bridge_test_send(body: AdminBridgeTestSend, current=Depends(get_current_user)):
+    """Admin/manager-only: queue an outbound event RIGHT NOW so we can confirm the upstream URL works."""
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Admin/manager only")
+    if body.event not in ab.OUTBOUND_EVENTS:
+        raise HTTPException(status_code=400, detail=f"Unsupported outbound event: {body.event}. Allowed: {sorted(ab.OUTBOUND_EVENTS)}")
+    record = await ab.queue_outbound(db, body.event, body.data)
+    return {"ok": True, "queued": record}
+
+
+@api.post("/admin/bridge/retry/{record_id}")
+async def bridge_retry(record_id: str, current=Depends(get_current_user)):
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Admin/manager only")
+    rec = await db.admin_bridge_outbound.find_one({"id": record_id}, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Outbound event not found")
+    if rec.get("status") == "sent":
+        return {"ok": True, "already_sent": True}
+    # Reset attempts so retry is not blocked
+    await db.admin_bridge_outbound.update_one(
+        {"id": record_id},
+        {"$set": {"status": "retrying", "next_attempt_at": now_iso(), "attempts": 0, "last_error": None}},
+    )
+    ok = await ab._send_one(db, record_id)
+    fresh = await db.admin_bridge_outbound.find_one({"id": record_id}, {"_id": 0})
+    return {"ok": ok, "record": fresh}
+
+
 # ---------- Startup ----------
 @app.on_event("startup")
 async def startup():
@@ -2774,6 +3124,8 @@ async def startup():
         )
     # Migrate legacy "manager" role → "regional_manager" (idempotent)
     await db.crm_users.update_many({"role": "manager"}, {"$set": {"role": "regional_manager"}})
+    # Start outbound bridge dispatcher
+    ab.start_dispatcher(db)
     # Wire baseline hierarchy: Rohan (sales_rep) reports to Priya if not set yet
     priya = await db.crm_users.find_one({"phone": "9000000001"}, {"id": 1, "_id": 0})
     rohan = await db.crm_users.find_one({"phone": "9000000002"}, {"id": 1, "reports_to": 1, "_id": 0})
