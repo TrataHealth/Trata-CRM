@@ -35,6 +35,56 @@ def _admin_webhook_url() -> str:
 def _admin_api_key() -> str:
     return os.environ.get("TRATA_ADMIN_API_KEY", "")
 
+
+def _admin_api_url() -> str:
+    return os.environ.get("TRATA_ADMIN_API_URL", "").rstrip("/")
+
+
+async def admin_api_get(path: str) -> Optional[Dict[str, Any]]:
+    """Authenticated GET to the Trata Admin App. Returns parsed JSON or None on failure."""
+    base = _admin_api_url()
+    key = _admin_api_key()
+    if not base or not key:
+        return None
+    url = base + (path if path.startswith("/") else "/" + path)
+    headers = {"Authorization": f"Bearer {key}"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=headers)
+        if r.status_code == 200:
+            return r.json()
+        logger.warning(f"admin_api_get {path} -> {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        logger.error(f"admin_api_get {path} failed: {e}")
+    return None
+
+
+async def find_admin_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
+    """Look up an admin-app user by phone. Strips +91/spaces on both sides; if multiple users share
+    the same 10-digit phone (e.g. patient + provider), prefer the provider role."""
+    payload = await admin_api_get("/api/admin/users")
+    if not payload:
+        return None
+
+    def norm(p: Optional[str]) -> str:
+        s = "".join(ch for ch in (p or "") if ch.isdigit())
+        if len(s) == 12 and s.startswith("91"):
+            s = s[2:]
+        return s
+
+    target = norm(phone)
+    matches = [u for u in payload.get("users", []) if norm(u.get("phone")) == target]
+    if not matches:
+        return None
+    # Prefer provider/agent roles over customer/patient/null
+    priority = {"ambulance_provider": 0, "hospital": 1, "paramedic": 1, "doctor": 1, "lab": 1, "pharmacy": 1, "agent": 2, "customer": 8, "patient": 9, None: 10}
+    matches.sort(key=lambda u: priority.get(u.get("role"), 5))
+    return matches[0]
+
+
+async def fetch_kyc(user_id: str) -> Optional[Dict[str, Any]]:
+    return await admin_api_get(f"/api/admin/users/{user_id}/kyc")
+
 INBOUND_EVENTS = {
     "provider.signed_up",
     "provider.first_use",

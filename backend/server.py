@@ -1018,6 +1018,8 @@ async def review_kyc(contact_id: str, data: KycReviewBody, current=Depends(get_c
     await ab.queue_outbound(db, "crm.kyc.reviewed", {
         "phone": c.get("phone"),
         "contact_name": c["name"],
+        "kyc_id": c.get("kyc_id"),                  # cached from /api/contacts/{id}/kyc if set
+        "upstream_user_id": c.get("upstream_user_id"),
         "decision": data.decision,
         "reviewer_phone": current.get("phone"),
         "reviewer_name": current.get("name"),
@@ -1026,6 +1028,69 @@ async def review_kyc(contact_id: str, data: KycReviewBody, current=Depends(get_c
     })
     c2 = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
     return {"success": True, "contact": c2}
+
+
+@api.get("/contacts/{contact_id}/kyc")
+async def get_contact_kyc(contact_id: str, refresh: bool = False, current=Depends(get_current_user)):
+    """Phase 6: Mirror the lead's KYC checklist + docs from the Trata Admin App.
+
+    Lookup chain: cached upstream_user_id → live /api/admin/users?role=ambulance_provider lookup by phone.
+    Caches kyc_id and upstream_user_id on the contact for fast subsequent emissions of crm.kyc.reviewed.
+    """
+    if not is_internal(current):
+        raise HTTPException(status_code=403, detail="Internal users only")
+    c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if is_sales_rep(current) and c.get("assigned_agent_id") != current["id"]:
+        raise HTTPException(status_code=403, detail="Not your lead")
+
+    upstream_user_id = c.get("upstream_user_id")
+    if not upstream_user_id or refresh:
+        admin_user = await ab.find_admin_user_by_phone(c.get("phone") or "")
+        if not admin_user:
+            return {
+                "available": False,
+                "reason": "no_admin_user_match",
+                "message": "This lead has no matching record in the Trata Admin App yet.",
+            }
+        upstream_user_id = admin_user["id"]
+
+    kyc = await ab.fetch_kyc(upstream_user_id)
+    if not kyc:
+        return {
+            "available": False,
+            "reason": "kyc_fetch_failed",
+            "upstream_user_id": upstream_user_id,
+            "message": "Could not fetch KYC payload from Trata Admin App.",
+        }
+
+    # Cache identifiers + last fetched payload on the contact
+    cache_update = {
+        "upstream_user_id": upstream_user_id,
+        "kyc_id": kyc.get("kyc_id"),
+        "kyc_upstream_status": kyc.get("status"),
+        "kyc_synced_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.contacts.update_one({"id": contact_id}, {"$set": cache_update})
+
+    # Resolve relative doc URLs to absolute upstream URLs so the CRM UI can hyperlink them
+    admin_base = os.environ.get("TRATA_ADMIN_API_URL", "").rstrip("/")
+    if admin_base:
+        for d in kyc.get("docs") or []:
+            u = d.get("url") or ""
+            if u.startswith("/"):
+                d["url"] = admin_base + u
+
+    return {
+        "available": True,
+        "kyc": kyc,
+        "synced_at": cache_update["kyc_synced_at"],
+        "local_decision": c.get("kyc_status"),
+        "local_decision_at": c.get("kyc_reviewed_at"),
+        "local_decision_notes": c.get("kyc_review_notes"),
+    }
 
 
 # ---------- Team ----------

@@ -9,6 +9,7 @@ import { Avatar } from "./Contacts";
 import {
   PIPELINE_STAGES, ACTIVITY_CATEGORIES, statusColor, typeLabel, fmtCurrency, relativeTime, stageLabel,
 } from "../lib/constants";
+import KycMirrorCard from "../components/KycMirrorCard";
 
 export default function ContactDetail() {
   const { id } = useParams();
@@ -134,6 +135,9 @@ export default function ContactDetail() {
           )}
         </div>
       </div>
+
+      {/* KYC Mirror (Phase 6) — only for ambulance providers */}
+      {c.type === "ambulance_provider" && <KycMirrorCard contactId={c.id} />}
 
       {/* Tabs */}
       <div>

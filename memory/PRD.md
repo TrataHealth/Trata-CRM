@@ -52,6 +52,14 @@ Removed Hospital/Clinic/Pathology provider portals. Live Fleet Map (Leaflet) add
 - **Targets** — `GET /api/agent/targets` returns month-to-date actuals vs targets.
 - Tested: 23/23 backend pytest + 17/17 frontend playwright (after fixing /agent route guard).
 
+### Iter 13 (2026-06-12) — Phase 6 KYC Mirror (read-side complete)
+- Admin team shipped 3 endpoints we needed: `GET /api/admin/users` (✅), `GET /api/admin/users/{id}/kyc` (✅, full payload as spec'd, includes kyc_id), and `kyc.note_added` now accepts `phone` fallback (✅). User-detail GET still 500s but isn't needed since KYC payload returns the upstream `user_id`.
+- New backend helpers in `admin_bridge.py`: `admin_api_get`, `find_admin_user_by_phone` (with role priority — provider > customer when phones collide), `fetch_kyc`.
+- New endpoint `GET /api/contacts/{id}/kyc?refresh=true|false` — proxies to admin app, caches `upstream_user_id` + `kyc_id` + `kyc_upstream_status` + `kyc_synced_at` on the contact; resolves relative doc URLs to absolute upstream URLs.
+- `crm.kyc.reviewed` outbound now carries the cached `kyc_id` and `upstream_user_id`, plus `phone` as a fallback — admin app deduplicates on whichever they prefer.
+- New frontend `KycMirrorCard.jsx` mounted on `/contacts/:id` for `ambulance_provider` contacts. Shows: status pill, kyc_id, last reviewed by, progress bar + checklist with required flags, uploaded docs (clickable "View document" links to upstream), review history timeline, and 3 decision buttons (Approve / Needs more info / Reject) that POST to `/api/contacts/{id}/kyc-review`.
+- Verified end-to-end with Abhishek's record on the live admin app — 1 approved doc, 7-item checklist, kyc_id `74b7c2bf...`, outbound `crm.kyc.reviewed` payload now carries the real kyc_id.
+
 ### Iter 12 (2026-06-12) — Trata Admin App ⇄ CRM two-way bridge
 - New module `/app/backend/admin_bridge.py`: HMAC sign+verify, lazy-env, async outbound queue with exponential backoff (max 6 attempts, capped at 5min), idempotency dedupe by `event.id`, background dispatcher loop polling every 30s.
 - New backend endpoints:
