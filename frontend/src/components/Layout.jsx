@@ -96,7 +96,7 @@ export default function Layout({ children }) {
         />
       )}
       <aside
-        className={`fixed lg:static inset-y-0 left-0 z-50 w-64 lg:w-60 shrink-0 bg-[#F8F9FA] border-r border-[#DFE1E6] flex flex-col transform transition-transform lg:transform-none ${
+        className={`fixed lg:sticky lg:top-0 inset-y-0 left-0 z-50 w-64 lg:w-60 shrink-0 h-screen bg-[#F8F9FA] border-r border-[#DFE1E6] flex flex-col transform transition-transform lg:transform-none ${
           navOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         }`}
         data-testid="sidebar"
@@ -118,7 +118,7 @@ export default function Layout({ children }) {
           </button>
         </div>
 
-        <nav className="flex-1 p-3 space-y-1">
+        <nav className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1">
           {NAV.map((n) => (
             <NavLink
               key={n.to}
@@ -140,7 +140,7 @@ export default function Layout({ children }) {
           ))}
         </nav>
 
-        <div className="border-t border-[#DFE1E6] p-3">
+        <div className="border-t border-[#DFE1E6] p-3 shrink-0 bg-[#F8F9FA]">
           <div className="flex items-center gap-3 mb-3">
             <div className="h-9 w-9 rounded-full bg-[#091E42] text-white flex items-center justify-center font-heading font-bold text-sm">
               {(user?.name || "MA").split(" ").map((p) => p[0]).slice(0, 2).join("")}
