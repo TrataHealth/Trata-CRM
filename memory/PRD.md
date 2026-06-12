@@ -15,7 +15,14 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 18 (2026-06-12) — AI KYC Pre-screening (P0 — current)
+### Iter 19 (2026-06-12) — AI KYC Field Extraction (delta on iter 18)
+- `_ai_screen_doc` now also requests an `extracted` JSON sub-object from Gemini with a 13-field whitelist (document_number, name, father_name, dob, pan_number, gst_number, aadhaar_last4, vehicle_reg, vehicle_make_model, issue_date, expiry_date, address, issuing_authority).
+- Per-doc fields persist on `ai_doc_prescreens[doc_id].extracted`. Approved-doc fields aggregate up to `contact.ai_extracted_fields = {field_name: {value, source_doc_id, source_kind}}` (first-non-empty wins per run; later runs overwrite).
+- Fixed `_parse_ai_json` to correctly strip ```json … ``` markdown fences — previous iteration was silently swallowing perfectly-valid Gemini JSON and falling back to 'unclear'.
+- Frontend: new purple aggregated panel `kyc-extracted-fields` between header and Checklist/Docs (hidden when empty); per-doc AI pill now includes an Extracted: line with key:value pairs.
+- Tested: 6/6 pytest pass + 100% Playwright. New regression test `test_parser_handles_fenced_json` guards the fence bug.
+
+### Iter 18 (2026-06-12) — AI KYC Pre-screening (P0)
 - New endpoint `POST /api/contacts/{id}/kyc-ai-prescreen` (internal-only; sales reps gated to their own leads).
 - Downloads each uploaded KYC doc from Trata Admin (with Bearer auth) into `/tmp`, then sends to **Gemini 2.5 Flash** via `emergentintegrations.LlmChat` with `FileContentWithMimeType` attachment.
 - Structured-JSON prompt returns `{recommendation: approve|reject|unclear, reason, confidence}` per doc.
