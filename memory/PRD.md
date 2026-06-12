@@ -52,6 +52,13 @@ Removed Hospital/Clinic/Pathology provider portals. Live Fleet Map (Leaflet) add
 - **Targets** — `GET /api/agent/targets` returns month-to-date actuals vs targets.
 - Tested: 23/23 backend pytest + 17/17 frontend playwright (after fixing /agent route guard).
 
+### Iter 17 (2026-06-12) — Production data only (demo wipe)
+- Hard-deleted all seeded contacts (182), activities (522), tasks (28), payouts (2), fleet (0), notifications (30), bridge audit entries (16+9), test-send webhook rows (12), and the placeholder `9000020003` provider_owner login.
+- Hard-deleted all test/dev leads created during my own iteration testing (31 with names like `TEST_*`, `SLA Demo`, `Mumbai Speed`, `connectivity probe`, `Test Ambulance Co`).
+- **Auto-seed at startup is now DISABLED**. The CRM starts with whatever is in MongoDB and never re-creates demo data on restart. Background loops (outbound dispatcher, /admin/users sync, escalation) still start as before.
+- **Final state**: 1 real provider (Abhishek Ambulance, from the live admin app), 4 staff (Master Admin + 3 sales/ops). Every future contact comes only from real signups: `/api/webhooks/admin-app`, `/api/webhooks/provider-app`, or the 5-min `/api/admin/users` sync.
+- To re-enable demo seeding for local dev: `POST /api/admin/seed`.
+
 ### Iter 16 (2026-06-12) — Periodic admin-user sync + auto-escalation
 - New `admin_bridge.sync_users_from_admin()` — pulls `/api/admin/users` from Trata Admin App, upserts `ambulance_provider` users into CRM contacts (matches by normalized phone). NEVER overwrites pipeline_stage / assigned_agent_id / KYC state — purely a metadata refresh + `upstream_user_id` cache.
 - New `user_sync_loop` background task — runs every 5 minutes, started on app boot.

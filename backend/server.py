@@ -3335,12 +3335,23 @@ async def bridge_retry(record_id: str, current=Depends(get_current_user)):
 # ---------- Startup ----------
 @app.on_event("startup")
 async def startup():
-    # Auto-seed on first boot ONLY when upstream is not configured
-    count = await db.contacts.count_documents({})
-    if count == 0 and not us.upstream_enabled():
-        logger.info("No contacts found, seeding demo data...")
-        result = await _do_seed(force=True)
-        logger.info(f"Seeded: {result}")
+    # NOTE: Demo seeding disabled (iter 17). The CRM now operates entirely on real data sourced from
+    # the Trata Admin App via /api/webhooks/admin-app + the 5-min /api/admin/users sync.
+    # To re-seed for local dev, call POST /api/admin/seed manually.
+    # Backfill agent territories for Phase-5 webhook bridge (idempotent)
+    territory_backfill = [
+        ("9000000001", ["Mumbai", "Bengaluru", "Pune"]),
+        ("9000000002", ["Delhi", "Gurugram", "Noida"]),
+    ]
+    for phone, terr in territory_backfill:
+        await db.crm_users.update_one(
+            {"phone": phone, "$or": [{"territories": {"$exists": False}}, {"territories": {"$size": 0}}]},
+            {"$set": {"territories": terr}},
+        )
+    # Migrate legacy "manager" role → "regional_manager" (idempotent)
+    await db.crm_users.update_many({"role": "manager"}, {"$set": {"role": "regional_manager"}})
+    # Start background loops: outbound dispatcher, periodic /admin/users sync, escalation
+    ab.start_dispatcher(db)
     # Backfill agent territories for Phase-5 webhook bridge (idempotent)
     territory_backfill = [
         ("9000000001", ["Mumbai", "Bengaluru", "Pune"]),
