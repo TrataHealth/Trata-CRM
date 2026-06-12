@@ -182,7 +182,7 @@ export default function Dashboard() {
               >
                 <span className="h-2 w-2 rounded-full" style={{ background: statusColor(a.status) }} />
                 <span className="text-xs uppercase font-semibold tracking-wider text-[#5E6C84] w-32 shrink-0">
-                  {(ACTIVITY_CATEGORIES.find((c) => c.value === a.category)?.label || a.category).replace(" ", "·")}
+                  {(ACTIVITY_CATEGORIES.find((c) => c.value === a.category)?.label || a.category || a.type || "—").replace(" ", "·")}
                 </span>
                 <span className="text-sm text-[#091E42] flex-1 truncate">{a.title}</span>
                 <span className="text-xs text-[#5E6C84] hidden md:inline truncate max-w-[140px]">{a.contact_name}</span>

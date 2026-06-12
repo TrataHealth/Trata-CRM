@@ -1493,12 +1493,17 @@ async def apply_extracted_fields(contact_id: str, payload: Dict[str, Any] = Body
     await db.activities.insert_one({
         "id": str(uuid.uuid4()),
         "type": "note",
+        "category": "kyc",
+        "subtype": "ai_fields_applied",
+        "title": f"Applied {len(applied)} AI-extracted field(s) to contact",
         "outcome": "ai_fields_applied",
         "contact_id": contact_id,
+        "contact_name": c.get("name"),
         "agent_id": current.get("id"),
         "agent_name": current.get("name"),
         "summary": f"Applied {len(applied)} AI-extracted field(s) to contact: " + ", ".join(a["ai_field"] for a in applied),
         "payload": {"applied": applied, "skipped": skipped},
+        "status": "completed",
         "created_at": now_iso(),
     })
 
