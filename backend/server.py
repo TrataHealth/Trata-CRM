@@ -921,7 +921,11 @@ async def create_note(data: NoteCreate, current=Depends(get_current_user)):
 # ---------- Team ----------
 @api.get("/team")
 async def list_team(current=Depends(require_internal)):
-    items = await db.crm_users.find({}, {"_id": 0, "password": 0}).sort("created_at", 1).to_list(200)
+    # Team & Roles is for internal Trata staff only — exclude provider owners (they're Trata users, not staff)
+    items = await db.crm_users.find(
+        {"role": {"$in": ["admin", "manager", "sales_rep", "ops_rep"]}},
+        {"_id": 0, "password": 0},
+    ).sort("created_at", 1).to_list(200)
     return {"items": items}
 
 

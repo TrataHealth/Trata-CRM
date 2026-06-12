@@ -52,11 +52,11 @@ export default function Contacts() {
     <div className="p-4 sm:p-6 lg:p-8 space-y-5 lg:space-y-6" data-testid="contacts-page">
       <div className="flex items-end justify-between flex-wrap gap-4">
         <div>
-          <div className="overline">Contact Management</div>
+          <div className="overline">User Directory</div>
           <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
-            Contacts <span className="text-[#5E6C84] font-medium">/ {total.toLocaleString()}</span>
+            Trata Users <span className="text-[#5E6C84] font-medium">/ {total.toLocaleString()}</span>
           </h1>
-          <p className="text-sm text-[#5E6C84] mt-1">All users across patients, providers, and operational partners.</p>
+          <p className="text-sm text-[#5E6C84] mt-1">All users on the Trata network — providers, prospects, and partners.</p>
         </div>
         <button
           data-testid="contacts-export-btn"

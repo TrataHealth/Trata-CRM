@@ -11,7 +11,7 @@ import { relativeTime } from "../lib/constants";
 
 const ADMIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
-  { to: "/contacts", label: "Contacts", icon: Users },
+  { to: "/contacts", label: "Trata Users", icon: Users },
   { to: "/pipeline", label: "Pipeline", icon: GitBranch },
   { to: "/activities", label: "Activities", icon: Activity },
   { to: "/tasks", label: "Tasks", icon: ListChecks },
