@@ -632,8 +632,31 @@ async def forgot_reset(data: ForgotResetBody):
 
 
 # ---------- Dashboard ----------
+RANGE_TO_DAYS = {"7d": 7, "30d": 30, "3m": 90, "6m": 180, "12m": 365, "all": None}
+
+
+def _range_window(range_key: str):
+    """Return (since_iso, label, days) for a given range pill.
+    `days=None` ⇒ no lower-bound (all-time)."""
+    days = RANGE_TO_DAYS.get(range_key, 7)
+    if days is None:
+        return None, "All time", None
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    label = {"7d": "Last 7 days", "30d": "Last 30 days", "3m": "Last 3 months",
+             "6m": "Last 6 months", "12m": "Last 12 months"}.get(range_key, f"Last {days} days")
+    return since, label, days
+
+
 @api.get("/dashboard/stats")
-async def dashboard_stats(current=Depends(require_internal)):
+async def dashboard_stats(range_key: str = Query("7d", alias="range"), current=Depends(require_internal)):
+    since_iso, range_label, days_back = _range_window(range_key)
+
+    # Helper to add the time window to a Mongo query
+    def _scoped(q: Dict[str, Any]) -> Dict[str, Any]:
+        if since_iso:
+            return {**q, "created_at": {"$gte": since_iso}}
+        return q
+
     total_contacts = await db.contacts.count_documents({})
     by_type = {}
     for t in ["patient", "doctor", "hospital", "paramedic", "ambulance_provider", "pathologist"]:
@@ -642,51 +665,57 @@ async def dashboard_stats(current=Depends(require_internal)):
     verified = await db.contacts.count_documents({"is_verified": True})
     pending = await db.contacts.count_documents({"is_verified": False})
 
-    total_activities = await db.activities.count_documents({})
-    active_cases = await db.activities.count_documents({
+    active_cases = await db.activities.count_documents(_scoped({
         "category": "emergency_case",
         "status": {"$nin": ["COMPLETED", "CANCELLED", "CLOSED"]},
-    })
-    completed_cases = await db.activities.count_documents({"category": "emergency_case", "status": "COMPLETED"})
+    }))
+    completed_cases = await db.activities.count_documents(_scoped({"category": "emergency_case", "status": "COMPLETED"}))
 
     appointments_today = await db.activities.count_documents({
         "category": "appointment",
         "created_at": {"$gte": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()},
     })
 
-    # Pipeline stages
+    # Pipeline stages (always all-time snapshot — pipeline is current state, not historical)
     pipeline = {}
     for stage in ["lead", "contacted", "kyc_submitted", "verified", "active", "churned"]:
         pipeline[stage] = await db.contacts.count_documents({"pipeline_stage": stage})
 
-    # Revenue (sum of activities with amount)
-    cursor = db.activities.find({"amount": {"$gt": 0}}, {"amount": 1, "_id": 0})
+    # Revenue scoped to the time window (sum of activities with amount in window)
+    rev_q = _scoped({"amount": {"$gt": 0}})
+    cursor = db.activities.find(rev_q, {"amount": 1, "_id": 0})
     total_revenue = 0
     async for d in cursor:
         total_revenue += d.get("amount", 0) or 0
 
+    # Tasks are current-state, not time-bounded
     tasks_open = await db.tasks.count_documents({"status": {"$ne": "done"}})
     tasks_overdue = await db.tasks.count_documents({
         "status": {"$ne": "done"},
         "due_date": {"$lt": now_iso()},
     })
 
-    # Growth: last 14 days
+    # Growth — adaptive bucket size so the chart never has more than ~14 points
     growth = []
-    for i in range(13, -1, -1):
-        day = (datetime.now(timezone.utc) - timedelta(days=i)).date()
-        start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc).isoformat()
-        end = (datetime(day.year, day.month, day.day, tzinfo=timezone.utc) + timedelta(days=1)).isoformat()
+    bucket_count = 14 if (days_back is None or days_back >= 14) else max(1, days_back or 14)
+    total_days = days_back if days_back is not None else 365
+    bucket_days = max(1, total_days // bucket_count)
+    for i in range(bucket_count - 1, -1, -1):
+        end_dt = datetime.now(timezone.utc) - timedelta(days=i * bucket_days)
+        start_dt = end_dt - timedelta(days=bucket_days)
+        start = start_dt.isoformat()
+        end = end_dt.isoformat()
         c = await db.contacts.count_documents({"created_at": {"$gte": start, "$lt": end}})
         a = await db.activities.count_documents({"created_at": {"$gte": start, "$lt": end}})
-        growth.append({"date": day.isoformat(), "new_contacts": c, "activities": a})
+        growth.append({"date": start_dt.date().isoformat(), "new_contacts": c, "activities": a})
 
-    # Activity by category (donut)
+    # Activity by category (donut) — scoped to time window
     activity_breakdown = {}
     for cat in ["emergency_case", "appointment", "ambulance_booking", "lab_booking", "pathology_booking", "kyc"]:
-        activity_breakdown[cat] = await db.activities.count_documents({"category": cat})
+        activity_breakdown[cat] = await db.activities.count_documents(_scoped({"category": cat}))
 
     return {
+        "range": {"key": range_key, "label": range_label, "days": days_back, "since": since_iso},
         "users": {
             "total": total_contacts,
             "verified": verified,
@@ -694,7 +723,7 @@ async def dashboard_stats(current=Depends(require_internal)):
             "by_type": by_type,
         },
         "cases": {
-            "total": await db.activities.count_documents({"category": "emergency_case"}),
+            "total": await db.activities.count_documents(_scoped({"category": "emergency_case"})),
             "active": active_cases,
             "completed": completed_cases,
             "appointments_today": appointments_today,
@@ -705,6 +734,64 @@ async def dashboard_stats(current=Depends(require_internal)):
         "growth_14d": growth,
         "activity_breakdown": activity_breakdown,
     }
+
+
+
+@api.post("/dashboard/ai-insights")
+async def dashboard_ai_insights(payload: Dict[str, Any] = Body(default={}), current=Depends(require_internal)):
+    """Generate executive AI insights for the dashboard's currently-selected time range.
+    Uses the same time-windowed stats the dashboard already renders, then asks Claude
+    to surface trends, anomalies and the single highest-leverage action for the team."""
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=503, detail="AI not configured (EMERGENT_LLM_KEY missing)")
+    range_key = (payload.get("range") or "7d").lower()
+    if range_key not in RANGE_TO_DAYS:
+        range_key = "7d"
+    # Re-use the same stats endpoint to keep the AI's source-of-truth identical to the UI.
+    stats = await dashboard_stats(range_key=range_key, current=current)  # type: ignore[arg-type]
+    # Pull top-N most-recent activities for narrative colour
+    recent = await db.activities.find({}, {"_id": 0, "title": 1, "category": 1, "subtype": 1, "status": 1, "contact_name": 1, "amount": 1, "created_at": 1}).sort("created_at", -1).limit(25).to_list(25)
+
+    # Build a compact JSON context the LLM can reason about
+    context_obj = {
+        "range_label": stats["range"]["label"],
+        "users": stats["users"],
+        "cases": stats["cases"],
+        "pipeline": stats["pipeline"],
+        "revenue": stats["revenue"],
+        "tasks": stats["tasks"],
+        "activity_breakdown": stats["activity_breakdown"],
+        "growth": stats["growth_14d"],
+        "recent_activity_titles": [a.get("title") or f"{a.get('category')}/{a.get('subtype')}" for a in recent[:15]],
+    }
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"dash-insights-{current['id']}-{range_key}-{datetime.now(timezone.utc).date()}",
+            system_message=(
+                "You are an executive analyst for TrataHealth's healthcare-provider CRM. "
+                "Given a JSON snapshot of activity for a chosen time range, produce a SHORT, "
+                "high-signal briefing for the master admin. Be specific to the numbers you see — "
+                "never invent metrics. If the dataset is small, say so honestly and recommend what "
+                "to instrument next. Always end with one concrete next action."
+            ),
+        ).with_model("anthropic", "claude-sonnet-4-6")
+        msg = UserMessage(text=(
+            f"Time range: {context_obj['range_label']}\n\n"
+            f"Data (JSON):\n{json.dumps(context_obj, default=str)}\n\n"
+            "Write the briefing in markdown using EXACTLY these four sections (use these literal headings):\n"
+            "## Headline\nOne sentence — the single most important thing happening right now.\n"
+            "## What's working\n2-3 bullets, each citing a number from the data.\n"
+            "## What's at risk\n2-3 bullets, each citing a number from the data.\n"
+            "## Do next\nOne concrete action the team should take in the next 48 hours."
+        ))
+        text = await chat.send_message(msg)
+        return {"success": True, "range": stats["range"], "markdown": str(text), "context": context_obj}
+    except Exception as e:
+        logger.error(f"Dashboard AI insights error: {e}")
+        raise HTTPException(status_code=502, detail=f"AI generation failed: {str(e)[:200]}")
+
 
 
 @api.get("/dashboard/activity-feed")

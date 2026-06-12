@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Users, Activity, Briefcase, AlertTriangle, TrendingUp,
   Stethoscope, Building2, Ambulance, FlaskConical, Cross, User as UserIcon,
+  Sparkles, Loader2, X,
 } from "lucide-react";
 import { fmtCurrency, relativeTime, ACTIVITY_CATEGORIES, statusColor, typeLabel } from "../lib/constants";
 import WebhookBridgePanel from "../components/WebhookBridgePanel";
@@ -18,21 +19,52 @@ const TYPE_ICONS = {
   paramedic: Cross, ambulance_provider: Ambulance, pathologist: FlaskConical,
 };
 
+const RANGE_OPTIONS = [
+  { value: "7d", label: "7D" },
+  { value: "30d", label: "30D" },
+  { value: "3m", label: "3M" },
+  { value: "6m", label: "6M" },
+  { value: "12m", label: "12M" },
+  { value: "all", label: "All" },
+];
+
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [feed, setFeed] = useState([]);
+  const [range, setRange] = useState("7d");
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [ai, setAi] = useState({ open: false, loading: false, markdown: "", error: "" });
   const navigate = useNavigate();
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const [s, f] = await Promise.all([
-        api.get("/dashboard/stats"),
-        api.get("/dashboard/activity-feed", { params: { limit: 15 } }),
-      ]);
-      setStats(s.data);
-      setFeed(f.data.items);
+      setStatsLoading(true);
+      try {
+        const [s, f] = await Promise.all([
+          api.get("/dashboard/stats", { params: { range } }),
+          api.get("/dashboard/activity-feed", { params: { limit: 15 } }),
+        ]);
+        if (!cancelled) {
+          setStats(s.data);
+          setFeed(f.data.items);
+        }
+      } finally {
+        if (!cancelled) setStatsLoading(false);
+      }
     })();
-  }, []);
+    return () => { cancelled = true; };
+  }, [range]);
+
+  const generateInsights = async () => {
+    setAi({ open: true, loading: true, markdown: "", error: "" });
+    try {
+      const { data } = await api.post("/dashboard/ai-insights", { range });
+      setAi({ open: true, loading: false, markdown: data.markdown || "", error: "" });
+    } catch (e) {
+      setAi({ open: true, loading: false, markdown: "", error: e?.response?.data?.detail || "Could not generate insights" });
+    }
+  };
 
   if (!stats) return <div className="p-8 text-sm text-[#5E6C84]" data-testid="dashboard-loading">Loading…</div>;
 
@@ -46,13 +78,69 @@ export default function Dashboard() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 lg:space-y-8" data-testid="dashboard-page">
-      <div className="flex items-end justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="overline">Operations Overview</div>
           <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">Master Dashboard</h1>
-          <p className="text-sm text-[#5E6C84] mt-1">Realtime view of everything happening across the TrataHealth platform.</p>
+          <p className="text-sm text-[#5E6C84] mt-1">{stats.range?.label || "Realtime view of everything happening across the TrataHealth platform."}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Range filter pill */}
+          <div className="inline-flex items-center bg-white border border-[#DFE1E6] rounded-full p-0.5 shadow-sm" data-testid="dashboard-range-filter">
+            {RANGE_OPTIONS.map((opt) => {
+              const selected = range === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  onClick={() => setRange(opt.value)}
+                  disabled={statsLoading}
+                  data-testid={`dashboard-range-${opt.value}`}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-colors ${
+                    selected ? "bg-[#0052CC] text-white" : "text-[#42526E] hover:text-[#091E42] hover:bg-[#F4F5F7]"
+                  } disabled:opacity-60`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+          {/* AI insights button */}
+          <button
+            onClick={generateInsights}
+            disabled={ai.loading}
+            data-testid="dashboard-ai-insights-btn"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-full text-white bg-gradient-to-r from-[#6554C0] to-[#403294] hover:opacity-95 disabled:opacity-60 shadow-sm"
+          >
+            {ai.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            {ai.loading ? "Thinking…" : "Generate AI insight"}
+          </button>
         </div>
       </div>
+
+      {/* AI insights drawer */}
+      {ai.open && (
+        <div className="bg-white border border-[#6554C0]/30 rounded-md shadow-sm overflow-hidden" data-testid="dashboard-ai-insights-panel">
+          <div className="px-5 py-3 border-b border-[#DFE1E6] flex items-center justify-between bg-[#EAE6FF]">
+            <div className="flex items-center gap-2 text-[#403294] font-heading font-bold text-sm">
+              <Sparkles className="h-4 w-4" /> AI insight — {stats.range?.label || range}
+            </div>
+            <button onClick={() => setAi({ open: false, loading: false, markdown: "", error: "" })} className="text-[#5E6C84] hover:text-[#091E42]" data-testid="dashboard-ai-insights-close" aria-label="Close insight panel">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="px-5 py-4 text-sm text-[#091E42] leading-relaxed">
+            {ai.loading && (
+              <div className="flex items-center gap-2 text-[#5E6C84]" data-testid="dashboard-ai-insights-loading">
+                <Loader2 className="h-4 w-4 animate-spin text-[#6554C0]" /> Generating insight from the {stats.range?.label || range} window…
+              </div>
+            )}
+            {ai.error && <div className="text-[#BF2600]" data-testid="dashboard-ai-insights-error">{ai.error}</div>}
+            {!ai.loading && !ai.error && ai.markdown && (
+              <div data-testid="dashboard-ai-insights-content">{renderInsightsMarkdown(ai.markdown)}</div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* KPI strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4" data-testid="kpi-strip">
@@ -214,3 +302,50 @@ function Kpi({ icon: Icon, label, value, sub, accent = "#0052CC" }) {
     </div>
   );
 }
+
+// Tiny purpose-built markdown renderer for the AI insights panel.
+// Handles only what /api/dashboard/ai-insights returns: `## heading`, `- bullet`, **bold**, paragraphs.
+function renderInsightsMarkdown(md) {
+  const lines = (md || "").split(/\r?\n/);
+  const out = [];
+  let listBuf = [];
+  const flushList = () => {
+    if (listBuf.length) {
+      out.push(
+        <ul key={`ul-${out.length}`} className="list-disc pl-5 space-y-1 my-2 text-[#42526E]">
+          {listBuf.map((item, i) => <li key={i}>{renderInline(item)}</li>)}
+        </ul>
+      );
+      listBuf = [];
+    }
+  };
+  lines.forEach((raw, idx) => {
+    const line = raw.trim();
+    if (!line) { flushList(); return; }
+    if (line.startsWith("## ")) {
+      flushList();
+      out.push(<h3 key={`h-${idx}`} className="font-heading font-bold text-[#091E42] mt-3 first:mt-0 text-sm uppercase tracking-wide">{line.slice(3)}</h3>);
+      return;
+    }
+    if (line.startsWith("- ") || line.startsWith("* ")) {
+      listBuf.push(line.slice(2));
+      return;
+    }
+    flushList();
+    out.push(<p key={`p-${idx}`} className="text-[#42526E] my-1.5">{renderInline(line)}</p>);
+  });
+  flushList();
+  return <>{out}</>;
+}
+
+function renderInline(text) {
+  // Bold: **word** → <strong>word</strong>
+  const parts = (text || "").split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((p, i) => {
+    if (p.startsWith("**") && p.endsWith("**")) {
+      return <strong key={i} className="text-[#091E42] font-semibold">{p.slice(2, -2)}</strong>;
+    }
+    return <React.Fragment key={i}>{p}</React.Fragment>;
+  });
+}
+

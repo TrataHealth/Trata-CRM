@@ -15,6 +15,13 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
+### Iter 22 (2026-06-12) — Dashboard range filter + AI insights
+- **Backend**: `/api/dashboard/stats?range=7d|30d|3m|6m|12m|all` — time-windowed counts for cases, revenue and activity_breakdown. Growth chart adaptively buckets (always ≤14 points) so the chart looks right across all windows. Pipeline/users/tasks stay all-time snapshots.
+- **Backend**: new `POST /api/dashboard/ai-insights` (body `{range}`) — reuses the same stats endpoint as source of truth, sends a compact JSON snapshot + recent activity titles to **Claude Sonnet 4.6** (via emergentintegrations + EMERGENT_LLM_KEY), returns structured markdown with 4 sections (Headline · What's working · What's at risk · Do next). Internal-only.
+- **Frontend**: Dashboard header now renders a pill segmented-control (testids `dashboard-range-filter` + `dashboard-range-{7d|30d|3m|6m|12m|all}`) + purple gradient "Generate AI insight" button (testid `dashboard-ai-insights-btn`). Range change refetches stats; AI panel (testid `dashboard-ai-insights-panel`) renders the markdown via a tiny purpose-built parser (handles `## headings`, `- bullets`, `**bold**`).
+- Bug fix during build: shadowing Python's `range` builtin in the FastAPI signature caused `'str' object not callable`. Fixed by aliasing `range_key: str = Query("7d", alias="range")`.
+- Verified end-to-end via curl + live Playwright screenshot — Claude returned a sharp, number-citing briefing for the 30D window.
+
 ### Iter 21 (2026-06-12) — Multi-provider type sync (hospitals, labs, doctors, etc.)
 - `admin_bridge.sync_users_from_admin` now syncs **all healthcare provider roles** (ambulance_provider, hospital, doctor, paramedic, lab/pathologist, pharmacy) instead of ambulance-only.
 - Upstream role → CRM contact type 1:1 (with `lab` → `pathologist` alias). Existing contacts get a `type` correction if it had drifted.
