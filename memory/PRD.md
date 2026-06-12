@@ -52,6 +52,13 @@ Removed Hospital/Clinic/Pathology provider portals. Live Fleet Map (Leaflet) add
 - **Targets** — `GET /api/agent/targets` returns month-to-date actuals vs targets.
 - Tested: 23/23 backend pytest + 17/17 frontend playwright (after fixing /agent route guard).
 
+### Iter 11 (2026-06-12) — Phase 9 Org hierarchy + clickable member detail
+- New strict hierarchy: Master Admin → National Manager → Regional Manager → Zonal Manager → Area Manager → Sales Rep/Ops Rep. Each role can ONLY report to the role immediately above (validated server-side with cycle detection).
+- New endpoint `GET /api/team/{id}` returns: profile, reports_chain (climbing to root), direct_reports[], providers_handled count, performance{} (self for sales rep / team-rollup for managers), recent_activities[], feedback[]. New `PATCH /api/team/{id}` for admins to update name/email/role/reports_to/territories. New `POST /api/team/{id}/feedback` + DELETE for manager-rated 1-5 + note feedback.
+- Frontend: `Team.jsx` rewritten — tier-grouped clickable cards with role-coloured pills, reports_to dropdown filters to valid parent-tier candidates. New `/team/:id` page with inline-edit, hierarchy chain, drill-down direct reports, stat cards, territory chips, activity timeline, manager feedback compose + list.
+- Legacy 'manager' role auto-migrated to 'regional_manager' on startup.
+- Tested: 18/18 backend pytest in `test_team_hierarchy.py`. Frontend visually verified via screenshots (Team page tier grouping + detail page sections all rendering correctly).
+
 ### Iter 10 (2026-06-11) — Phase 7 Password recovery + Security questions (Resend)
 - New backend endpoints: `/auth/security-questions`, `/auth/security-status`, `/auth/security-setup`, `/auth/forgot/start`, `/auth/forgot/request-code`, `/auth/forgot/reset`.
 - 8 preset security questions. User picks 2; answers hashed with bcrypt (case-insensitive, whitespace-trimmed). Reset flow requires only 1-of-2 correct.
