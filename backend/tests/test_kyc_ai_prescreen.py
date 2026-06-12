@@ -90,12 +90,52 @@ class TestAdminPrescreen:
         )
         # The known test contact has exactly 1 doc uploaded
         assert summary["total"] >= 1
-        # Each per-doc entry has the expected shape
+        # NEW (iter 8): ai_extracted_fields is always returned at top level (dict, possibly empty)
+        assert "ai_extracted_fields" in body, f"missing ai_extracted_fields in response: {list(body.keys())}"
+        assert isinstance(body["ai_extracted_fields"], dict)
+        # Each per-doc entry has the expected shape PLUS the new `extracted` dict
         for doc_id, p in body["ai_doc_prescreens"].items():
             assert p["recommendation"] in {"approve", "reject", "unclear"}
             assert isinstance(p["reason"], str)
             assert 0.0 <= float(p["confidence"]) <= 1.0
             assert p["model"] in {"gemini-2.5-flash", "skipped", "error"}
+            # NEW (iter 8): per-doc `extracted` block is always present (dict, may be empty)
+            assert "extracted" in p, f"doc {doc_id} missing extracted block: {p}"
+            assert isinstance(p["extracted"], dict)
+            # Extracted values must be strings, all keys must be in the documented whitelist
+            ALLOWED = {
+                "document_number", "name", "father_name", "dob",
+                "pan_number", "gst_number", "aadhaar_last4",
+                "vehicle_reg", "vehicle_make_model", "issue_date",
+                "expiry_date", "address", "issuing_authority",
+            }
+            for k, v in p["extracted"].items():
+                assert k in ALLOWED, f"unexpected extracted key '{k}' in doc {doc_id}"
+                assert isinstance(v, str) and v.strip() != ""
+
+    def test_parser_handles_fenced_json(self, admin):
+        """Iter 8 fix: previously the JSON parser returned {} for ```json fenced responses,
+        which silently bucketed Abhishek's screenshot into 'unclear'. After the fix the AI must
+        reliably return recommendation='reject' (not 'unclear') with confidence > 0.5 and a real
+        reason. Validates the parser fix end-to-end on the known screenshot doc."""
+        r = admin.get(f"{API}/contacts/{CONTACT_ID}", timeout=20)
+        assert r.status_code == 200, r.text
+        c = r.json().get("contact") or {}
+        prescreens = c.get("ai_doc_prescreens") or {}
+        assert prescreens, "expected at least one per-doc prescreen after the admin run"
+        # Abhishek's single doc is a screenshot → MUST be rejected, not 'unclear'
+        recs = [p.get("recommendation") for p in prescreens.values()]
+        assert "reject" in recs, (
+            f"expected at least one 'reject' (screenshot doc) but got {recs} — "
+            f"likely the fenced-JSON parser regression returned again."
+        )
+        # Confidence on the reject must be a real number > 0.5 and reason must be non-empty
+        rejected = [p for p in prescreens.values() if p.get("recommendation") == "reject"]
+        for p in rejected:
+            assert float(p["confidence"]) > 0.5, f"low confidence on reject — parser may be misreading: {p}"
+            assert (p.get("reason") or "").strip() and (p["reason"]).strip() != "No reason returned.", (
+                f"reject doc has no reason string: {p}"
+            )
 
     def test_prescreen_persists_on_contact(self, admin):
         r = admin.get(f"{API}/contacts/{CONTACT_ID}", timeout=20)
@@ -105,6 +145,21 @@ class TestAdminPrescreen:
         assert isinstance(c.get("ai_prescreen_summary"), dict)
         assert c["ai_prescreen_summary"].get("model") == "gemini-2.5-flash"
         assert c["ai_prescreen_summary"].get("total", 0) >= 1
+        # NEW (iter 8): ai_extracted_fields persists on the contact
+        assert "ai_extracted_fields" in c, "ai_extracted_fields not persisted on contact"
+        assert isinstance(c["ai_extracted_fields"], dict)
+        # Per-doc extracted blocks persist too
+        for doc_id, p in c["ai_doc_prescreens"].items():
+            assert "extracted" in p, f"persisted doc {doc_id} missing extracted block"
+            assert isinstance(p["extracted"], dict)
+        # For Abhishek's screenshot all docs are rejected → aggregated ai_extracted_fields == {}
+        # (only approved docs contribute). Verify this conservative aggregation behaviour.
+        recs = [p.get("recommendation") for p in c["ai_doc_prescreens"].values()]
+        if all(r != "approve" for r in recs):
+            assert c["ai_extracted_fields"] == {}, (
+                f"ai_extracted_fields should be empty when no doc is approved, "
+                f"got {c['ai_extracted_fields']}"
+            )
 
     def test_outbound_event_emitted(self, admin):
         # GET /api/admin/bridge/events returns {inbound, outbound, counts, config}.

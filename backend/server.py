@@ -1189,12 +1189,15 @@ async def _download_admin_doc(url: str) -> Optional[tuple]:
 def _parse_ai_json(text: str) -> Dict[str, Any]:
     """Best-effort JSON extraction from an LLM response."""
     s = (text or "").strip()
-    # Strip code fences
+    # Strip ```json … ``` or ``` … ``` fences
     if s.startswith("```"):
-        s = s.split("```", 2)[-1] if s.count("```") >= 2 else s.strip("`")
-        if s.lower().startswith("json"):
-            s = s[4:]
-    # Find the first {...}
+        # Drop the opening fence (and optional language tag) then the closing fence
+        first_nl = s.find("\n")
+        if first_nl != -1:
+            s = s[first_nl + 1:]
+        if s.rstrip().endswith("```"):
+            s = s.rstrip()[:-3]
+    # Find the outermost {...}
     start, end = s.find("{"), s.rfind("}")
     if start != -1 and end != -1 and end > start:
         try:
@@ -1237,16 +1240,39 @@ async def _ai_screen_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         "You are a KYC document verification assistant for TrataHealth's ambulance-provider "
         "onboarding workflow. You inspect uploaded Indian compliance documents (PAN card, "
         "Aadhaar, GST certificate, RC, insurance, fitness certificate, drug license, etc.) and "
-        "give the sales rep a fast first-pass recommendation. You are NOT the final approver — "
-        "the sales rep and master admin make the binding decision. Be strict: only recommend "
-        "APPROVE if the document is clearly legible, the document type matches the expected "
-        "kind, and there are no obvious tampering or expiry red flags. Otherwise recommend "
-        "REJECT and explain in 1-2 short sentences."
+        "(1) give the sales rep a fast first-pass approve/reject recommendation and "
+        "(2) extract the structured fields visible on the document so the rep doesn't have to "
+        "retype them. You are NOT the final approver — the sales rep and master admin make the "
+        "binding decision. Be strict on the recommendation: only APPROVE if the document is "
+        "clearly legible, the document type matches the expected kind, and there are no obvious "
+        "tampering or expiry red flags. Be conservative on extraction: only return fields you can "
+        "read with certainty; leave others empty. Never invent values."
     )
     prompt = (
         f"Expected document kind: {kind}\nFile name: {name}\n\n"
-        "Inspect the attached file and respond with ONLY a single JSON object on one line, no prose, no markdown:\n"
-        '{"recommendation":"approve"|"reject"|"unclear","reason":"<one short sentence>","confidence":<0.0-1.0>}'
+        "Inspect the attached file and respond with ONLY a single JSON object, no prose, no markdown.\n"
+        "Schema:\n"
+        "{\n"
+        '  "recommendation": "approve" | "reject" | "unclear",\n'
+        '  "reason": "<one short sentence>",\n'
+        '  "confidence": <0.0-1.0>,\n'
+        '  "extracted": {\n'
+        '    "document_number": "<the primary id printed on the doc, e.g. PAN no., GST no., Aadhaar last-4, registration no.>",\n'
+        '    "name": "<full name on doc, if any>",\n'
+        '    "father_name": "<father name on PAN/Aadhaar, if any>",\n'
+        '    "dob": "<YYYY-MM-DD or as printed>",\n'
+        '    "pan_number": "<if PAN>",\n'
+        '    "gst_number": "<if GST cert>",\n'
+        '    "aadhaar_last4": "<last 4 digits if Aadhaar>",\n'
+        '    "vehicle_reg": "<if RC/insurance/fitness>",\n'
+        '    "vehicle_make_model": "<if RC>",\n'
+        '    "issue_date": "<YYYY-MM-DD>",\n'
+        '    "expiry_date": "<YYYY-MM-DD>",\n'
+        '    "address": "<full address if printed>",\n'
+        '    "issuing_authority": "<RTO/dept/insurer name if shown>"\n'
+        "  }\n"
+        "}\n"
+        "Omit (do NOT include) any key inside `extracted` whose value you cannot read with certainty."
     )
 
     try:
@@ -1257,7 +1283,10 @@ async def _ai_screen_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         ).with_model("gemini", "gemini-2.5-flash")
         attachment = FileContentWithMimeType(file_path=path, mime_type=mime)
         reply = await chat.send_message(UserMessage(text=prompt, file_contents=[attachment]))
-        parsed = _parse_ai_json(str(reply))
+        raw_text = str(reply)
+        parsed = _parse_ai_json(raw_text)
+        if not parsed:
+            logger.warning(f"AI prescreen: could not parse JSON. Raw response (first 500 chars): {raw_text[:500]}")
         rec = (parsed.get("recommendation") or "").strip().lower()
         if rec not in {"approve", "reject", "unclear"}:
             rec = "unclear"
@@ -1266,10 +1295,26 @@ async def _ai_screen_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             conf = 0.0
         conf = max(0.0, min(1.0, conf))
+        raw_extracted = parsed.get("extracted") or {}
+        # Whitelist + sanitize extracted fields (drop empties, cap length)
+        ALLOWED = {
+            "document_number", "name", "father_name", "dob",
+            "pan_number", "gst_number", "aadhaar_last4",
+            "vehicle_reg", "vehicle_make_model", "issue_date", "expiry_date",
+            "address", "issuing_authority",
+        }
+        extracted: Dict[str, str] = {}
+        if isinstance(raw_extracted, dict):
+            for k, v in raw_extracted.items():
+                if k in ALLOWED and v is not None:
+                    sv = str(v).strip()
+                    if sv and sv.lower() not in {"unknown", "n/a", "na", "none", "null"}:
+                        extracted[k] = sv[:200]
         return {
             "recommendation": rec,
             "reason": str(parsed.get("reason") or "").strip()[:400] or "No reason returned.",
             "confidence": conf,
+            "extracted": extracted,
             "model": "gemini-2.5-flash",
         }
     except Exception as e:
@@ -1319,6 +1364,7 @@ async def ai_prescreen_kyc(contact_id: str, current=Depends(get_current_user)):
             d["url"] = admin_base + u
 
     prescreens: Dict[str, Any] = c.get("ai_doc_prescreens") or {}
+    aggregated_fields: Dict[str, Dict[str, str]] = {}  # field_name -> {value, source_doc_id, source_kind}
     approve_n = reject_n = unclear_n = 0
     started = now_iso()
 
@@ -1328,13 +1374,19 @@ async def ai_prescreen_kyc(contact_id: str, current=Depends(get_current_user)):
         result["doc_name"] = d.get("name")
         result["scanned_at"] = now_iso()
         result["scanned_by"] = current.get("name") or current.get("phone")
-        prescreens[d.get("id") or d.get("kind")] = result
+        doc_key = d.get("id") or d.get("kind")
+        prescreens[doc_key] = result
         if result["recommendation"] == "approve":
             approve_n += 1
         elif result["recommendation"] == "reject":
             reject_n += 1
         else:
             unclear_n += 1
+        # Aggregate extracted fields — only from docs the AI approves (skip rejected/unclear to avoid wrong data)
+        if result.get("recommendation") == "approve":
+            for fk, fv in (result.get("extracted") or {}).items():
+                if fk not in aggregated_fields:
+                    aggregated_fields[fk] = {"value": fv, "source_doc_id": doc_key, "source_kind": d.get("kind") or ""}
 
     summary = {
         "approve": approve_n,
@@ -1345,9 +1397,13 @@ async def ai_prescreen_kyc(contact_id: str, current=Depends(get_current_user)):
         "scanned_by": current.get("name") or current.get("phone"),
         "model": "gemini-2.5-flash",
     }
+    # Merge with any previously extracted fields (preserve old ones not overwritten this run)
+    prior_fields = c.get("ai_extracted_fields") or {}
+    merged_fields = {**prior_fields, **aggregated_fields}
     await db.contacts.update_one({"id": contact_id}, {"$set": {
         "ai_doc_prescreens": prescreens,
         "ai_prescreen_summary": summary,
+        "ai_extracted_fields": merged_fields,
         "updated_at": now_iso(),
     }})
 
@@ -1364,7 +1420,7 @@ async def ai_prescreen_kyc(contact_id: str, current=Depends(get_current_user)):
         "scanned_at": started,
     })
 
-    return {"success": True, "ai_doc_prescreens": prescreens, "ai_prescreen_summary": summary}
+    return {"success": True, "ai_doc_prescreens": prescreens, "ai_prescreen_summary": summary, "ai_extracted_fields": merged_fields}
 
 
 

@@ -67,6 +67,7 @@ export default function KycMirrorCard({ contactId }) {
           ...(s.contact || {}),
           ai_doc_prescreens: data.ai_doc_prescreens || {},
           ai_prescreen_summary: data.ai_prescreen_summary || null,
+          ai_extracted_fields: data.ai_extracted_fields || {},
         },
       }));
     } catch (e) {
@@ -165,6 +166,24 @@ export default function KycMirrorCard({ contactId }) {
           <RefreshCw className="h-3.5 w-3.5" /> Refresh
         </button>
       </div>
+
+      {/* Aggregated AI-extracted fields (only present when at least one approved doc yielded fields) */}
+      {state.contact?.ai_extracted_fields && Object.keys(state.contact.ai_extracted_fields).length > 0 && (
+        <div className="px-5 py-3 border-b border-[#DFE1E6] bg-[#EAE6FF]/40" data-testid="kyc-extracted-fields">
+          <div className="overline mb-2 flex items-center gap-1.5 text-[#403294]">
+            <Sparkles className="h-3 w-3" /> AI-extracted fields (from approved docs)
+          </div>
+          <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5 text-xs">
+            {Object.entries(state.contact.ai_extracted_fields).map(([k, info]) => (
+              <div key={k} className="flex flex-col" data-testid={`kyc-extracted-${k}`}>
+                <dt className="text-[10px] uppercase tracking-wider text-[#5E6C84]">{k.replace(/_/g, " ")}</dt>
+                <dd className="text-[#091E42] font-mono break-words">{info?.value}</dd>
+                {info?.source_kind && <span className="text-[10px] text-[#5E6C84]">via {info.source_kind}</span>}
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
 
       {/* Checklist + Docs */}
       <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-[#DFE1E6]">
@@ -273,6 +292,16 @@ export default function KycMirrorCard({ contactId }) {
                             <span className="ml-1 text-[10px] opacity-80">({Math.round(aiRec.confidence * 100)}% conf)</span>
                           )}
                           {aiRec.reason && <span className="block text-[11px] opacity-90 mt-0.5">{aiRec.reason}</span>}
+                          {aiRec.extracted && Object.keys(aiRec.extracted).length > 0 && (
+                            <span className="block mt-1 pt-1 border-t border-current/15 text-[10.5px]" data-testid={`kyc-doc-ai-extracted-${d.id}`}>
+                              <b className="opacity-80">Extracted: </b>
+                              {Object.entries(aiRec.extracted).map(([k, v], idx, arr) => (
+                                <span key={k}>
+                                  <span className="opacity-70">{k.replace(/_/g, " ")}:</span> <span className="font-mono">{v}</span>{idx < arr.length - 1 ? " · " : ""}
+                                </span>
+                              ))}
+                            </span>
+                          )}
                         </span>
                         {!myReview && aiRec.recommendation !== "unclear" && (
                           <button

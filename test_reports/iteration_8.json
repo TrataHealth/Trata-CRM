@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 8 — AI KYC Pre-screening now also EXTRACTS structured fields. BACKEND: 6 passed / 2 skipped on /app/backend/tests/test_kyc_ai_prescreen.py (added 1 new test + extended 2 existing). All 9 requested checks verified end-to-end. FRONTEND: Playwright drove Rohan login (9000000002/Trata@123) → /contacts/1442c0a1 → verified the per-doc AI pill + new Extracted: line + correctly-hidden contact-level extracted panel + no-skeleton-flicker re-scan flow. (1) POST /api/contacts/{id}/kyc-ai-prescreen as Master Admin → 200, success=true, with NEW top-level ai_extracted_fields dict and per-doc 'extracted' dict whose keys are restricted to the documented 13-field whitelist. (2) GET /api/contacts/{id} persists ai_doc_prescreens[doc_id].extracted AND contact.ai_extracted_fields. For Abhishek's single rejected screenshot, ai_extracted_fields == {} (conservative aggregation — only approved docs contribute) — explicitly asserted. (3) PARSER FIX VERIFIED: AI now reliably returns recommendation='reject' (not 'unclear') with confidence > 0.5 + non-empty reason on the screenshot. Previous iter's fenced-```json``` parser regression no longer reproduces. (4) Per-doc AI pill data-testid kyc-doc-ai-{id} shows 'AI: Reject (90% conf)' + reason. (5) New per-doc Extracted line data-testid kyc-doc-ai-extracted-{id} renders 'Extracted: document number: Wasd1234 · name: Abhishek · address: TRIPATHI COMPLEX ( RS Hospital Bhanpur) · vehicle reg: Wasd1234' — confirmed Gemini extracted the fields even from a rejected screenshot. (6) Contact-level purple panel data-testid kyc-extracted-fields is correctly HIDDEN when ai_extracted_fields is empty (no empty rendering) — confirmed for Abhishek. (7) Re-scan flow: clicking kyc-ai-prescreen-btn shows spinner, completes, page does NOT flicker to 'Loading KYC from Trata Admin App…' skeleton. Optimistic state merge in runAiPrescreen verified. Summary banner stays visible throughout. (8) Regression: outbound 'crm.kyc.ai_prescreened' event still emitted; existing /kyc endpoint smoke passes; all existing data-testids still resolve.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_kyc_ai_prescreen.py",
+    "/app/test_reports/pytest/kyc_ai_prescreen.xml"
+  ],
+  "action_items": [
+    "CARRY-OVER (iter 7): provider_owner 7678218261 still has no crm_users row → /auth/verify-otp returns 'Phone not authorized'. The endpoint's is_internal() gate is still correct, just untestable directly. Seed/auto-provision the row to unskip TestRBAC::test_provider_owner_blocked.",
+    "CARRY-OVER (iter 7): cross-lead 403 path still untestable — DB has only 1 contact. Seed a 2nd TEST_ contact assigned to a non-Rohan agent to unskip TestRBAC::test_sales_rep_on_other_lead_blocked.",
+    "CARRY-OVER (iter 6): /api/admin/webhooks/test-send + /api/admin/webhooks/events still allow sales_rep — tighten to admin/manager.",
+    "CARRY-OVER (iter 3/4): /agent route in App.js lacks internalOnly guard.",
+    "Optional UX: today's Extracted line for the rejected screenshot still shows extracted values (document_number, name, address, vehicle_reg). That's exactly the spec ('per-doc extracted may have data even when AI rejects'), but product may want a small disclaimer pill like 'extracted from rejected doc — verify manually' to avoid the rep mistakenly trusting it."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~3710 lines. The AI prescreen + helpers block (lines 1144-1423, ~280 lines) is mature enough to extract into /app/backend/ai_kyc_prescreen.py — would isolate the prompt/extraction logic and ease future LLM swaps.",
+    "_ai_screen_doc still iterates docs sequentially (~3-8s/doc). When a contact has 5+ docs the wall-clock grows linearly. Recommend asyncio.gather() with bounded concurrency (e.g. 4).",
+    "_download_admin_doc still has no size cap on the NamedTemporaryFile write — same disk-fill risk flagged in iter 7. Add a max-bytes guard.",
+    "ALLOWED extracted-keys whitelist is duplicated as a local set inside _ai_screen_doc (server.py:1300-1305) and again in the pytest. Consider hoisting to a module-level constant AI_EXTRACTED_FIELDS so the FE/BE/test stay in sync.",
+    "ai_prescreen_kyc merges with prior_fields (server.py:1401-1402) — `merged_fields = {**prior_fields, **aggregated_fields}` means a NEW approved-doc value silently overwrites an older one for the same field key. The spec says 'first non-empty value wins' but the merge order here means LAST-RUN wins. If rep re-scans after the doc was re-uploaded with corrected info, the new value will (correctly) overwrite — but if a fresh approved doc on a different field-source has stale info, it overwrites silently. Worth confirming with product.",
+    "Aggregation never includes the source_doc_id/source_kind metadata in ai_extracted_fields when stored — actually it does (good!), but the FE renderer (KycMirrorCard.jsx:177-184) only shows `info.value` and ignores source_kind. Consider showing 'from RC' / 'from PAN' subscript so the rep can trace which doc each field came from.",
+    "Frontend: KycMirrorCard.jsx is now 478 lines and growing — consider splitting the per-doc card + extracted line + use-suggestion link into a small <KycDocCard> child to keep load() / runAiPrescreen logic isolated.",
+    "Per-doc Extracted line (KycMirrorCard.jsx:296) uses border-current/15 — on the red 'Reject' background the divider line is almost invisible. Minor — but consider explicit `border-red-200`/`border-yellow-200` per recommendation color."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_kyc_ai_prescreen.py — added test_parser_handles_fenced_json (NEW) and extended test_admin_runs_ai_prescreen + test_prescreen_persists_on_contact with iter-8 assertions (ai_extracted_fields top-level, per-doc extracted dict, whitelist, empty-when-no-approve, parser produces 'reject' with conf>0.5 + real reason). Total: 8 tests collected (6 passed, 2 skipped with documented reasons)."
+  ],
+  "success_rate": {
+    "backend": "100% (6/6 executed pass, 2 skipped — same documented reasons as iter 7)",
+    "frontend": "100% — all 9 requested checks passed: kyc-ai-prescreen-btn, kyc-ai-summary, kyc-doc-ai-{id}, kyc-doc-ai-extracted-{id}, kyc-extracted-fields (correctly hidden), Re-scan no-flicker, optimistic update"
+  },
+  "test_credentials": "Same as iter 7: Master Admin 9873117605/Master@123, Rohan 9000000002/Trata@123.",
+  "seed_data_creation": "No new seed data. Each pytest run re-writes ai_doc_prescreens + ai_prescreen_summary + ai_extracted_fields on contact 1442c0a1 (3 fresh Gemini calls per run — pytest + playwright re-scan = ~4 billable Gemini calls this iteration).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Re-run: REACT_APP_BACKEND_URL=https://patient-hub-133.preview.emergentagent.com python -m pytest /app/backend/tests/test_kyc_ai_prescreen.py -v (~27s, 3 billable Gemini calls). New iter-8 test test_parser_handles_fenced_json explicitly asserts the screenshot doc gets rec='reject' with conf>0.5 + non-empty reason — this is the regression guard for the fenced-JSON parser fix. Frontend testid map confirmed: kyc-docs, kyc-ai-prescreen-btn, kyc-ai-summary, kyc-doc-ai-{id}, kyc-doc-ai-extracted-{id}, kyc-extracted-fields (panel), kyc-extracted-{field_name} (cell). Login: login-phone-input → login-send-otp-btn → login-otp-input → login-verify-btn → login-password-input → login-password-btn. Abhishek contact 1442c0a1-0fd4-407a-a2d3-adbbe1275c7c has 1 screenshot doc → rejects + extracted={document_number, name, address, vehicle_reg} → contact.ai_extracted_fields={} (since rejected docs do not aggregate up).",
+  "rca of the issue": "No new bugs. iter 7's 'skeleton flicker on re-scan' is now FIXED via optimistic state merge in KycMirrorCard.jsx:64-72 — Playwright confirmed: 500ms after the click, 'Loading KYC from Trata Admin App' skeleton is NOT in DOM, and the summary banner stays visible throughout the scan."
+}
