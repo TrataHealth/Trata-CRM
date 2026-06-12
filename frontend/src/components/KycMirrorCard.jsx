@@ -3,7 +3,7 @@ import api from "../lib/api";
 import { useAuth } from "../lib/auth";
 import {
   ShieldCheck, ShieldAlert, ShieldQuestion, Loader2, RefreshCw, ExternalLink,
-  CheckCircle2, XCircle, FileText, FileQuestion, AlertCircle, MessagesSquare, Send, Sparkles, Crown, Wand2,
+  CheckCircle2, XCircle, FileText, FileQuestion, AlertCircle, MessagesSquare, Send, Sparkles, Crown, Wand2, Check,
 } from "lucide-react";
 import { relativeTime } from "../lib/constants";
 import SlaChip from "./SlaChip";
@@ -29,6 +29,7 @@ export default function KycMirrorCard({ contactId }) {
   const [submitting, setSubmitting] = useState(false);
   const [adminForm, setAdminForm] = useState({ open: false, decision: "verified", notes: "" });
   const [aiScanning, setAiScanning] = useState(false);
+  const [applyingFields, setApplyingFields] = useState(null); // null | "all" | <ai_field_name>
 
   const isAdmin = me?.is_master_admin || me?.role === "admin";
 
@@ -74,6 +75,30 @@ export default function KycMirrorCard({ contactId }) {
       setState((s) => ({ ...s, err: e?.response?.data?.detail || "AI pre-screen failed" }));
     }
     setAiScanning(false);
+  };
+
+  // AI field → corresponding contact field name (must match backend AI_FIELD_TO_CONTACT_FIELD)
+  const AI_TO_CONTACT_FIELD = {
+    name: "name", father_name: "father_name", dob: "dob",
+    pan_number: "pan_number", gst_number: "gst_number", aadhaar_last4: "aadhaar_last4",
+    vehicle_reg: "vehicle_reg", vehicle_make_model: "vehicle_make_model",
+    issue_date: "kyc_doc_issue_date", expiry_date: "kyc_doc_expiry_date",
+    address: "address", issuing_authority: "kyc_doc_authority",
+    document_number: "kyc_document_number",
+  };
+
+  const applyExtractedFields = async (fields /* string[] | "all" */) => {
+    const body = fields === "all" ? {} : { fields: Array.isArray(fields) ? fields : [fields] };
+    const tag = fields === "all" ? "all" : (Array.isArray(fields) ? fields[0] : fields);
+    setApplyingFields(tag);
+    try {
+      const { data } = await api.post(`/contacts/${contactId}/apply-extracted-fields`, body);
+      // Refresh the contact in local state so the green checkmarks render immediately
+      setState((s) => ({ ...s, contact: data.contact || s.contact }));
+    } catch (e) {
+      setState((s) => ({ ...s, err: e?.response?.data?.detail || "Failed to apply field(s)" }));
+    }
+    setApplyingFields(null);
   };
 
   const submitDocReview = async () => {
@@ -170,17 +195,49 @@ export default function KycMirrorCard({ contactId }) {
       {/* Aggregated AI-extracted fields (only present when at least one approved doc yielded fields) */}
       {state.contact?.ai_extracted_fields && Object.keys(state.contact.ai_extracted_fields).length > 0 && (
         <div className="px-5 py-3 border-b border-[#DFE1E6] bg-[#EAE6FF]/40" data-testid="kyc-extracted-fields">
-          <div className="overline mb-2 flex items-center gap-1.5 text-[#403294]">
-            <Sparkles className="h-3 w-3" /> AI-extracted fields (from approved docs)
+          <div className="overline mb-2 flex items-center justify-between gap-2 flex-wrap text-[#403294]">
+            <span className="flex items-center gap-1.5"><Sparkles className="h-3 w-3" /> AI-extracted fields (from approved docs)</span>
+            <button
+              onClick={() => applyExtractedFields("all")}
+              disabled={applyingFields !== null}
+              data-testid="kyc-apply-all-fields-btn"
+              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded text-white bg-[#403294] hover:bg-[#5243AA] disabled:opacity-60 normal-case tracking-normal"
+              title="Write every extracted field into the contact record"
+            >
+              {applyingFields === "all" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+              {applyingFields === "all" ? "Applying…" : "Apply all to contact"}
+            </button>
           </div>
           <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5 text-xs">
-            {Object.entries(state.contact.ai_extracted_fields).map(([k, info]) => (
-              <div key={k} className="flex flex-col" data-testid={`kyc-extracted-${k}`}>
-                <dt className="text-[10px] uppercase tracking-wider text-[#5E6C84]">{k.replace(/_/g, " ")}</dt>
-                <dd className="text-[#091E42] font-mono break-words">{info?.value}</dd>
-                {info?.source_kind && <span className="text-[10px] text-[#5E6C84]">via {info.source_kind}</span>}
-              </div>
-            ))}
+            {Object.entries(state.contact.ai_extracted_fields).map(([k, info]) => {
+              const contactKey = AI_TO_CONTACT_FIELD[k];
+              const currentValue = contactKey ? state.contact?.[contactKey] : null;
+              const alreadyApplied = currentValue && String(currentValue).trim() === String(info?.value || "").trim();
+              return (
+                <div key={k} className="flex flex-col" data-testid={`kyc-extracted-${k}`}>
+                  <dt className="text-[10px] uppercase tracking-wider text-[#5E6C84] flex items-center justify-between gap-1">
+                    <span>{k.replace(/_/g, " ")}</span>
+                    {alreadyApplied ? (
+                      <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-[#006644] normal-case tracking-normal" data-testid={`kyc-applied-${k}`}>
+                        <Check className="h-3 w-3" /> applied
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => applyExtractedFields([k])}
+                        disabled={applyingFields !== null}
+                        data-testid={`kyc-apply-${k}`}
+                        className="text-[10px] font-semibold text-[#0052CC] hover:underline normal-case tracking-normal disabled:opacity-50"
+                        title="Write this value into the contact record"
+                      >
+                        {applyingFields === k ? "applying…" : "Apply"}
+                      </button>
+                    )}
+                  </dt>
+                  <dd className="text-[#091E42] font-mono break-words">{info?.value}</dd>
+                  {info?.source_kind && <span className="text-[10px] text-[#5E6C84]">via {info.source_kind}</span>}
+                </div>
+              );
+            })}
           </dl>
         </div>
       )}

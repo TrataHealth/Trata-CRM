@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, Query, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, Query, Request, Body
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -1421,6 +1421,90 @@ async def ai_prescreen_kyc(contact_id: str, current=Depends(get_current_user)):
     })
 
     return {"success": True, "ai_doc_prescreens": prescreens, "ai_prescreen_summary": summary, "ai_extracted_fields": merged_fields}
+
+
+# Map AI-extracted field names → contact-record field names. Only whitelisted fields can be
+# written from AI extraction; everything else is ignored. Values longer than 200 chars are dropped.
+AI_FIELD_TO_CONTACT_FIELD = {
+    "name":                "name",
+    "father_name":         "father_name",
+    "dob":                 "dob",
+    "pan_number":          "pan_number",
+    "gst_number":          "gst_number",
+    "aadhaar_last4":       "aadhaar_last4",
+    "vehicle_reg":         "vehicle_reg",
+    "vehicle_make_model":  "vehicle_make_model",
+    "issue_date":          "kyc_doc_issue_date",
+    "expiry_date":         "kyc_doc_expiry_date",
+    "address":             "address",
+    "issuing_authority":   "kyc_doc_authority",
+    "document_number":     "kyc_document_number",
+}
+
+
+@api.post("/contacts/{contact_id}/apply-extracted-fields")
+async def apply_extracted_fields(contact_id: str, payload: Dict[str, Any] = Body(default={}), current=Depends(get_current_user)):
+    """Write AI-extracted KYC fields into the actual contact record.
+    Body: {"fields": ["name", "gst_number", ...]}  — list of AI field-names to apply.
+    If `fields` is missing or empty, applies ALL fields available in contact.ai_extracted_fields.
+    Returns the list of applied {ai_field, contact_field, value} entries."""
+    if not is_internal(current):
+        raise HTTPException(status_code=403, detail="Internal users only")
+    c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if is_sales_rep(current) and c.get("assigned_agent_id") != current["id"]:
+        raise HTTPException(status_code=403, detail="Not your lead")
+    extracted: Dict[str, Any] = c.get("ai_extracted_fields") or {}
+    if not extracted:
+        raise HTTPException(status_code=400, detail="No AI-extracted fields available — run AI pre-screen first.")
+
+    requested = payload.get("fields") if isinstance(payload, dict) else None
+    if isinstance(requested, list) and requested:
+        targets = [f for f in requested if f in extracted]
+    else:
+        targets = list(extracted.keys())
+
+    applied: List[Dict[str, str]] = []
+    skipped: List[Dict[str, str]] = []
+    updates: Dict[str, Any] = {}
+    for ai_field in targets:
+        contact_field = AI_FIELD_TO_CONTACT_FIELD.get(ai_field)
+        if not contact_field:
+            skipped.append({"ai_field": ai_field, "reason": "Field not in whitelist"})
+            continue
+        info = extracted.get(ai_field) or {}
+        value = str(info.get("value") or "").strip()
+        if not value or len(value) > 200:
+            skipped.append({"ai_field": ai_field, "reason": "Empty or oversize value"})
+            continue
+        updates[contact_field] = value
+        applied.append({"ai_field": ai_field, "contact_field": contact_field, "value": value, "source_kind": info.get("source_kind")})
+
+    if not applied:
+        raise HTTPException(status_code=400, detail="Nothing to apply (no valid fields).")
+
+    updates["updated_at"] = now_iso()
+    updates["ai_fields_applied_at"] = now_iso()
+    updates["ai_fields_applied_by"] = current.get("name") or current.get("phone")
+    await db.contacts.update_one({"id": contact_id}, {"$set": updates})
+
+    # Log an activity for the audit trail
+    await db.activities.insert_one({
+        "id": str(uuid.uuid4()),
+        "type": "note",
+        "outcome": "ai_fields_applied",
+        "contact_id": contact_id,
+        "agent_id": current.get("id"),
+        "agent_name": current.get("name"),
+        "summary": f"Applied {len(applied)} AI-extracted field(s) to contact: " + ", ".join(a["ai_field"] for a in applied),
+        "payload": {"applied": applied, "skipped": skipped},
+        "created_at": now_iso(),
+    })
+
+    fresh = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    return {"success": True, "applied": applied, "skipped": skipped, "contact": fresh}
+
 
 
 
