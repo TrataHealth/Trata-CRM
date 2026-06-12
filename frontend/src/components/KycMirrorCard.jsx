@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
+import { useAuth } from "../lib/auth";
 import {
   ShieldCheck, ShieldAlert, ShieldQuestion, Loader2, RefreshCw, ExternalLink,
-  CheckCircle2, XCircle, FileText, FileQuestion, AlertCircle, MessagesSquare, Send,
+  CheckCircle2, XCircle, FileText, FileQuestion, AlertCircle, MessagesSquare, Send, Sparkles, Crown,
 } from "lucide-react";
 import { relativeTime } from "../lib/constants";
 
@@ -21,30 +22,67 @@ const STATUS_STYLE = {
 };
 
 export default function KycMirrorCard({ contactId }) {
-  const [state, setState] = useState({ loading: true, data: null, err: "" });
-  const [decisionForm, setDecisionForm] = useState({ open: false, decision: "approved", notes: "" });
+  const { user: me } = useAuth();
+  const [state, setState] = useState({ loading: true, data: null, contact: null, err: "" });
+  const [docReviewing, setDocReviewing] = useState({ docId: null, decision: "approved", notes: "" });
   const [submitting, setSubmitting] = useState(false);
+  const [adminForm, setAdminForm] = useState({ open: false, decision: "verified", notes: "" });
+
+  const isAdmin = me?.is_master_admin || me?.role === "admin";
 
   const load = async (refresh = false) => {
     setState((s) => ({ ...s, loading: true, err: "" }));
     try {
-      const { data } = await api.get(`/contacts/${contactId}/kyc`, { params: refresh ? { refresh: true } : {} });
-      setState({ loading: false, data, err: "" });
+      const [{ data }, contactResp] = await Promise.all([
+        api.get(`/contacts/${contactId}/kyc`, { params: refresh ? { refresh: true } : {} }),
+        api.get(`/contacts/${contactId}`),
+      ]);
+      setState({ loading: false, data, contact: contactResp.data?.contact, err: "" });
     } catch (e) {
-      setState({ loading: false, data: null, err: e?.response?.data?.detail || "Could not fetch KYC" });
+      setState({ loading: false, data: null, contact: null, err: e?.response?.data?.detail || "Could not fetch KYC" });
     }
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [contactId]);
 
-  const submitDecision = async () => {
+  const reviewDoc = async (docId, decision) => {
+    setDocReviewing({ docId, decision, notes: docReviewing.notes });
+  };
+
+  const submitDocReview = async () => {
     setSubmitting(true);
     try {
-      await api.post(`/contacts/${contactId}/kyc-review`, decisionForm);
-      setDecisionForm({ open: false, decision: "approved", notes: "" });
+      await api.post(`/contacts/${contactId}/kyc-doc-review`, {
+        doc_id: docReviewing.docId, decision: docReviewing.decision, notes: docReviewing.notes,
+      });
+      setDocReviewing({ docId: null, decision: "approved", notes: "" });
       await load(true);
     } catch (e) {
-      setState((s) => ({ ...s, err: e?.response?.data?.detail || "Could not submit decision" }));
+      setState((s) => ({ ...s, err: e?.response?.data?.detail || "Could not save doc review" }));
+    }
+    setSubmitting(false);
+  };
+
+  const submitForAdmin = async () => {
+    if (!window.confirm("Submit all doc reviews to Master Admin for final approval?")) return;
+    setSubmitting(true);
+    try {
+      await api.post(`/contacts/${contactId}/kyc-submit-for-admin`);
+      await load(true);
+    } catch (e) {
+      setState((s) => ({ ...s, err: e?.response?.data?.detail || "Submit failed" }));
+    }
+    setSubmitting(false);
+  };
+
+  const adminFinalDecide = async () => {
+    setSubmitting(true);
+    try {
+      await api.post(`/contacts/${contactId}/kyc-admin-final`, adminForm);
+      setAdminForm({ open: false, decision: "verified", notes: "" });
+      await load(true);
+    } catch (e) {
+      setState((s) => ({ ...s, err: e?.response?.data?.detail || "Final decision failed" }));
     }
     setSubmitting(false);
   };
@@ -134,10 +172,12 @@ export default function KycMirrorCard({ contactId }) {
           {(kyc.docs || []).length === 0 ? (
             <div className="text-sm text-[#5E6C84]">No documents uploaded yet.</div>
           ) : (
-            <ul className="space-y-2 max-h-[260px] overflow-y-auto scrollbar-thin">
+            <ul className="space-y-2 max-h-[340px] overflow-y-auto scrollbar-thin">
               {kyc.docs.map((d) => {
                 const s = DOC_STATUS_STYLE[d.status] || DOC_STATUS_STYLE.pending;
                 const Icon = s.icon;
+                const myReview = (state.contact?.agent_doc_reviews || {})[d.id];
+                const isReviewing = docReviewing.docId === d.id;
                 return (
                   <li key={d.id} className="border border-[#DFE1E6] rounded p-2.5" data-testid={`kyc-doc-${d.id}`}>
                     <div className="flex items-start justify-between gap-2 flex-wrap">
@@ -145,18 +185,54 @@ export default function KycMirrorCard({ contactId }) {
                         <FileText className="h-4 w-4 text-[#5E6C84] mt-0.5 shrink-0" />
                         <div className="min-w-0">
                           <div className="text-sm font-semibold text-[#091E42] truncate">{d.name || d.kind}</div>
-                          <div className="text-[11px] text-[#5E6C84]">{d.kind} · {d.mime} · uploaded {relativeTime(d.uploaded_at)}</div>
+                          <div className="text-[11px] text-[#5E6C84]">{d.kind} · uploaded {relativeTime(d.uploaded_at)}</div>
                         </div>
                       </div>
                       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold rounded text-white whitespace-nowrap" style={{ background: s.color }}>
-                        <Icon className="h-3 w-3" /> {s.label}
+                        <Icon className="h-3 w-3" /> Admin: {s.label}
                       </span>
                     </div>
-                    {d.rejection_comment && <div className="mt-1 text-[11px] text-[#FF5630]">{d.rejection_comment}</div>}
                     {d.url && (
                       <a href={d.url} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 text-[11px] text-[#0052CC] font-semibold hover:underline" data-testid={`kyc-doc-link-${d.id}`}>
                         <ExternalLink className="h-3 w-3" /> View document
                       </a>
+                    )}
+                    {/* My agent-side review */}
+                    {myReview ? (
+                      <div className="mt-2 flex items-center justify-between text-[11px]" data-testid={`kyc-doc-myreview-${d.id}`}>
+                        <span className="flex items-center gap-1">
+                          {myReview.decision === "approved" ? <CheckCircle2 className="h-3.5 w-3.5 text-[#36B37E]" /> : <XCircle className="h-3.5 w-3.5 text-[#FF5630]" />}
+                          <b className="text-[#091E42]">Sales rep: {myReview.decision.toUpperCase()}</b>
+                          {myReview.notes && <span className="text-[#5E6C84]">— {myReview.notes}</span>}
+                        </span>
+                        <button onClick={() => reviewDoc(d.id, "approved")} data-testid={`kyc-doc-redo-${d.id}`} className="text-[#0052CC] hover:underline">Change</button>
+                      </div>
+                    ) : (
+                      <div className="mt-2 flex gap-2">
+                        <button onClick={() => reviewDoc(d.id, "approved")} data-testid={`kyc-doc-approve-${d.id}`} className="flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold bg-[#E3FCEF] text-[#006644] border border-[#36B37E]/30 rounded hover:bg-[#ABF5D1]">
+                          <CheckCircle2 className="h-3 w-3" /> Approve
+                        </button>
+                        <button onClick={() => reviewDoc(d.id, "rejected")} data-testid={`kyc-doc-reject-${d.id}`} className="flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold bg-[#FFEBE6] text-[#BF2600] border border-[#FF5630]/30 rounded hover:bg-[#FFBDAD]">
+                          <XCircle className="h-3 w-3" /> Reject
+                        </button>
+                      </div>
+                    )}
+                    {/* Notes textarea (inline) */}
+                    {isReviewing && (
+                      <div className="mt-2 space-y-2 bg-[#FAFBFC] p-2 rounded border border-[#DFE1E6]" data-testid={`kyc-doc-review-form-${d.id}`}>
+                        <input
+                          value={docReviewing.notes}
+                          onChange={(e) => setDocReviewing({ ...docReviewing, notes: e.target.value })}
+                          placeholder={docReviewing.decision === "approved" ? "Optional note…" : "Why are you rejecting? (e.g. blurry scan)"}
+                          className="w-full px-2 py-1 text-xs border border-[#DFE1E6] rounded"
+                        />
+                        <div className="flex gap-1.5">
+                          <button onClick={submitDocReview} disabled={submitting} data-testid={`kyc-doc-save-${d.id}`} className="px-2 py-1 text-[11px] font-semibold bg-[#0052CC] text-white rounded hover:bg-[#0747A6] disabled:opacity-60">
+                            {submitting ? <Loader2 className="h-3 w-3 animate-spin" /> : `Save ${docReviewing.decision}`}
+                          </button>
+                          <button onClick={() => setDocReviewing({ docId: null, decision: "approved", notes: "" })} className="px-2 py-1 text-[11px] border border-[#DFE1E6] rounded hover:bg-[#F4F5F7]">Cancel</button>
+                        </div>
+                      </div>
                     )}
                   </li>
                 );
@@ -182,51 +258,97 @@ export default function KycMirrorCard({ contactId }) {
         </div>
       )}
 
-      {/* Decision panel */}
+      {/* Two-tier decision panel */}
       <div className="px-5 py-4 border-t border-[#DFE1E6] bg-[#FAFBFC]" data-testid="kyc-decision">
-        {local_decision && (
-          <div className="mb-3 text-[11px] text-[#5E6C84]">
-            Last CRM decision: <b className="text-[#091E42] uppercase">{local_decision}</b>
-            {state.data.local_decision_at && <> · {relativeTime(state.data.local_decision_at)}</>}
-          </div>
-        )}
-        {!decisionForm.open ? (
-          <div className="flex flex-wrap gap-2">
-            <button data-testid="kyc-decide-approved" onClick={() => setDecisionForm({ open: true, decision: "approved", notes: "" })} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold bg-[#36B37E] text-white rounded hover:bg-[#006644]">
-              <CheckCircle2 className="h-4 w-4" /> Approve KYC
-            </button>
-            <button data-testid="kyc-decide-needs_more_info" onClick={() => setDecisionForm({ open: true, decision: "needs_more_info", notes: "" })} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold bg-[#FFAB00] text-white rounded hover:bg-[#974F0C]">
-              <AlertCircle className="h-4 w-4" /> Needs more info
-            </button>
-            <button data-testid="kyc-decide-rejected" onClick={() => setDecisionForm({ open: true, decision: "rejected", notes: "" })} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold bg-[#FF5630] text-white rounded hover:bg-[#BF2600]">
-              <XCircle className="h-4 w-4" /> Reject
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <div className="text-xs text-[#091E42] font-semibold">
-              {decisionForm.decision === "approved" && "Approving KYC. This advances the pipeline to verified and notifies the admin app."}
-              {decisionForm.decision === "needs_more_info" && "Marking as 'needs more info'. The admin app records your note as a review."}
-              {decisionForm.decision === "rejected" && "Rejecting KYC. The provider will be notified via the admin app."}
+        {(() => {
+          const c = state.contact || {};
+          const docReviews = c.agent_doc_reviews || {};
+          const docsTotal = (kyc.docs || []).length;
+          const docsReviewed = Object.keys(docReviews).length;
+          const allReviewed = docsTotal > 0 && docsReviewed >= docsTotal;
+          const kycStatus = c.kyc_status;
+
+          if (kycStatus === "verified") {
+            return (
+              <div className="flex items-center gap-2 text-sm font-semibold text-[#006644]" data-testid="kyc-state-verified">
+                <ShieldCheck className="h-5 w-5" /> Master Admin VERIFIED on {relativeTime(c.kyc_admin_decision_at)} by {c.kyc_admin_decision_by || "admin"}
+                {c.kyc_admin_decision_notes && <span className="text-[#5E6C84] font-normal">— {c.kyc_admin_decision_notes}</span>}
+              </div>
+            );
+          }
+          if (kycStatus === "rejected" && c.kyc_admin_decision_at) {
+            return (
+              <div className="flex items-center gap-2 text-sm font-semibold text-[#BF2600]" data-testid="kyc-state-rejected">
+                <ShieldAlert className="h-5 w-5" /> Master Admin REJECTED on {relativeTime(c.kyc_admin_decision_at)}
+                {c.kyc_admin_decision_notes && <span className="text-[#5E6C84] font-normal">— {c.kyc_admin_decision_notes}</span>}
+              </div>
+            );
+          }
+          if (kycStatus === "agent_reviewed") {
+            // Awaiting master admin
+            if (isAdmin) {
+              return (
+                <div className="space-y-2" data-testid="kyc-admin-final">
+                  <div className="flex items-center gap-2 text-sm text-[#091E42] flex-wrap">
+                    <Crown className="h-4 w-4 text-[#FFAB00]" />
+                    <b>Master Admin: final approval</b>
+                    <span className="text-[#5E6C84] text-xs">— sales rep finished review: {c.kyc_agent_summary?.approved || 0} approved, {c.kyc_agent_summary?.rejected || 0} rejected · {relativeTime(c.kyc_agent_completed_at)}</span>
+                  </div>
+                  {!adminForm.open ? (
+                    <div className="flex gap-2 flex-wrap">
+                      <button data-testid="kyc-admin-verify" onClick={() => setAdminForm({ open: true, decision: "verified", notes: "" })} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold bg-[#36B37E] text-white rounded hover:bg-[#006644]">
+                        <ShieldCheck className="h-4 w-4" /> Verify (final)
+                      </button>
+                      <button data-testid="kyc-admin-reject" onClick={() => setAdminForm({ open: true, decision: "rejected", notes: "" })} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold bg-[#FF5630] text-white rounded hover:bg-[#BF2600]">
+                        <ShieldAlert className="h-4 w-4" /> Reject
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <textarea data-testid="kyc-admin-notes" value={adminForm.notes} onChange={(e) => setAdminForm({ ...adminForm, notes: e.target.value })} placeholder="Admin notes (optional)…" rows={2} className="w-full px-3 py-2 text-sm border border-[#DFE1E6] rounded-md bg-white" />
+                      <div className="flex gap-2">
+                        <button onClick={adminFinalDecide} disabled={submitting} data-testid="kyc-admin-submit" className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold bg-[#0052CC] text-white rounded hover:bg-[#0747A6] disabled:opacity-60">
+                          {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} {adminForm.decision === "verified" ? "Verify" : "Reject"} as Master Admin
+                        </button>
+                        <button onClick={() => setAdminForm({ open: false, decision: "verified", notes: "" })} className="px-3 py-1.5 text-sm border border-[#DFE1E6] rounded hover:bg-[#F4F5F7]">Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            } else {
+              return (
+                <div className="flex items-center gap-2 text-sm text-[#0747A6]" data-testid="kyc-state-awaiting-admin">
+                  <Crown className="h-4 w-4" /> <b>Awaiting Master Admin final approval</b>
+                  <span className="text-[#5E6C84]">— you submitted {relativeTime(c.kyc_agent_completed_at)} ({c.kyc_agent_summary?.approved || 0} ✓ / {c.kyc_agent_summary?.rejected || 0} ✗)</span>
+                </div>
+              );
+            }
+          }
+          // Default: sales rep reviewing
+          return (
+            <div className="space-y-2" data-testid="kyc-state-agent-reviewing">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="text-sm text-[#091E42]">
+                  <b>Sales rep review:</b> <span className="text-[#5E6C84]">{docsReviewed} of {docsTotal} documents decided</span>
+                </div>
+                <button
+                  onClick={submitForAdmin}
+                  disabled={!allReviewed || submitting}
+                  data-testid="kyc-submit-for-admin"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold bg-[#0052CC] text-white rounded hover:bg-[#0747A6] disabled:opacity-60 disabled:cursor-not-allowed"
+                  title={allReviewed ? "Submit to Master Admin for final approval" : `Review all ${docsTotal} documents first`}
+                >
+                  {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crown className="h-4 w-4" />}
+                  Submit to Master Admin
+                </button>
+              </div>
+              {!allReviewed && docsTotal > 0 && (
+                <div className="text-[11px] text-[#5E6C84]">Approve or reject each document above. Once all {docsTotal} are decided, you can submit for final approval.</div>
+              )}
             </div>
-            <textarea
-              data-testid="kyc-decision-notes"
-              value={decisionForm.notes}
-              onChange={(e) => setDecisionForm({ ...decisionForm, notes: e.target.value })}
-              placeholder="Reviewer notes (visible in the admin app)…"
-              rows={3}
-              className="w-full px-3 py-2 text-sm border border-[#DFE1E6] rounded-md bg-white focus:border-[#4C9AFF] outline-none"
-            />
-            <div className="flex gap-2">
-              <button data-testid="kyc-decision-submit" onClick={submitDecision} disabled={submitting} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold bg-[#0052CC] text-white rounded hover:bg-[#0747A6] disabled:opacity-60">
-                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Submit decision
-              </button>
-              <button onClick={() => setDecisionForm({ open: false, decision: "approved", notes: "" })} className="px-3 py-1.5 text-sm border border-[#DFE1E6] rounded hover:bg-[#F4F5F7]">
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
+          );
+        })()}
         {state.err && <div className="mt-2 text-xs text-[#FF5630]" data-testid="kyc-err">{state.err}</div>}
       </div>
     </div>

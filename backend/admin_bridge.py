@@ -99,6 +99,9 @@ OUTBOUND_EVENTS = {
     "crm.lead.created",
     "crm.lead.assigned",
     "crm.kyc.reviewed",
+    "crm.kyc.doc_reviewed",
+    "crm.kyc.agent_completed",
+    "crm.kyc.admin_verified",
     "crm.activity.logged",
     "crm.deal.closed",
     "crm.note.added",
@@ -108,12 +111,15 @@ OUTBOUND_EVENTS = {
 # endpoint actually accepts. Their endpoint taxonomy as of 2026-06-12:
 #   ping, lead.created, user.upsert, user.suspended, kyc.note_added, kyc.review_requested, deal.closed
 OUTBOUND_NAME_MAP = {
-    "crm.lead.created":    "lead.created",
-    "crm.lead.assigned":   "user.upsert",       # lead reassignment = user record upsert in admin
-    "crm.activity.logged": "user.upsert",       # touchpoint mirrors as user upsert in admin
-    "crm.kyc.reviewed":    "kyc.note_added",    # reviewer's decision becomes a KYC note (needs kyc_id)
-    "crm.deal.closed":     "deal.closed",
-    "crm.note.added":      "user.upsert",       # general CRM note → user upsert (KYC-specific notes go via kyc.reviewed)
+    "crm.lead.created":         "lead.created",
+    "crm.lead.assigned":        "user.upsert",
+    "crm.activity.logged":      "user.upsert",
+    "crm.kyc.reviewed":         "kyc.note_added",
+    "crm.kyc.doc_reviewed":     "kyc.note_added",
+    "crm.kyc.agent_completed":  "kyc.review_requested",   # signals admin to do final review
+    "crm.kyc.admin_verified":   "kyc.note_added",          # final master-admin verification
+    "crm.deal.closed":          "deal.closed",
+    "crm.note.added":           "user.upsert",
 }
 
 MAX_ATTEMPTS = 6

@@ -52,6 +52,16 @@ Removed Hospital/Clinic/Pathology provider portals. Live Fleet Map (Leaflet) add
 - **Targets** — `GET /api/agent/targets` returns month-to-date actuals vs targets.
 - Tested: 23/23 backend pytest + 17/17 frontend playwright (after fixing /agent route guard).
 
+### Iter 14 (2026-06-12) — Phase 6.5 Two-tier KYC workflow (sales rep → master admin)
+- **Per-document review by sales rep**: new endpoint `POST /api/contacts/{id}/kyc-doc-review` accepts `{doc_id, decision, notes}`, persists per-doc decisions on `contact.agent_doc_reviews`, emits `crm.kyc.doc_reviewed`. UI: each KYC doc gets inline ✓ Approve / ✗ Reject buttons + optional notes; once decided, shows the agent's verdict in green/red.
+- **Sales rep submission**: `POST /api/contacts/{id}/kyc-submit-for-admin` marks the lead `kyc_status='agent_reviewed'`, sets `kyc_agent_completed_at` + `kyc_agent_summary{approved,rejected,total}`, emits `crm.kyc.agent_completed` (maps to admin app's `kyc.review_requested`). "Submit to Master Admin" button is disabled until all docs are decided.
+- **Master admin final approval**: `POST /api/contacts/{id}/kyc-admin-final` accepts `{decision: verified|rejected, notes}`. On `verified`, pipeline → `verified`. Emits `crm.kyc.admin_verified`.
+- **Master admin queue + sidebar badge**: `GET /api/admin/kyc-queue` lists every lead with `kyc_status='agent_reviewed'`, `GET /api/admin/kyc-queue-count` is the cheap badge counter (polled every 30s from the sidebar). New page `/admin/kyc-queue` with a list view sorted by oldest-submitted first.
+- **Master admin notification**: every inbound `provider.signed_up` webhook now creates an in-app notification with the assigned agent name so admins see new signups.
+- **Outbound field rename fix**: admin app's note schema uses `text` + `author_phone` (we were sending `notes` + `reviewer_phone`); now sending both naming conventions for safety. Round-trip confirmed: latest note in upstream KYC shows `text='MASTER ADMIN FINAL: VERIFIED — ...' author_phone='9873117605' role='admin'`. Old events stuck with empty text are historical only.
+- **9 outbound events live** (was 6): `crm.lead.created`, `crm.lead.assigned`, `crm.activity.logged`, `crm.kyc.reviewed`, `crm.kyc.doc_reviewed`, `crm.kyc.agent_completed`, `crm.kyc.admin_verified`, `crm.deal.closed`, `crm.note.added` — all delivering 200 OK.
+- Verified end-to-end: Rohan reviewed Abhishek's doc → submitted → queue showed 1 item with badge=1 → Master Admin verified → pipeline=`verified`, badge=0.
+
 ### Iter 13 (2026-06-12) — Phase 6 KYC Mirror (read-side complete)
 - Admin team shipped 3 endpoints we needed: `GET /api/admin/users` (✅), `GET /api/admin/users/{id}/kyc` (✅, full payload as spec'd, includes kyc_id), and `kyc.note_added` now accepts `phone` fallback (✅). User-detail GET still 500s but isn't needed since KYC payload returns the upstream `user_id`.
 - New backend helpers in `admin_bridge.py`: `admin_api_get`, `find_admin_user_by_phone` (with role priority — provider > customer when phones collide), `fetch_kyc`.

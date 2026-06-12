@@ -24,6 +24,7 @@ import Leaderboard from "./pages/Leaderboard";
 import ForgotPassword from "./pages/ForgotPassword";
 import SecuritySetup from "./pages/SecuritySetup";
 import Settings from "./pages/Settings";
+import KycAdminQueue from "./pages/KycAdminQueue";
 import { Toaster } from "sonner";
 import { registerSW } from "./lib/registerSW";
 
@@ -82,6 +83,7 @@ function App() {
           <Route path="/analytics" element={<RequireAuth adminOnly><Analytics /></RequireAuth>} />
           <Route path="/team" element={<RequireAuth adminOnly><Team /></RequireAuth>} />
           <Route path="/team/:id" element={<RequireAuth adminOnly><TeamMemberDetail /></RequireAuth>} />
+          <Route path="/admin/kyc-queue" element={<RequireAuth adminOnly><KycAdminQueue /></RequireAuth>} />
 
           {/* Shared (admins + providers + sales reps) */}
           <Route path="/tasks" element={<RequireAuth><Tasks /></RequireAuth>} />

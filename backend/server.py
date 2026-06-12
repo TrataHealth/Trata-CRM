@@ -1018,12 +1018,18 @@ async def review_kyc(contact_id: str, data: KycReviewBody, current=Depends(get_c
     await ab.queue_outbound(db, "crm.kyc.reviewed", {
         "phone": c.get("phone"),
         "contact_name": c["name"],
-        "kyc_id": c.get("kyc_id"),                  # cached from /api/contacts/{id}/kyc if set
+        "kyc_id": c.get("kyc_id"),
         "upstream_user_id": c.get("upstream_user_id"),
         "decision": data.decision,
+        # Admin-app expects these specific field names on its note schema:
+        "text": data.notes or "",
+        "author_phone": current.get("phone"),
+        "author_role": current.get("role") or "sales_rep",
+        "author_name": current.get("name"),
+        # Keep both naming conventions for safety:
+        "notes": data.notes,
         "reviewer_phone": current.get("phone"),
         "reviewer_name": current.get("name"),
-        "notes": data.notes,
         "reviewed_at": now_iso(),
     })
     c2 = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
@@ -1091,6 +1097,144 @@ async def get_contact_kyc(contact_id: str, refresh: bool = False, current=Depend
         "local_decision_at": c.get("kyc_reviewed_at"),
         "local_decision_notes": c.get("kyc_review_notes"),
     }
+
+
+class KycDocReviewBody(BaseModel):
+    doc_id: str
+    decision: str   # "approved" | "rejected"
+    notes: Optional[str] = None
+
+
+@api.post("/contacts/{contact_id}/kyc-doc-review")
+async def review_kyc_doc(contact_id: str, data: KycDocReviewBody, current=Depends(get_current_user)):
+    """Per-document review by sales rep. Stored locally in contact.agent_doc_reviews; emitted as kyc.note_added."""
+    if not is_internal(current):
+        raise HTTPException(status_code=403, detail="Internal users only")
+    if data.decision not in {"approved", "rejected"}:
+        raise HTTPException(status_code=400, detail="decision must be approved|rejected")
+    c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if is_sales_rep(current) and c.get("assigned_agent_id") != current["id"]:
+        raise HTTPException(status_code=403, detail="Not your lead")
+    reviews = c.get("agent_doc_reviews") or {}
+    reviews[data.doc_id] = {
+        "decision": data.decision,
+        "notes": data.notes,
+        "reviewer_phone": current.get("phone"),
+        "reviewer_name": current.get("name"),
+        "reviewed_at": now_iso(),
+    }
+    await db.contacts.update_one({"id": contact_id}, {"$set": {"agent_doc_reviews": reviews, "updated_at": now_iso()}})
+    await ab.queue_outbound(db, "crm.kyc.doc_reviewed", {
+        "phone": c.get("phone"),
+        "kyc_id": c.get("kyc_id"),
+        "upstream_user_id": c.get("upstream_user_id"),
+        "doc_id": data.doc_id,
+        "decision": data.decision,
+        "text": f"[Doc {data.doc_id[:8]}] {data.decision.upper()}" + (f" — {data.notes}" if data.notes else ""),
+        "author_phone": current.get("phone"),
+        "author_role": current.get("role") or "sales_rep",
+        "author_name": current.get("name"),
+        "reviewed_at": now_iso(),
+    })
+    return {"success": True, "agent_doc_reviews": reviews}
+
+
+@api.post("/contacts/{contact_id}/kyc-submit-for-admin")
+async def submit_kyc_for_admin_final(contact_id: str, current=Depends(get_current_user)):
+    """Sales rep declares 'I'm done reviewing all docs — please final-approve, master admin.'
+    Sets contact.kyc_status='agent_reviewed' and emits crm.kyc.agent_completed for the admin queue."""
+    if not is_internal(current):
+        raise HTTPException(status_code=403, detail="Internal users only")
+    c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if is_sales_rep(current) and c.get("assigned_agent_id") != current["id"]:
+        raise HTTPException(status_code=403, detail="Not your lead")
+    reviews = c.get("agent_doc_reviews") or {}
+    approved = sum(1 for r in reviews.values() if r.get("decision") == "approved")
+    rejected = sum(1 for r in reviews.values() if r.get("decision") == "rejected")
+    await db.contacts.update_one({"id": contact_id}, {"$set": {
+        "kyc_status": "agent_reviewed",
+        "kyc_agent_completed_at": now_iso(),
+        "kyc_agent_summary": {"approved": approved, "rejected": rejected, "total": len(reviews)},
+        "updated_at": now_iso(),
+    }})
+    await ab.queue_outbound(db, "crm.kyc.agent_completed", {
+        "phone": c.get("phone"),
+        "name": c.get("name"),
+        "kyc_id": c.get("kyc_id"),
+        "upstream_user_id": c.get("upstream_user_id"),
+        "agent_phone": current.get("phone"),
+        "agent_name": current.get("name"),
+        "summary": {"approved": approved, "rejected": rejected, "total": len(reviews)},
+        "submitted_at": now_iso(),
+    })
+    return {"success": True, "summary": {"approved": approved, "rejected": rejected, "total": len(reviews)}}
+
+
+class KycAdminFinalBody(BaseModel):
+    decision: str   # "verified" | "rejected"
+    notes: Optional[str] = None
+
+
+@api.post("/contacts/{contact_id}/kyc-admin-final")
+async def kyc_admin_final(contact_id: str, data: KycAdminFinalBody, current=Depends(get_current_user)):
+    """Master admin final approval/rejection after sales rep submits."""
+    if not (current.get("is_master_admin") or current.get("role") == "admin"):
+        raise HTTPException(status_code=403, detail="Master admin only")
+    if data.decision not in {"verified", "rejected"}:
+        raise HTTPException(status_code=400, detail="decision must be verified|rejected")
+    c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    new_stage = "verified" if data.decision == "verified" else c.get("pipeline_stage")
+    await db.contacts.update_one({"id": contact_id}, {"$set": {
+        "kyc_status": data.decision,
+        "kyc_admin_decision_at": now_iso(),
+        "kyc_admin_decision_notes": data.notes,
+        "kyc_admin_decision_by": current.get("name") or current.get("phone"),
+        "pipeline_stage": new_stage,
+        "updated_at": now_iso(),
+    }})
+    await ab.queue_outbound(db, "crm.kyc.admin_verified", {
+        "phone": c.get("phone"),
+        "name": c.get("name"),
+        "kyc_id": c.get("kyc_id"),
+        "upstream_user_id": c.get("upstream_user_id"),
+        "decision": data.decision,
+        "text": f"MASTER ADMIN FINAL: {data.decision.upper()}" + (f" — {data.notes}" if data.notes else ""),
+        "author_phone": current.get("phone"),
+        "author_role": "admin",
+        "author_name": current.get("name"),
+        "reviewed_at": now_iso(),
+    })
+    c2 = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    return {"success": True, "contact": c2}
+
+
+@api.get("/admin/kyc-queue")
+async def kyc_admin_queue(current=Depends(get_current_user)):
+    """Master admin: list of leads awaiting final approval (kyc_status='agent_reviewed')."""
+    if not (current.get("is_master_admin") or current.get("role") == "admin"):
+        raise HTTPException(status_code=403, detail="Master admin only")
+    items = await db.contacts.find(
+        {"kyc_status": "agent_reviewed"},
+        {"_id": 0, "id": 1, "name": 1, "phone": 1, "city": 1, "state": 1, "type": 1,
+         "assigned_agent_name": 1, "assigned_agent_id": 1, "kyc_id": 1,
+         "kyc_agent_completed_at": 1, "kyc_agent_summary": 1, "agent_doc_reviews": 1,
+         "pipeline_stage": 1, "updated_at": 1},
+    ).sort("kyc_agent_completed_at", 1).to_list(200)
+    return {"items": items, "total": len(items)}
+
+
+@api.get("/admin/kyc-queue-count")
+async def kyc_admin_queue_count(current=Depends(get_current_user)):
+    """Cheap counter for the sidebar badge."""
+    if not (current.get("is_master_admin") or current.get("role") == "admin"):
+        return {"count": 0}
+    return {"count": await db.contacts.count_documents({"kyc_status": "agent_reviewed"})}
 
 
 # ---------- Team ----------
@@ -2969,6 +3113,17 @@ async def _handle_admin_event(body: AdminInboundBody) -> Dict[str, Any]:
                 "avatar": None,
             }
             await db.contacts.insert_one(contact.copy())
+            # Notify master admin (in-app notification + outbound to admin app for cross-channel)
+            await db.notifications.insert_one({
+                "id": str(uuid.uuid4()),
+                "kind": "new_provider_signup",
+                "title": f"New {d.get('type','provider')} signed up — {contact['name']}",
+                "body": f"Auto-assigned to {contact.get('assigned_agent_name') or 'no agent'} (city: {d.get('city') or '—'}). Review and reassign if needed.",
+                "audience": "admin",
+                "contact_id": contact["id"],
+                "created_at": now_iso(),
+                "read": False,
+            })
             return {"action": f"created_lead_in_stage_{stage}", "contact_id": contact["id"]}
         await db.contacts.update_one({"id": contact["id"]}, {"$set": {
             "pipeline_stage": stage,

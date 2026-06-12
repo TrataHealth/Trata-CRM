@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity,
   BarChart3, UserCog, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
-  Building2, ClipboardList, IdCard, Wallet, Compass, Trophy, Settings as SettingsIcon,
+  Building2, ClipboardList, IdCard, Wallet, Compass, Trophy, Settings as SettingsIcon, ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import api from "../lib/api";
@@ -13,6 +13,7 @@ const ADMIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { to: "/contacts", label: "Trata Users", icon: Users },
   { to: "/pipeline", label: "Pipeline", icon: GitBranch },
+  { to: "/admin/kyc-queue", label: "KYC Final Approval", icon: ShieldCheck, badgeKey: "kyc_admin_queue" },
   { to: "/activities", label: "Activities", icon: Activity },
   { to: "/tasks", label: "Tasks", icon: ListChecks },
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
@@ -37,7 +38,7 @@ const PROVIDER_NAV = [
 ];
 
 export default function Layout({ children }) {
-  const { user, logout, isProvider, isSalesRep } = useAuth();
+  const { user, logout, isProvider, isSalesRep, isAdmin } = useAuth();
   const NAV = isProvider ? PROVIDER_NAV : isSalesRep ? SALES_NAV : ADMIN_NAV;
   const navigate = useNavigate();
   const [query, setQuery] = React.useState("");
@@ -59,6 +60,22 @@ export default function Layout({ children }) {
   }, [isProvider]);
 
   React.useEffect(() => { loadSync(); }, [loadSync]);
+
+  // Sidebar live badges (KYC admin queue, etc.) — admins only, poll every 30s
+  const [navBadges, setNavBadges] = React.useState({ kyc_admin_queue: 0 });
+  React.useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const { data } = await api.get("/admin/kyc-queue-count");
+        if (!cancelled) setNavBadges((b) => ({ ...b, kyc_admin_queue: data.count || 0 }));
+      } catch {}
+    };
+    tick();
+    const t = setInterval(tick, 30000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [isAdmin]);
 
   const runSync = async () => {
     setSyncing(true);
@@ -135,7 +152,12 @@ export default function Layout({ children }) {
               }
             >
               <n.icon className="h-4 w-4" strokeWidth={1.75} />
-              <span className="font-medium">{n.label}</span>
+              <span className="font-medium flex-1">{n.label}</span>
+              {n.badgeKey === "kyc_admin_queue" && navBadges.kyc_admin_queue > 0 && (
+                <span data-testid="kyc-queue-badge" className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[10px] font-bold bg-[#FF5630] text-white rounded-full">
+                  {navBadges.kyc_admin_queue}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
