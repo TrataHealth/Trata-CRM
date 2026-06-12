@@ -15,6 +15,15 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
+### Iter 24 (2026-06-12) — Onboarding + AI insights opened to staff
+- **Backend permissions**: `POST /admin/onboard-provider` now allows all internal staff (admin, manager, sales reps, ops reps). When a sales rep onboards a provider, the new contact is auto-assigned to that rep (instead of territory-pick).
+- **Backend** `/api/agent/dashboard?range=…` — same 6 range options as the master dashboard (`7d`, `30d`, `3m`, `6m`, `12m`, `all`). KPIs are now windowed: `onboarded_in_window`, `window_activities`. Stale-leads remains a fixed 7-day SLA.
+- **Backend** `POST /api/agent/ai-insights` — Claude Sonnet 4.6-powered coaching briefing scoped to the agent's window. Reuses the agent dashboard as source-of-truth. Returns markdown with 4 sections (Headline · What's working · What's at risk · Do next). Admin/manager can pass `agent_id` to inspect any rep; sales reps see only themselves.
+- **Frontend** `AgentDashboard.jsx` — range pill (7D/30D/3M/6M/12M/All), purple "AI insight" button, full AI coach drawer with markdown rendering. KPI label updates to reflect the selected window. Testids: `agent-range-filter`, `agent-range-{key}`, `agent-ai-insights-{btn,panel,content}`.
+- **Frontend** `AgentLeads.jsx` — "Onboard provider" button (testid `agent-leads-onboard-btn`) added to the page header. Reuses the existing `OnboardProviderModal`.
+- **Refactor**: extracted the markdown renderer + RANGE_OPTIONS into shared `/app/frontend/src/lib/insights.jsx` so both dashboards use the same helper.
+- Verified end-to-end via curl + Playwright screenshots — Claude returned a sharp, agent-specific coaching briefing for Rohan; My Leads onboard modal opens with full form; sales-rep onboarding auto-assigns the new lead to the rep.
+
 ### Iter 23 (2026-06-12) — Onboard new provider from CRM
 - **Backend** `POST /api/admin/onboard-provider` — admin/manager-only. Validates role (must be one of ambulance_provider, hospital, doctor, paramedic, pathologist, pharmacy), 10-digit phone, and name. Duplicate-phone returns 409. Creates a CRM contact with `pipeline_stage="contacted"`, `kyc_status="pending"`, auto-assigns by territory, logs a `provider_onboarded` activity, and emits the outbound `crm.lead.created` event so the Trata Admin App webhook handler sees it.
 - **Frontend** `OnboardProviderModal.jsx` — sleek modal with role-chip grid + common fields (name, phone, email, city, state, address, PAN, GST) + per-role extras (ambulance: vehicle count/reg/licence; hospital: legal name/specialities/licence; doctor: specialisation/MCI #; paramedic, pathologist, pharmacy variants). "Onboard provider" button (testid `contacts-onboard-btn`) added to Trata Users page header, visible to admin/manager only.

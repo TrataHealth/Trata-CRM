@@ -9,9 +9,10 @@ import { PIPELINE_STAGES, relativeTime } from "../lib/constants";
 import { Avatar } from "./Contacts";
 import {
   Activity, Clock, AlertTriangle, CheckCircle2, Phone, Plus, Briefcase, MapPin,
-  ListChecks, Loader2, Sparkles,
+  ListChecks, Loader2, Sparkles, X,
 } from "lucide-react";
 import QuickLogModal from "../components/QuickLogModal";
+import { renderInsightsMarkdown, RANGE_OPTIONS } from "../lib/insights";
 
 const STAGE_COLOR = Object.fromEntries(PIPELINE_STAGES.map((s) => [s.value, s.color]));
 const STAGE_LABEL = Object.fromEntries(PIPELINE_STAGES.map((s) => [s.value, s.label]));
@@ -40,16 +41,34 @@ export default function AgentDashboard() {
   const [mapData, setMapData] = useState(null);
   const [quickLogLead, setQuickLogLead] = useState(null);
   const [quickLogOpen, setQuickLogOpen] = useState(false);
+  const [range, setRange] = useState("7d");
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [ai, setAi] = useState({ open: false, loading: false, markdown: "", error: "" });
 
-  const load = async () => {
-    const [d, m] = await Promise.all([
-      api.get("/agent/dashboard"),
-      api.get("/agent/leads/map"),
-    ]);
-    setDash(d.data);
-    setMapData(m.data);
+  const load = async (r = range) => {
+    setStatsLoading(true);
+    try {
+      const [d, m] = await Promise.all([
+        api.get("/agent/dashboard", { params: { range: r } }),
+        api.get("/agent/leads/map"),
+      ]);
+      setDash(d.data);
+      setMapData(m.data);
+    } finally {
+      setStatsLoading(false);
+    }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(range); /* eslint-disable-next-line */ }, [range]);
+
+  const generateInsights = async () => {
+    setAi({ open: true, loading: true, markdown: "", error: "" });
+    try {
+      const { data } = await api.post("/agent/ai-insights", { range });
+      setAi({ open: true, loading: false, markdown: data.markdown || "", error: "" });
+    } catch (e) {
+      setAi({ open: true, loading: false, markdown: "", error: e?.response?.data?.detail || "Could not generate insights" });
+    }
+  };
 
   if (!dash) return <div className="p-8 text-sm text-[#5E6C84]" data-testid="agent-dashboard-loading">Loading your day…</div>;
 
@@ -62,21 +81,77 @@ export default function AgentDashboard() {
         <div>
           <div className="overline">Sales Agent · {user?.name?.split(" ")[0]}</div>
           <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">My Day</h1>
-          <p className="text-sm text-[#5E6C84] mt-1">Onboarding healthcare providers onto the Trata app. Plan your route, log every touch.</p>
+          <p className="text-sm text-[#5E6C84] mt-1">{dash.range?.label || "Onboarding healthcare providers onto the Trata app. Plan your route, log every touch."}</p>
         </div>
-        <button
-          onClick={() => openQuickLog()}
-          data-testid="quick-log-fab-desktop"
-          className="hidden sm:flex items-center gap-2 px-4 py-2 bg-[#0052CC] hover:bg-[#0747A6] text-white rounded-md text-sm font-semibold shadow-sm">
-          <Plus className="h-4 w-4" /> Log Activity
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Range filter pill */}
+          <div className="inline-flex items-center bg-white border border-[#DFE1E6] rounded-full p-0.5 shadow-sm" data-testid="agent-range-filter">
+            {RANGE_OPTIONS.map((opt) => {
+              const selected = range === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  onClick={() => setRange(opt.value)}
+                  disabled={statsLoading}
+                  data-testid={`agent-range-${opt.value}`}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-colors ${
+                    selected ? "bg-[#0052CC] text-white" : "text-[#42526E] hover:text-[#091E42] hover:bg-[#F4F5F7]"
+                  } disabled:opacity-60`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+          {/* AI insights button */}
+          <button
+            onClick={generateInsights}
+            disabled={ai.loading}
+            data-testid="agent-ai-insights-btn"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-full text-white bg-gradient-to-r from-[#6554C0] to-[#403294] hover:opacity-95 disabled:opacity-60 shadow-sm"
+          >
+            {ai.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            {ai.loading ? "Thinking…" : "AI insight"}
+          </button>
+          <button
+            onClick={() => openQuickLog()}
+            data-testid="quick-log-fab-desktop"
+            className="hidden sm:flex items-center gap-2 px-4 py-2 bg-[#0052CC] hover:bg-[#0747A6] text-white rounded-md text-sm font-semibold shadow-sm">
+            <Plus className="h-4 w-4" /> Log Activity
+          </button>
+        </div>
       </div>
+
+      {/* AI insights drawer */}
+      {ai.open && (
+        <div className="bg-white border border-[#6554C0]/30 rounded-md shadow-sm overflow-hidden" data-testid="agent-ai-insights-panel">
+          <div className="px-5 py-3 border-b border-[#DFE1E6] flex items-center justify-between bg-[#EAE6FF]">
+            <div className="flex items-center gap-2 text-[#403294] font-heading font-bold text-sm">
+              <Sparkles className="h-4 w-4" /> AI coach — {dash.range?.label || range}
+            </div>
+            <button onClick={() => setAi({ open: false, loading: false, markdown: "", error: "" })} className="text-[#5E6C84] hover:text-[#091E42]" data-testid="agent-ai-insights-close" aria-label="Close insight panel">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="px-5 py-4 text-sm text-[#091E42] leading-relaxed">
+            {ai.loading && (
+              <div className="flex items-center gap-2 text-[#5E6C84]" data-testid="agent-ai-insights-loading">
+                <Loader2 className="h-4 w-4 animate-spin text-[#6554C0]" /> Coaching insights for {dash.range?.label || range}…
+              </div>
+            )}
+            {ai.error && <div className="text-[#BF2600]" data-testid="agent-ai-insights-error">{ai.error}</div>}
+            {!ai.loading && !ai.error && ai.markdown && (
+              <div data-testid="agent-ai-insights-content">{renderInsightsMarkdown(ai.markdown)}</div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* KPI strip */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 lg:gap-4" data-testid="agent-kpis">
         <KPI icon={Briefcase} label="My Leads" value={k.total_leads} sub="assigned to you" accent="#0052CC" testid="kpi-leads" />
         <KPI icon={Activity} label="Today's Touches" value={k.today_activities} sub="activities logged today" accent="#36B37E" testid="kpi-today" />
-        <KPI icon={CheckCircle2} label="Onboarded · 7d" value={k.onboarded_this_week} sub="signed up on app" accent="#FFAB00" testid="kpi-onboarded" />
+        <KPI icon={CheckCircle2} label={`Onboarded · ${dash.range?.label?.replace("Last ", "") || "7 days"}`} value={k.onboarded_in_window ?? k.onboarded_this_week} sub="signed up on app" accent="#FFAB00" testid="kpi-onboarded" />
         <KPI icon={AlertTriangle} label="Stale Leads" value={k.stale_leads} sub="no touch in 7+ days" accent="#FF5630" testid="kpi-stale" />
         <KPI icon={ListChecks} label="Pending Tasks" value={dash.today_tasks.length} sub="due today / overdue" accent="#6554C0" testid="kpi-tasks" />
       </div>

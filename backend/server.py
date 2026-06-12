@@ -852,12 +852,11 @@ PROVIDER_ROLES_ALLOWED = {
 
 @api.post("/admin/onboard-provider")
 async def onboard_provider(payload: Dict[str, Any] = Body(...), current=Depends(get_current_user)):
-    """Master admin / manager creates a new provider lead in the CRM. The contact is
-    persisted locally and pushed to the Trata Admin App via the outbound webhook bridge
-    (crm.lead.created → user.upsert). After delivery, the provider can OTP-login to the
-    Provider App with the same phone."""
-    if not is_admin_or_manager(current):
-        raise HTTPException(status_code=403, detail="Only admins/managers can onboard providers")
+    """Internal staff (admin, manager, sales rep, ops rep) create a new provider lead from
+    the CRM. The contact is persisted locally and pushed to the Trata Admin App via the
+    outbound webhook bridge (crm.lead.created → user.upsert)."""
+    if not is_internal(current):
+        raise HTTPException(status_code=403, detail="Internal staff only")
 
     role = (payload.get("role") or "").strip()
     if role not in PROVIDER_ROLES_ALLOWED:
@@ -887,8 +886,12 @@ async def onboard_provider(payload: Dict[str, Any] = Body(...), current=Depends(
         if v not in (None, ""):
             extras[k] = v
 
-    # Auto-assign by territory
-    agent = await _pick_agent_for_territory(city)
+    # Auto-assignment rule: if a sales rep is onboarding, the contact is assigned to them.
+    # Otherwise (admin/manager) auto-assign by territory.
+    if is_sales_rep(current):
+        agent = {"id": current["id"], "name": current.get("name") or current.get("phone")}
+    else:
+        agent = await _pick_agent_for_territory(city)
 
     contact_id = str(uuid.uuid4())
     new_contact = {
@@ -2335,28 +2338,31 @@ async def quick_log(data: QuickLogActivity, current=Depends(get_current_user)):
 
 
 @api.get("/agent/dashboard")
-async def agent_dashboard(current=Depends(get_current_user)):
+async def agent_dashboard(range_key: str = Query("7d", alias="range"), current=Depends(get_current_user)):
     if not is_sales_rep(current):
         raise HTTPException(status_code=403, detail="Sales rep only")
     aid = current["id"]
+    since_iso, range_label, days_back = _range_window(range_key)
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    # "Stale" is fixed at 7 days regardless of the dashboard range — that's the SLA.
+    stale_cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    window_start = since_iso or "1970-01-01T00:00:00+00:00"
 
     total_leads = await db.contacts.count_documents({"assigned_agent_id": aid})
     stale_leads = await db.contacts.count_documents({
         "assigned_agent_id": aid,
         "pipeline_stage": {"$in": ["lead", "contacted"]},
-        "$or": [{"updated_at": {"$lt": week_ago}}, {"updated_at": {"$exists": False}}],
+        "$or": [{"updated_at": {"$lt": stale_cutoff}}, {"updated_at": {"$exists": False}}],
     })
     by_stage = {}
     for stage in ["lead", "contacted", "kyc_submitted", "verified", "active", "churned"]:
         by_stage[stage] = await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": stage})
 
     today_activities = await db.activities.count_documents({"agent_id": aid, "created_at": {"$gte": today_start}})
-    week_activities = await db.activities.count_documents({"agent_id": aid, "created_at": {"$gte": week_ago}})
-    onboarded_this_week = await db.contacts.count_documents({
+    window_activities = await db.activities.count_documents({"agent_id": aid, "created_at": {"$gte": window_start}})
+    onboarded_in_window = await db.contacts.count_documents({
         "assigned_agent_id": aid, "pipeline_stage": {"$in": ["verified", "active"]},
-        "updated_at": {"$gte": week_ago},
+        "updated_at": {"$gte": window_start},
     })
 
     # Today's pending tasks
@@ -2374,23 +2380,90 @@ async def agent_dashboard(current=Depends(get_current_user)):
     # Stale leads needing attention
     stale = await db.contacts.find(
         {"assigned_agent_id": aid, "pipeline_stage": {"$in": ["lead", "contacted"]},
-         "$or": [{"updated_at": {"$lt": week_ago}}, {"updated_at": {"$exists": False}}]},
+         "$or": [{"updated_at": {"$lt": stale_cutoff}}, {"updated_at": {"$exists": False}}]},
         {"_id": 0, "id": 1, "name": 1, "type": 1, "phone": 1, "city": 1, "pipeline_stage": 1, "updated_at": 1, "specialization": 1},
     ).sort("created_at", 1).limit(10).to_list(10)
 
     return {
+        "range": {"key": range_key, "label": range_label, "days": days_back, "since": since_iso},
         "kpis": {
             "total_leads": total_leads,
             "stale_leads": stale_leads,
             "today_activities": today_activities,
-            "week_activities": week_activities,
-            "onboarded_this_week": onboarded_this_week,
+            "window_activities": window_activities,
+            "week_activities": window_activities,             # backward-compat alias
+            "onboarded_in_window": onboarded_in_window,
+            "onboarded_this_week": onboarded_in_window,        # backward-compat alias
         },
         "by_stage": by_stage,
         "today_tasks": tasks,
         "hot_leads": hot,
         "stale_leads_list": stale,
     }
+
+
+@api.post("/agent/ai-insights")
+async def agent_ai_insights(payload: Dict[str, Any] = Body(default={}), current=Depends(get_current_user)):
+    """Per-agent AI insights for the agent's currently-selected dashboard range.
+    Uses the agent's own dashboard data; admins/managers can also call this."""
+    if not is_internal(current):
+        raise HTTPException(status_code=403, detail="Internal staff only")
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=503, detail="AI not configured (EMERGENT_LLM_KEY missing)")
+    range_key = (payload.get("range") or "7d").lower()
+    if range_key not in RANGE_TO_DAYS:
+        range_key = "7d"
+    # Sales reps see their own data; admins/managers can pass an agent_id to inspect any rep.
+    target_id = payload.get("agent_id") or current["id"]
+    if is_sales_rep(current) and target_id != current["id"]:
+        raise HTTPException(status_code=403, detail="Sales reps can only inspect their own data")
+    target = await db.crm_users.find_one({"id": target_id}, {"_id": 0, "id": 1, "name": 1, "role": 1, "phone": 1, "is_master_admin": 1}) if target_id != current["id"] else current
+    if not target:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    # Borrow the same windowed snapshot the dashboard uses
+    snap = await agent_dashboard(range_key=range_key, current=target)  # type: ignore[arg-type]
+    recent = await db.activities.find(
+        {"agent_id": target["id"]},
+        {"_id": 0, "title": 1, "subtype": 1, "outcome": 1, "contact_name": 1, "created_at": 1},
+    ).sort("created_at", -1).limit(20).to_list(20)
+    context_obj = {
+        "agent_name": target.get("name") or "this agent",
+        "range_label": snap["range"]["label"],
+        "kpis": snap["kpis"],
+        "by_stage": snap["by_stage"],
+        "today_tasks_count": len(snap["today_tasks"]),
+        "hot_leads_count": len(snap["hot_leads"]),
+        "stale_leads_count": len(snap["stale_leads_list"]),
+        "recent_activity_titles": [(a.get("title") or a.get("subtype") or "activity") for a in recent[:15]],
+    }
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"agent-insights-{target['id']}-{range_key}-{datetime.now(timezone.utc).date()}",
+            system_message=(
+                "You are a sales coach for healthcare-provider onboarding agents at TrataHealth. "
+                "Given a JSON snapshot of one sales rep's pipeline for a chosen time range, write a "
+                "SHORT briefing that the rep (or their manager) can act on in the next 48 hours. "
+                "Be specific to the numbers — never invent. If the dataset is small, say so honestly "
+                "and recommend what to instrument next. End with one concrete next action."
+            ),
+        ).with_model("anthropic", "claude-sonnet-4-6")
+        msg = UserMessage(text=(
+            f"Sales rep: {context_obj['agent_name']}\n"
+            f"Time range: {context_obj['range_label']}\n\n"
+            f"Data (JSON):\n{json.dumps(context_obj, default=str)}\n\n"
+            "Reply in markdown using EXACTLY these four sections (use these literal headings):\n"
+            "## Headline\nOne sentence — the single most important thing about this rep's performance right now.\n"
+            "## What's working\n2-3 bullets, each citing a number from the data.\n"
+            "## What's at risk\n2-3 bullets, each citing a number from the data.\n"
+            "## Do next\nOne concrete action the rep should take in the next 48 hours."
+        ))
+        text = await chat.send_message(msg)
+        return {"success": True, "range": snap["range"], "markdown": str(text), "context": context_obj}
+    except Exception as e:
+        logger.error(f"Agent AI insights error: {e}")
+        raise HTTPException(status_code=502, detail=f"AI generation failed: {str(e)[:200]}")
 
 
 @api.get("/agent/leads/map")

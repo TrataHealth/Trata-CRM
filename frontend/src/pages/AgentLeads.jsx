@@ -3,7 +3,8 @@ import api from "../lib/api";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Avatar } from "./Contacts";
 import { PIPELINE_STAGES, CONTACT_TYPES, relativeTime, fmtCurrency, typeLabel } from "../lib/constants";
-import { Search, Phone } from "lucide-react";
+import { Search, Phone, UserPlus } from "lucide-react";
+import OnboardProviderModal from "../components/OnboardProviderModal";
 
 const STAGE_COLOR = Object.fromEntries(PIPELINE_STAGES.map((s) => [s.value, s.color]));
 const STAGE_LABEL = Object.fromEntries(PIPELINE_STAGES.map((s) => [s.value, s.label]));
@@ -13,6 +14,8 @@ export default function AgentLeads() {
   const [list, setList] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [onboardOpen, setOnboardOpen] = useState(false);
+  const [bump, setBump] = useState(0);
   const stage = params.get("stage") || "";
   const ptype = params.get("type") || "";
   const touched = params.get("touched") || "";
@@ -27,19 +30,39 @@ export default function AgentLeads() {
       });
       setList(data.items); setTotal(data.total); setLoading(false);
     })();
-  }, [stage, ptype, touched, q]);
+  }, [stage, ptype, touched, q, bump]);
 
   const set = (k, v) => { const p = new URLSearchParams(params); if (v) p.set(k, v); else p.delete(k); setParams(p); };
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-5" data-testid="agent-leads-page">
-      <div>
-        <div className="overline">Onboarding pipeline</div>
-        <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
-          My Leads <span className="text-[#5E6C84] font-medium">/ {total}</span>
-        </h1>
-        <p className="text-sm text-[#5E6C84] mt-1">All leads currently assigned to you, ready to work.</p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="overline">Onboarding pipeline</div>
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
+            My Leads <span className="text-[#5E6C84] font-medium">/ {total}</span>
+          </h1>
+          <p className="text-sm text-[#5E6C84] mt-1">All leads currently assigned to you, ready to work.</p>
+        </div>
+        <button
+          data-testid="agent-leads-onboard-btn"
+          onClick={() => setOnboardOpen(true)}
+          className="flex items-center gap-2 px-3.5 py-2 text-sm font-semibold rounded-md text-white bg-[#0052CC] hover:bg-[#0747A6] shadow-sm"
+        >
+          <UserPlus className="h-4 w-4" /> Onboard provider
+        </button>
       </div>
+
+      {onboardOpen && (
+        <OnboardProviderModal
+          onClose={() => setOnboardOpen(false)}
+          onCreated={(created) => {
+            setOnboardOpen(false);
+            setBump((b) => b + 1);
+            if (created?.contact?.id) navigate(`/contacts/${created.contact.id}`);
+          }}
+        />
+      )}
 
       <div className="flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[240px]">
