@@ -4,6 +4,7 @@ import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity,
   BarChart3, UserCog, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
   Building2, ClipboardList, IdCard, Wallet, Compass, Trophy, Settings as SettingsIcon, ShieldCheck,
+  Network as NetworkIcon,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import api from "../lib/api";
@@ -12,6 +13,7 @@ import { relativeTime } from "../lib/constants";
 const ADMIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { to: "/contacts", label: "Trata Users", icon: Users },
+  { to: "/network", label: "Network", icon: NetworkIcon },
   { to: "/pipeline", label: "Pipeline", icon: GitBranch },
   { to: "/admin/kyc-queue", label: "KYC Final Approval", icon: ShieldCheck, badgeKey: "kyc_admin_queue" },
   { to: "/activities", label: "Activities", icon: Activity },

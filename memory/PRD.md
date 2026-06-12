@@ -15,6 +15,18 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
+### Iter 25 (2026-06-12) — Network section: live mirror of Trata Admin App
+- **Backend** (no admin-app changes needed — all read-only proxy):
+  - `admin_bridge.fetch_cases()`, `fetch_network_stats()`, `fetch_ambulance_providers()`
+  - `GET /api/upstream/cases?status=&case_type=` — live emergency-case board with by-status / by-type counts
+  - `GET /api/upstream/cases/{id}` — single case (timeline, vitals, patient profile, location)
+  - `GET /api/upstream/patients?q=` — derived from cases (dedupe by patient_id/customer_phone) — Admin App has no standalone patients endpoint
+  - `GET /api/upstream/network-stats` — pass-through to admin `/api/admin/stats`
+  - `GET /api/upstream/kyc-overview` — cross-references admin /users with CRM contact + per-doc reviews + AI prescreen summary, sorted with pending KYC first
+- **Frontend** new `/network` route (admin-only) — `Network.jsx` 4-tab layout (Emergency cases · Patients · KYC manager · Network stats). Filter pills with live counts, click-to-detail drawer for cases (timeline, vitals, location, patient profile), search on patients, status-aware KYC table with "Open" deep-links to CRM contact, 8 KPI tiles on stats. New sidebar entry "Network" with Network icon.
+- **Note**: "Appointments/bookings" was requested but the Admin App doesn't expose a separate appointments endpoint — emergency cases ARE the bookings. They're surfaced via the Emergency cases tab with `case_type` filter (`emergency_ambulance` vs `phone_call_emergency`).
+- **Verified live**: Playwright screenshots confirm all 4 tabs render with real upstream data (18 cases, 3 patients incl. Siddharth Gupta with 16 cases, 4 providers in KYC overview with mixed verification states, 13-user / 10-patient stats).
+
 ### Iter 24 (2026-06-12) — Onboarding + AI insights opened to staff
 - **Backend permissions**: `POST /admin/onboard-provider` now allows all internal staff (admin, manager, sales reps, ops reps). When a sales rep onboards a provider, the new contact is auto-assigned to that rep (instead of territory-pick).
 - **Backend** `/api/agent/dashboard?range=…` — same 6 range options as the master dashboard (`7d`, `30d`, `3m`, `6m`, `12m`, `all`). KPIs are now windowed: `onboarded_in_window`, `window_activities`. Stale-leads remains a fixed 7-day SLA.

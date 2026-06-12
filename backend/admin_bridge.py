@@ -82,6 +82,27 @@ async def find_admin_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     return matches[0]
 
 
+async def fetch_cases() -> Optional[Dict[str, Any]]:
+    """Fetch all emergency cases from the Trata Admin App."""
+    return await admin_api_get("/api/admin/cases")
+
+
+async def fetch_network_stats() -> Optional[Dict[str, Any]]:
+    """Fetch network-wide stats (users/cases/EHR/HealthGuard) from the Trata Admin App."""
+    return await admin_api_get("/api/admin/stats")
+
+
+async def fetch_ambulance_providers() -> Optional[List[Dict[str, Any]]]:
+    """Fetch business records for every ambulance provider (registration #, GST, owner, etc.)."""
+    payload = await admin_api_get("/api/admin/ambulance-providers")
+    # This endpoint historically returns a bare list, not a {providers: [...]} object.
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        return payload.get("providers") or payload.get("items") or []
+    return None
+
+
 async def fetch_kyc(user_id: str) -> Optional[Dict[str, Any]]:
     return await admin_api_get(f"/api/admin/users/{user_id}/kyc")
 

@@ -3930,6 +3930,158 @@ async def admin_app_webhook(
     return {"ok": True, "received": True, "result": result}
 
 
+
+# ---------- Upstream proxy endpoints (Trata Admin App data mirrored into CRM) ----------
+# Master Admin / Manager use these to see network-wide data that lives in the Admin App,
+# without changing the Admin App. Each call is a small cache-busting pass-through; the CRM
+# adds its own enrichment (matched contact, our KYC review state, etc.).
+
+@api.get("/upstream/cases")
+async def upstream_cases(status: Optional[str] = None, case_type: Optional[str] = None,
+                        current=Depends(require_internal)):
+    """Live emergency-cases board, fetched from the Trata Admin App."""
+    payload = await ab.fetch_cases()
+    cases = (payload or {}).get("cases", []) if payload else []
+    if status:
+        sl = status.upper()
+        cases = [c for c in cases if (c.get("status") or "").upper() == sl]
+    if case_type:
+        cases = [c for c in cases if c.get("case_type") == case_type]
+
+    # Surface a quick summary
+    counts = {"by_status": {}, "by_type": {}}
+    for c in cases:
+        counts["by_status"][c.get("status") or "—"] = counts["by_status"].get(c.get("status") or "—", 0) + 1
+        counts["by_type"][c.get("case_type") or "—"] = counts["by_type"].get(c.get("case_type") or "—", 0) + 1
+    return {"items": cases, "total": len(cases), "counts": counts, "upstream_available": payload is not None}
+
+
+@api.get("/upstream/cases/{case_id}")
+async def upstream_case_detail(case_id: str, current=Depends(require_internal)):
+    """One case in full detail (timeline, vitals, ambulance loc, patient profile)."""
+    payload = await ab.fetch_cases()
+    if not payload:
+        raise HTTPException(status_code=502, detail="Upstream unavailable")
+    case = next((c for c in (payload.get("cases") or []) if c.get("id") == case_id), None)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return {"case": case}
+
+
+@api.get("/upstream/patients")
+async def upstream_patients(q: Optional[str] = None, current=Depends(require_internal)):
+    """Derived from /api/admin/cases — every unique patient who has had at least one case.
+    The Admin App doesn't expose a stand-alone patient list endpoint, so we synthesize one
+    by deduping on patient_id (or customer_phone if patient_id is null)."""
+    payload = await ab.fetch_cases()
+    cases = (payload or {}).get("cases", []) if payload else []
+    by_key: Dict[str, Dict[str, Any]] = {}
+    for c in cases:
+        key = c.get("patient_id") or c.get("customer_phone") or c.get("customer_id")
+        if not key:
+            continue
+        prof = c.get("patient_profile") or {}
+        basic = (prof.get("basicInfo") or {}) if isinstance(prof, dict) else {}
+        med   = (prof.get("medicalInfo") or {}) if isinstance(prof, dict) else {}
+        if key not in by_key:
+            by_key[key] = {
+                "patient_id": c.get("patient_id"),
+                "customer_id": c.get("customer_id"),
+                "phone": c.get("customer_phone"),
+                "name": basic.get("fullName") or basic.get("name") or "",
+                "gender": basic.get("gender"),
+                "age": basic.get("age"),
+                "medical_info": med,
+                "cases_count": 0,
+                "latest_status": c.get("status"),
+                "latest_case_at": c.get("created_at"),
+                "latest_case_type": c.get("case_type"),
+                "latest_priority": c.get("priority"),
+                "latest_case_id": c.get("id"),
+            }
+        row = by_key[key]
+        row["cases_count"] += 1
+        if (c.get("created_at") or "") > (row["latest_case_at"] or ""):
+            row["latest_status"] = c.get("status")
+            row["latest_case_at"] = c.get("created_at")
+            row["latest_case_type"] = c.get("case_type")
+            row["latest_priority"] = c.get("priority")
+            row["latest_case_id"] = c.get("id")
+
+    items = list(by_key.values())
+    if q:
+        ql = q.lower()
+        items = [p for p in items if ql in (p.get("name") or "").lower() or ql in (p.get("phone") or "")]
+    items.sort(key=lambda r: r.get("latest_case_at") or "", reverse=True)
+    return {"items": items, "total": len(items), "upstream_available": payload is not None}
+
+
+@api.get("/upstream/network-stats")
+async def upstream_network_stats(current=Depends(require_internal)):
+    """The Admin App's network-wide stats (users / cases / EHR / HealthGuard) — pass-through."""
+    payload = await ab.fetch_network_stats()
+    return {"stats": payload, "upstream_available": payload is not None}
+
+
+@api.get("/upstream/kyc-overview")
+async def upstream_kyc_overview(current=Depends(require_internal)):
+    """Network-wide KYC overview — every provider on the Admin App + their KYC status,
+    augmented with this CRM's per-doc review state where we have it."""
+    users_payload = await admin_api_get_via_bridge("/api/admin/users")
+    users = (users_payload or {}).get("users", []) if users_payload else []
+    # Provider verticals only — patients/admins shouldn't appear in the KYC manager.
+    PROVIDER_ROLES = {"ambulance_provider", "hospital", "doctor", "paramedic", "lab", "pathologist", "pharmacy"}
+    providers = [u for u in users if u.get("role") in PROVIDER_ROLES]
+
+    # Cross-reference with this CRM's contacts so we can show the assigned agent, KYC status,
+    # and review history without re-fetching per-doc data here (KycMirrorCard handles that
+    # once the master admin clicks into a row).
+    crm_by_phone: Dict[str, Dict[str, Any]] = {}
+    async for c in db.contacts.find(
+        {"phone": {"$in": [u.get("phone") for u in providers if u.get("phone")]}},
+        {"_id": 0, "id": 1, "phone": 1, "kyc_status": 1, "assigned_agent_name": 1, "assigned_agent_id": 1,
+         "agent_doc_reviews": 1, "local_decision": 1, "ai_prescreen_summary": 1, "pipeline_stage": 1},
+    ):
+        crm_by_phone[c["phone"]] = c
+
+    items = []
+    for u in providers:
+        crm = crm_by_phone.get(u.get("phone")) or {}
+        reviews = crm.get("agent_doc_reviews") or {}
+        approve_n = sum(1 for v in reviews.values() if (v or {}).get("decision") == "approved")
+        reject_n  = sum(1 for v in reviews.values() if (v or {}).get("decision") == "rejected")
+        items.append({
+            "upstream_user_id": u.get("id"),
+            "phone": u.get("phone"),
+            "name": u.get("name"),
+            "role": u.get("role"),
+            "user_type": u.get("user_type"),
+            "verification_status": u.get("verification_status"),
+            "verified": u.get("verified"),
+            "city": u.get("city"),
+            "crm_contact_id": crm.get("id"),
+            "crm_kyc_status": crm.get("kyc_status"),
+            "pipeline_stage": crm.get("pipeline_stage"),
+            "assigned_agent_name": crm.get("assigned_agent_name"),
+            "doc_reviews": {"approved": approve_n, "rejected": reject_n},
+            "ai_prescreen": crm.get("ai_prescreen_summary"),
+            "master_admin_decision": (crm.get("local_decision") or {}).get("master") or None,
+        })
+    # Sort: pending KYC first, then verified, then unmatched
+    def sort_key(r):
+        s = (r.get("verification_status") or "").lower()
+        return (0 if s in {"pending", "submitted"} else (2 if s == "verified" else 1)), -(r.get("doc_reviews", {}).get("approved") or 0)
+    items.sort(key=sort_key)
+    return {"items": items, "total": len(items), "upstream_available": users_payload is not None}
+
+
+async def admin_api_get_via_bridge(path: str):
+    """Tiny wrapper so the proxy endpoints can call admin_bridge.admin_api_get without
+    re-importing the module name inside every function."""
+    return await ab.admin_api_get(path)
+
+
+
 @api.get("/admin/bridge/events")
 async def list_bridge_events(limit: int = 50, direction: Optional[str] = None, current=Depends(get_current_user)):
     if not is_admin_or_manager(current):
