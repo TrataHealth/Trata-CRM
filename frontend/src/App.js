@@ -13,6 +13,7 @@ import Activities from "./pages/Activities";
 import Tasks from "./pages/Tasks";
 import Analytics from "./pages/Analytics";
 import Team from "./pages/Team";
+import TeamMemberDetail from "./pages/TeamMemberDetail";
 import ProviderDashboard from "./pages/ProviderDashboard";
 import ProviderActivities from "./pages/ProviderActivities";
 import ProviderProfile from "./pages/ProviderProfile";
@@ -80,6 +81,7 @@ function App() {
           <Route path="/activities" element={<RequireAuth internalOnly><Activities /></RequireAuth>} />
           <Route path="/analytics" element={<RequireAuth adminOnly><Analytics /></RequireAuth>} />
           <Route path="/team" element={<RequireAuth adminOnly><Team /></RequireAuth>} />
+          <Route path="/team/:id" element={<RequireAuth adminOnly><TeamMemberDetail /></RequireAuth>} />
 
           {/* Shared (admins + providers + sales reps) */}
           <Route path="/tasks" element={<RequireAuth><Tasks /></RequireAuth>} />

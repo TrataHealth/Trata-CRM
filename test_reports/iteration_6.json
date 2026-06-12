@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 6 — Team hierarchy + Team-member detail page. BACKEND: 18/18 pytest tests pass in /app/backend/tests/test_team_hierarchy.py covering enriched GET /api/team (role, manager_name, manager_role, reports_count, territories), legacy 'manager' → 'regional_manager' migration verified (Priya now reports role=regional_manager), strict role hierarchy on POST /api/team (sales_rep→regional_manager rejected with 'Sales Rep must report to a Area Manager', sales_rep→area_manager succeeds, national_manager→master_admin succeeds, national_manager→nm rejected), PATCH /api/team/{id} self-loop rejected, transitive cycle detection rejected with 'reporting cycle' message, wrong-tier rejected, name+territories persistence verified via GET, GET /api/team/{id} chain built bottom-up (AM→ZM→RM→NM verified for a sales_rep at the bottom), manager scope='team_rollup' with team_size = self + descendants (4 verified for the test NM tree), feedback POST validates rating 1-5 + non-empty note + author_role stamp, sales_rep gets 403 on feedback, author can delete own feedback, master admin DELETE blocked, deleting a manager unassigns subordinates (reports_to set to null verified via GET). Test data uses TEST_* prefix and cleans up. FRONTEND: smoke test did not complete — the login OTP-step selectors (login-otp-input / login-verify-otp-btn) were not present on the page after Send OTP, so the script could not progress past the OTP step. /team page tiers, cards, and detail-page testids were therefore not visible-tested in this iteration. NOTE: Master Admin is still gated behind /security-setup (carry-over from iteration 5) — the backend tests bypass this via direct API login which works fine, but the UI login flow needs the OTP/verify testids confirmed before automation can drive it.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Login OTP step automation",
+        "issue": "After clicking login-send-otp-btn the OTP input + verify button could not be located by data-testid. Confirm the testids on the OTP step (expected: login-otp-input, login-verify-otp-btn) and add them if missing so the team-page UI flow can be automated.",
+        "affected_selectors": ["login-otp-input", "login-verify-otp-btn"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_team_hierarchy.py",
+    "/app/test_reports/pytest/team_hierarchy.xml"
+  ],
+  "action_items": [
+    "Verify/add data-testid='login-otp-input' and 'login-verify-otp-btn' on the OTP step of /login so the frontend automation can complete the 3-step master-admin login.",
+    "Main agent: please run the frontend visual smoke for /team and /team/{id} manually (or self-test) — backend invariants are fully verified.",
+    "CARRY-OVER (iteration 5): /api/admin/webhooks/test-send + /api/admin/webhooks/events are guarded by require_internal which includes sales_rep — Rohan can still trigger webhook lead creation. Tighten to admin/manager only.",
+    "CARRY-OVER (iteration 3/4): /agent route in App.js lacks internalOnly guard — provider visiting /agent doesn't redirect."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/server.py is now ~2700+ lines (auth, security, contacts, team hierarchy, agent, provider, webhooks, sync, seed all in one file). Strongly recommend splitting into routers (auth_router.py, team_router.py, agent_router.py, provider_router.py, webhooks_router.py, admin_router.py) — files >700 lines violate the size guideline.",
+    "POST /api/team — when reports_to is provided but the target role is national_manager and reports_to is NOT the master admin, the code path lands in 'elif expected is None' which is unreachable for national_manager (expected_parent is None only for national_manager). The branch is currently structured so a national_manager with a non-master parent fails with the wrong message path. Verified at runtime returns 400, but the error string is implicit. Minor — consider a clearer dedicated branch.",
+    "PATCH /api/team/{id} — cycle check correctly walks up via reports_to but does NOT cap the walk depth; combined with the role-tier guard the practical depth is ≤5, but defensive `for _ in range(50)` would prevent any future loop on corrupt data (currently relies on visited set, which is fine).",
+    "_enrich_member runs ONE Mongo round-trip per member to fetch manager + one count_documents. GET /api/team enriches every member sequentially in a list comprehension — for ~50 users that's ~100 round-trips. Consider a single $lookup aggregation or batching manager lookups by id.",
+    "delete_team_member sets subordinates' reports_to=null but does NOT cascade-validate their role tier — orphaned ZMs/AMs are left dangling with reports_to=null which then violates strict hierarchy on the next PATCH. Acceptable for now (the UI surfaces them as 'no manager') but consider auto-reattaching to the deleted member's parent or flagging them.",
+    "Master Admin is still subject to the forced /security-setup gate on the FE (carry-over). The backend exposes security_setup_required=true on _safe_user with no is_master_admin bypass — confirm with product whether admin should be exempt.",
+    "POST /api/team/{id}/feedback allows author_role='admin' for the master admin and stores normalize_role(current.get('role') or 'admin') — for the master admin role is 'admin' so this is fine. But for a national_manager posting feedback on a subordinate the role pill will correctly show 'national_manager'. Verified."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_team_hierarchy.py (NEW — 18 tests across 6 classes covering enrichment, legacy-role migration, create validation, patch validation w/ cycle detection, member detail page payload, feedback CRUD with role gating, delete-cascade unassignment, master-admin delete protection)"
+  ],
+  "success_rate": {
+    "backend": "100% (18/18 on test_team_hierarchy.py)",
+    "frontend": "Not measured — blocked on OTP-step testid discovery during master-admin login"
+  },
+  "test_credentials": "Master admin 9873117605 / Master@123 still gated behind /security-setup. Priya 9000000001 / Trata@123 (regional_manager, recovery set). Rohan 9000000002 / Trata@123 (sales_rep, recovery set, reports_to currently unchanged). Ambulance owner 9000020003 / Trata@123 (security_setup pending).",
+  "seed_data_creation": "Backend tests created and deleted TEST_NM/TEST_RM/TEST_ZM/TEST_AM hierarchy + transient TEST_REP, TEST_NM2, TEST_RM2, TEST_ZM2 — all cleaned up. One temporary feedback note ('TEST_FB_great work') created on TEST_RM and deleted in the same test. No demo data polluted.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Re-run with: REACT_APP_BACKEND_URL=https://patient-hub-133.preview.emergentagent.com pytest /app/backend/tests/test_team_hierarchy.py -v (~4s). The TestPatchValidation.test_cycle_detection trick is to switch the top-of-tree NM into a sales_rep AND set reports_to=AM in one PATCH — that passes the tier check (sales_rep→area_manager OK) but trips the cycle walker because AM transitively reports back to NM. For frontend automation: discover the actual data-testids on the OTP and password steps of /login before scripting (login-phone-input + login-send-otp-btn are confirmed; OTP-step testids unknown). Use BACKEND login for any test that needs an admin token (the _login helper in this test file works against the prod URL).",
+  "rca of the issue": "Frontend automation failure: the script assumed login-otp-input + login-verify-otp-btn data-testids exist on the /login OTP step. They were not found in the DOM after Send OTP, so OTP fill + verify click never executed, the password step never appeared, and subsequent /team navigation was rejected back to /login (RequireAuth). Suggested fix: open /app/frontend/src/pages/Login.jsx (or equivalent) and either confirm the existing testids on the OTP step or add login-otp-input + login-verify-otp-btn on the OTP <input> and verify button. Once added, the frontend playwright script in this report's history can drive the full Master Admin → security-setup → /team → /team/{id} → feedback flow."
+}

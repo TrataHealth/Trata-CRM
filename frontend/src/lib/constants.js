@@ -7,6 +7,21 @@ export const CONTACT_TYPES = [
   { value: "pathologist", label: "Pathology Labs", icon: "FlaskConical" },
 ];
 
+export const TEAM_ROLES = [
+  { value: "admin",            label: "Admin",            tier: 0, color: "#0747A6", short: "ADM" },
+  { value: "national_manager", label: "National Manager", tier: 1, color: "#6554C0", short: "NM"  },
+  { value: "regional_manager", label: "Regional Manager", tier: 2, color: "#0052CC", short: "RM"  },
+  { value: "zonal_manager",    label: "Zonal Manager",    tier: 3, color: "#00875A", short: "ZM"  },
+  { value: "area_manager",     label: "Area Manager",     tier: 4, color: "#36B37E", short: "AM"  },
+  { value: "sales_rep",        label: "Sales Rep",        tier: 5, color: "#FFAB00", short: "SR"  },
+  { value: "ops_rep",          label: "Ops Rep",          tier: 5, color: "#FF8B00", short: "OPS" },
+];
+
+export const ROLE_META = Object.fromEntries(TEAM_ROLES.map((r) => [r.value, r]));
+export const roleLabel = (r) => ROLE_META[r]?.label || (r || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+export const roleColor = (r) => ROLE_META[r]?.color || "#42526E";
+
+
 export const PIPELINE_STAGES = [
   { value: "lead", label: "Lead", color: "#5E6C84" },
   { value: "contacted", label: "Contacted", color: "#00B8D9" },

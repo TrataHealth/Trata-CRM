@@ -61,13 +61,31 @@ def now_iso():
 
 
 # ---------- Roles & Scopes ----------
-INTERNAL_ROLES = {"admin", "manager", "sales_rep", "ops_rep"}
+INTERNAL_ROLES = {"admin", "manager", "national_manager", "regional_manager", "zonal_manager", "area_manager", "sales_rep", "ops_rep"}
 PROVIDER_ROLES = {"provider_owner"}
 # This app only supports ambulance providers. Hospital / clinic / pathology owners use the separate HMS.
 PROVIDER_TYPE_TO_CONTACT_TYPE = {
     "ambulance": "ambulance_provider",
 }
 SUPPORTED_PROVIDER_TYPES = set(PROVIDER_TYPE_TO_CONTACT_TYPE.keys())
+
+# Org hierarchy (top → bottom). Each role can ONLY report to the role immediately above it.
+HIERARCHY = ["national_manager", "regional_manager", "zonal_manager", "area_manager", "sales_rep"]
+# Map legacy "manager" → regional_manager (kept for backwards-compat during migration)
+LEGACY_ROLE_ALIASES = {"manager": "regional_manager"}
+MANAGER_ROLES = {"national_manager", "regional_manager", "zonal_manager", "area_manager", "manager"}
+
+
+def normalize_role(role: str) -> str:
+    return LEGACY_ROLE_ALIASES.get(role, role)
+
+
+def parent_role_of(role: str) -> Optional[str]:
+    r = normalize_role(role)
+    if r not in HIERARCHY:
+        return None
+    idx = HIERARCHY.index(r)
+    return HIERARCHY[idx - 1] if idx > 0 else None  # national_manager → reports to nobody (admin manages)
 
 
 def is_internal(user: dict) -> bool:
@@ -79,7 +97,7 @@ def is_sales_rep(user: dict) -> bool:
 
 
 def is_admin_or_manager(user: dict) -> bool:
-    return user.get("is_master_admin") or user.get("role") in ("admin", "manager")
+    return user.get("is_master_admin") or user.get("role") in ("admin", "manager", "national_manager", "regional_manager", "zonal_manager", "area_manager")
 
 
 def is_provider(user: dict) -> bool:
@@ -211,7 +229,9 @@ class TeamMemberCreate(BaseModel):
     name: str
     phone: str
     email: Optional[str] = None
-    role: str = "sales_rep"   # admin, manager, sales_rep, ops_rep
+    role: str = "sales_rep"
+    reports_to: Optional[str] = None
+    territories: Optional[List[str]] = None
 
 
 class AISummaryRequest(BaseModel):
@@ -921,34 +941,55 @@ async def create_note(data: NoteCreate, current=Depends(get_current_user)):
 # ---------- Team ----------
 @api.get("/team")
 async def list_team(current=Depends(require_internal)):
-    # Team & Roles is for internal Trata staff only — exclude provider owners (they're Trata users, not staff)
     items = await db.crm_users.find(
-        {"role": {"$in": ["admin", "manager", "sales_rep", "ops_rep"]}},
-        {"_id": 0, "password": 0},
-    ).sort("created_at", 1).to_list(200)
-    return {"items": items}
+        {"role": {"$in": ["admin", "manager", "national_manager", "regional_manager", "zonal_manager", "area_manager", "sales_rep", "ops_rep"]}},
+        {"_id": 0, "password_hash": 0, "security_questions": 0, "reset_code_hash": 0, "reset_code_expires_at": 0, "reset_code_sent_at": 0, "password": 0},
+    ).sort("created_at", 1).to_list(500)
+    out = [await _enrich_member(m) for m in items]
+    return {"items": out}
 
 
 @api.post("/team")
 async def create_team_member(data: TeamMemberCreate, current=Depends(get_current_user)):
     if current.get("role") != "admin" and not current.get("is_master_admin"):
         raise HTTPException(status_code=403, detail="Only admins can add members")
+    if data.role not in INTERNAL_ROLES:
+        raise HTTPException(status_code=400, detail=f"Invalid role: {data.role}")
     existing = await db.crm_users.find_one({"phone": data.phone})
     if existing:
         raise HTTPException(status_code=400, detail="Member with this phone already exists")
+    target_role = normalize_role(data.role)
+    # Validate reports_to using the same rules as PATCH
+    reports_to = None
+    if data.reports_to:
+        mgr = await db.crm_users.find_one({"id": data.reports_to})
+        if not mgr:
+            raise HTTPException(status_code=400, detail="Proposed manager not found")
+        mgr_role = normalize_role(mgr.get("role") or "")
+        expected = parent_role_of(target_role)
+        if mgr.get("is_master_admin"):
+            if target_role != "national_manager":
+                raise HTTPException(status_code=400, detail="Only National Managers can report directly to the Master Admin")
+        elif expected is None:
+            raise HTTPException(status_code=400, detail=f"{target_role} cannot have a reporting manager")
+        elif mgr_role != expected:
+            raise HTTPException(status_code=400, detail=f"{target_role.replace('_',' ').title()} must report to a {expected.replace('_',' ').title()}")
+        reports_to = data.reports_to
     member = {
         "id": str(uuid.uuid4()),
         "name": data.name,
         "phone": data.phone,
         "email": data.email,
-        "role": data.role,
+        "role": target_role,
         "is_master_admin": False,
         "is_active": True,
+        "reports_to": reports_to,
+        "territories": [t.strip() for t in (data.territories or []) if t.strip()],
         "created_at": now_iso(),
     }
     await db.crm_users.insert_one(member.copy())
     member.pop("_id", None)
-    return {"success": True, "member": member}
+    return {"success": True, "member": await _enrich_member(member)}
 
 
 @api.delete("/team/{member_id}")
@@ -960,7 +1001,224 @@ async def delete_team_member(member_id: str, current=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Not found")
     if m.get("is_master_admin"):
         raise HTTPException(status_code=400, detail="Cannot remove master admin")
+    # Unassign any subordinates (set their reports_to to null)
+    await db.crm_users.update_many({"reports_to": member_id}, {"$set": {"reports_to": None}})
     await db.crm_users.delete_one({"id": member_id})
+    return {"success": True}
+
+
+# ---------- Team hierarchy (Phase: Org Chart) ----------
+async def _enrich_member(m: dict) -> dict:
+    role = normalize_role(m.get("role") or "")
+    out = {
+        "id": m.get("id"),
+        "name": m.get("name"),
+        "phone": m.get("phone"),
+        "email": m.get("email"),
+        "role": role,
+        "raw_role": m.get("role"),
+        "is_master_admin": bool(m.get("is_master_admin")),
+        "is_active": m.get("is_active", True),
+        "territories": m.get("territories") or [],
+        "reports_to": m.get("reports_to"),
+        "created_at": m.get("created_at"),
+    }
+    if out["reports_to"]:
+        mgr = await db.crm_users.find_one({"id": out["reports_to"]}, {"_id": 0, "id": 1, "name": 1, "role": 1})
+        if mgr:
+            out["manager_name"] = mgr.get("name")
+            out["manager_role"] = normalize_role(mgr.get("role") or "")
+    out["reports_count"] = await db.crm_users.count_documents({"reports_to": m["id"]})
+    return out
+
+
+@api.get("/team/{member_id}")
+async def get_team_member(member_id: str, current=Depends(require_internal)):
+    m = await db.crm_users.find_one({"id": member_id}, {"_id": 0, "password_hash": 0, "security_questions": 0, "reset_code_hash": 0, "reset_code_expires_at": 0, "reset_code_sent_at": 0})
+    if not m:
+        raise HTTPException(status_code=404, detail="Member not found")
+    info = await _enrich_member(m)
+
+    # Manager chain (climb up to root)
+    chain = []
+    cursor = info.get("reports_to")
+    visited = set()
+    while cursor and cursor not in visited:
+        visited.add(cursor)
+        mgr = await db.crm_users.find_one({"id": cursor}, {"_id": 0, "id": 1, "name": 1, "role": 1})
+        if not mgr:
+            break
+        chain.append({"id": mgr["id"], "name": mgr["name"], "role": normalize_role(mgr.get("role") or "")})
+        cursor = (await db.crm_users.find_one({"id": cursor}, {"reports_to": 1}) or {}).get("reports_to")
+    info["reports_chain"] = chain
+
+    # Direct reports
+    reports = []
+    async for r in db.crm_users.find({"reports_to": member_id}, {"_id": 0, "password_hash": 0, "security_questions": 0}):
+        reports.append(await _enrich_member(r))
+    info["direct_reports"] = reports
+
+    # Providers handled (contacts assigned to this user)
+    providers_handled = await db.contacts.count_documents({"assigned_agent_id": member_id})
+    info["providers_handled"] = providers_handled
+
+    # Sales performance — only meaningful for sales_rep, but compute for managers too based on their tree
+    role = normalize_role(m.get("role") or "")
+    target_ids = [member_id]
+    if role != "sales_rep":
+        # Aggregate over all descendants
+        async def collect_subs(parent_id, depth=0):
+            if depth > 6:
+                return
+            async for r in db.crm_users.find({"reports_to": parent_id}, {"id": 1, "_id": 0}):
+                target_ids.append(r["id"])
+                await collect_subs(r["id"], depth + 1)
+        await collect_subs(member_id)
+
+    from datetime import timedelta as _td
+    month_start = (datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)).isoformat()
+    perf_pipeline = [
+        {"$match": {"agent_id": {"$in": target_ids}, "created_at": {"$gte": month_start}}},
+        {"$group": {"_id": "$category", "count": {"$sum": 1}}},
+    ]
+    perf_by_cat = {row["_id"]: row["count"] for row in await db.activities.aggregate(perf_pipeline).to_list(50)}
+    onboarded = await db.contacts.count_documents({
+        "assigned_agent_id": {"$in": target_ids},
+        "pipeline_stage": {"$in": ["app_onboarded", "live_on_app", "active", "verified"]},
+        "updated_at": {"$gte": month_start},
+    })
+    info["performance"] = {
+        "scope": "self" if role == "sales_rep" else "team_rollup",
+        "team_size": len(target_ids),
+        "month_start": month_start,
+        "activities_total": sum(perf_by_cat.values()),
+        "by_category": perf_by_cat,
+        "onboarded_mtd": onboarded,
+    }
+
+    # Recent activities for this user
+    recent = await db.activities.find({"agent_id": member_id}, {"_id": 0}).sort("created_at", -1).to_list(10)
+    info["recent_activities"] = recent
+
+    # Manager feedback notes
+    fb = await db.team_feedback.find({"member_id": member_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    info["feedback"] = fb
+
+    return info
+
+
+class TeamMemberUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    reports_to: Optional[str] = None   # pass None or "" to unset
+    territories: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+
+
+@api.patch("/team/{member_id}")
+async def update_team_member(member_id: str, data: TeamMemberUpdate, current=Depends(get_current_user)):
+    if current.get("role") != "admin" and not current.get("is_master_admin"):
+        raise HTTPException(status_code=403, detail="Only admins can update team members")
+    m = await db.crm_users.find_one({"id": member_id})
+    if not m:
+        raise HTTPException(status_code=404, detail="Not found")
+    if m.get("is_master_admin") and (data.role and data.role != "admin"):
+        raise HTTPException(status_code=400, detail="Cannot change the master admin's role")
+
+    update: Dict[str, Any] = {}
+    if data.name is not None: update["name"] = data.name.strip()
+    if data.email is not None: update["email"] = data.email.strip() or None
+    if data.territories is not None: update["territories"] = [t.strip() for t in data.territories if t.strip()]
+    if data.is_active is not None: update["is_active"] = bool(data.is_active)
+
+    target_role = normalize_role(data.role) if data.role else normalize_role(m.get("role") or "")
+    if data.role is not None:
+        if data.role not in INTERNAL_ROLES:
+            raise HTTPException(status_code=400, detail=f"Invalid role: {data.role}")
+        update["role"] = target_role
+
+    # reports_to validation (strict hierarchy)
+    if data.reports_to is not None:
+        if data.reports_to in ("", None):
+            update["reports_to"] = None
+        else:
+            if data.reports_to == member_id:
+                raise HTTPException(status_code=400, detail="A member cannot report to themselves")
+            mgr = await db.crm_users.find_one({"id": data.reports_to}, {"_id": 0})
+            if not mgr:
+                raise HTTPException(status_code=400, detail="Proposed manager not found")
+            mgr_role = normalize_role(mgr.get("role") or "")
+            expected_parent = parent_role_of(target_role)
+            if mgr.get("is_master_admin"):
+                # Master admin can be parent only of national_manager
+                if target_role != "national_manager":
+                    raise HTTPException(status_code=400, detail="Only National Managers can report directly to the Master Admin")
+            elif expected_parent is None:
+                raise HTTPException(status_code=400, detail=f"{target_role} cannot have a reporting manager")
+            elif mgr_role != expected_parent:
+                pretty = expected_parent.replace("_", " ").title()
+                raise HTTPException(status_code=400, detail=f"{target_role.replace('_', ' ').title()} must report to a {pretty}")
+            # Cycle check
+            cursor = mgr.get("reports_to")
+            visited = {member_id, data.reports_to}
+            while cursor:
+                if cursor in visited:
+                    raise HTTPException(status_code=400, detail="This change would create a reporting cycle")
+                visited.add(cursor)
+                upper = await db.crm_users.find_one({"id": cursor}, {"reports_to": 1, "_id": 0})
+                cursor = upper.get("reports_to") if upper else None
+            update["reports_to"] = data.reports_to
+
+    if not update:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    update["updated_at"] = now_iso()
+    await db.crm_users.update_one({"id": member_id}, {"$set": update})
+    new_doc = await db.crm_users.find_one({"id": member_id}, {"_id": 0, "password_hash": 0, "security_questions": 0})
+    return {"success": True, "member": await _enrich_member(new_doc)}
+
+
+class TeamFeedbackBody(BaseModel):
+    rating: Optional[int] = None       # 1..5
+    note: str
+
+
+@api.post("/team/{member_id}/feedback")
+async def add_team_feedback(member_id: str, data: TeamFeedbackBody, current=Depends(get_current_user)):
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Only admins or managers can leave feedback")
+    if not (data.note or "").strip():
+        raise HTTPException(status_code=400, detail="Feedback note cannot be empty")
+    if data.rating is not None and not (1 <= data.rating <= 5):
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+    target = await db.crm_users.find_one({"id": member_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="Member not found")
+    fb = {
+        "id": str(uuid.uuid4()),
+        "member_id": member_id,
+        "author_id": current["id"],
+        "author_name": current.get("name"),
+        "author_role": normalize_role(current.get("role") or "admin"),
+        "rating": data.rating,
+        "note": data.note.strip(),
+        "created_at": now_iso(),
+    }
+    await db.team_feedback.insert_one(fb.copy())
+    fb.pop("_id", None)
+    return {"success": True, "feedback": fb}
+
+
+@api.delete("/team/{member_id}/feedback/{fb_id}")
+async def delete_team_feedback(member_id: str, fb_id: str, current=Depends(get_current_user)):
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Only admins or managers can delete feedback")
+    fb = await db.team_feedback.find_one({"id": fb_id, "member_id": member_id})
+    if not fb:
+        raise HTTPException(status_code=404, detail="Feedback not found")
+    if fb.get("author_id") != current["id"] and not current.get("is_master_admin") and current.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="You can only delete your own feedback")
+    await db.team_feedback.delete_one({"id": fb_id})
     return {"success": True}
 
 
@@ -2514,6 +2772,15 @@ async def startup():
             {"phone": phone, "$or": [{"territories": {"$exists": False}}, {"territories": {"$size": 0}}]},
             {"$set": {"territories": terr}},
         )
+    # Migrate legacy "manager" role → "regional_manager" (idempotent)
+    await db.crm_users.update_many({"role": "manager"}, {"$set": {"role": "regional_manager"}})
+    # Wire baseline hierarchy: Rohan (sales_rep) reports to Priya if not set yet
+    priya = await db.crm_users.find_one({"phone": "9000000001"}, {"id": 1, "_id": 0})
+    rohan = await db.crm_users.find_one({"phone": "9000000002"}, {"id": 1, "reports_to": 1, "_id": 0})
+    if priya and rohan and not rohan.get("reports_to"):
+        # Sales rep must report to area_manager — but Priya is regional_manager.
+        # Skip auto-link to keep hierarchy clean; admin can wire it via UI once area managers exist.
+        pass
     # Ensure master admin exists
     if not await db.crm_users.find_one({"phone": MASTER_ADMIN_PHONE}):
         await db.crm_users.insert_one({
