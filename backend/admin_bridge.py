@@ -16,7 +16,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -256,18 +256,209 @@ async def dispatcher_loop(db, interval_seconds: int = 30):
         await asyncio.sleep(interval_seconds)
 
 
+# ---------- Periodic user sync from /api/admin/users ----------
+USER_SYNC_INTERVAL_SECONDS = 300   # 5 min
+
+
+def _normalize_phone(p: Optional[str]) -> str:
+    s = "".join(ch for ch in (p or "") if ch.isdigit())
+    if len(s) == 12 and s.startswith("91"):
+        s = s[2:]
+    return s
+
+
+async def sync_users_from_admin(db) -> Dict[str, int]:
+    """Pull /api/admin/users from the admin app and upsert ambulance_provider records as CRM contacts.
+    Skipped: existing contacts get a metadata refresh; never overwrites pipeline_stage or assigned_agent_id."""
+    payload = await admin_api_get("/api/admin/users")
+    if not payload:
+        return {"fetched": 0, "created": 0, "updated": 0, "skipped": 0}
+    users = payload.get("users", [])
+    created = 0
+    updated = 0
+    skipped = 0
+    for u in users:
+        if u.get("role") != "ambulance_provider":
+            skipped += 1
+            continue
+        phone = _normalize_phone(u.get("phone"))
+        if not phone:
+            skipped += 1
+            continue
+        existing = await db.contacts.find_one({"phone": phone}, {"_id": 0, "id": 1, "name": 1, "city": 1})
+        if existing:
+            # Refresh metadata only — never clobber pipeline_stage / assigned_agent / KYC
+            patch = {}
+            if u.get("name") and u["name"] != existing.get("name"): patch["name"] = u["name"]
+            if u.get("city") and u["city"] != existing.get("city"): patch["city"] = u["city"]
+            patch["upstream_user_id"] = u["id"]
+            patch["last_admin_sync_at"] = _now()
+            await db.contacts.update_one({"id": existing["id"]}, {"$set": patch})
+            updated += 1
+        else:
+            # Fresh import — auto-assign by territory using same logic as webhook
+            from server import _pick_agent_for_territory  # type: ignore
+            agent = await _pick_agent_for_territory(u.get("city"))
+            new_doc = {
+                "id": str(uuid.uuid4()),
+                "name": u.get("name") or f"Provider {phone}",
+                "type": "ambulance_provider",
+                "phone": phone,
+                "city": u.get("city"),
+                "state": u.get("state"),
+                "is_verified": u.get("verification_status") == "verified",
+                "is_active": False,
+                "pipeline_stage": "verified" if u.get("verification_status") == "verified" else "lead",
+                "deal_value": 0,
+                "assigned_agent_id": agent["id"] if agent else None,
+                "assigned_agent_name": agent["name"] if agent else None,
+                "source": "admin_users_sync",
+                "upstream_user_id": u["id"],
+                "last_admin_sync_at": _now(),
+                "created_at": _now(),
+                "updated_at": _now(),
+                "avatar": None,
+            }
+            await db.contacts.insert_one(new_doc)
+            created += 1
+    logger.info(f"sync_users_from_admin: fetched={len(users)} created={created} updated={updated} skipped={skipped}")
+    return {"fetched": len(users), "created": created, "updated": updated, "skipped": skipped}
+
+
+async def user_sync_loop(db, interval_seconds: int = USER_SYNC_INTERVAL_SECONDS):
+    # Wait 30s after boot before first run so the rest of the app is ready
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await sync_users_from_admin(db)
+        except Exception as e:
+            logger.error(f"user_sync tick failed: {e}")
+        await asyncio.sleep(interval_seconds)
+
+
+# ---------- Auto-escalation ----------
+ESCALATION_INTERVAL_SECONDS = 900  # 15 min
+SLA_REP_HOURS = 36   # nudge manager when sales rep hasn't moved in 36h
+SLA_ADMIN_HOURS = 24 # email master admin when his queue item is >24h old
+
+
+async def _send_resend_email(to_email: str, subject: str, html: str, text: str) -> bool:
+    """Send email via Resend if configured. Returns True on success."""
+    try:
+        import os as _os
+        key = _os.environ.get("RESEND_API_KEY", "")
+        sender = _os.environ.get("SENDER_EMAIL", "onboarding@resend.dev")
+        if not key:
+            return False
+        import resend
+        resend.api_key = key
+        result = await asyncio.to_thread(
+            resend.Emails.send,
+            {"from": f"Trata Health CRM <{sender}>", "to": [to_email], "subject": subject, "html": html, "text": text},
+        )
+        logger.info(f"escalation email sent: {result if isinstance(result, dict) else 'ok'}")
+        return True
+    except Exception as e:
+        logger.warning(f"escalation email failed: {e}")
+        return False
+
+
+async def escalation_loop(db, interval_seconds: int = ESCALATION_INTERVAL_SECONDS):
+    await asyncio.sleep(60)
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            rep_cutoff = (now - timedelta(hours=SLA_REP_HOURS)).isoformat()
+            admin_cutoff = (now - timedelta(hours=SLA_ADMIN_HOURS)).isoformat()
+            # --- Sales rep overdue: notify their manager ---
+            async for c in db.contacts.find({
+                "kyc_status": {"$in": [None, "pending", "in_review", "kyc_submitted", "agent_doc_reviewing"]},
+                "assigned_agent_id": {"$ne": None},
+                "created_at": {"$lt": rep_cutoff},
+                "escalation_rep_at": {"$exists": False},
+                "type": "ambulance_provider",
+            }):
+                agent = await db.crm_users.find_one({"id": c["assigned_agent_id"]}, {"_id": 0, "id": 1, "name": 1, "reports_to": 1})
+                if not agent:
+                    continue
+                manager = None
+                if agent.get("reports_to"):
+                    manager = await db.crm_users.find_one({"id": agent["reports_to"]}, {"_id": 0, "id": 1, "name": 1, "email": 1})
+                hours = int((now - datetime.fromisoformat(c["created_at"].replace("Z", "+00:00") if c["created_at"].endswith("Z") else c["created_at"])).total_seconds() / 3600)
+                msg = f"{c.get('name')} has been with {agent.get('name')} for {hours}h without KYC submission."
+                await db.notifications.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "kind": "kyc_rep_escalation",
+                    "title": f"Stale lead — {c.get('name')}",
+                    "body": msg,
+                    "audience": "manager" if manager else "admin",
+                    "manager_id": manager.get("id") if manager else None,
+                    "contact_id": c["id"],
+                    "created_at": _now(),
+                    "read": False,
+                })
+                await db.contacts.update_one({"id": c["id"]}, {"$set": {"escalation_rep_at": _now()}})
+                logger.info(f"escalation: rep stale on {c.get('name')} → {manager.get('name') if manager else 'admin'}")
+            # --- Admin queue overdue: email master admin ---
+            async for c in db.contacts.find({
+                "kyc_status": "agent_reviewed",
+                "kyc_agent_completed_at": {"$lt": admin_cutoff},
+                "escalation_admin_at": {"$exists": False},
+            }):
+                admin = await db.crm_users.find_one({"is_master_admin": True}, {"_id": 0, "recovery_email": 1, "email": 1, "name": 1})
+                to = (admin or {}).get("recovery_email") or (admin or {}).get("email")
+                hours = int((now - datetime.fromisoformat(c["kyc_agent_completed_at"].replace("Z","+00:00") if c["kyc_agent_completed_at"].endswith("Z") else c["kyc_agent_completed_at"])).total_seconds() / 3600)
+                subject = f"⏰ KYC awaiting your final approval — {c.get('name')} ({hours}h overdue)"
+                html = f"""
+                <p>Hi {(admin or {}).get('name') or 'Master Admin'},</p>
+                <p><b>{c.get('name')}</b>'s KYC has been sitting in your Final Approval queue for <b>{hours} hours</b>.</p>
+                <p>Sales rep summary: {c.get('kyc_agent_summary', {}).get('approved', 0)} approved · {c.get('kyc_agent_summary', {}).get('rejected', 0)} rejected.</p>
+                <p><a href="https://patient-hub-133.preview.emergentagent.com/admin/kyc-queue">Open the queue →</a></p>
+                <hr>
+                <small>Trata Health CRM · automated escalation</small>
+                """
+                text = f"{c.get('name')}'s KYC has been pending your final approval for {hours}h. Open the queue: https://patient-hub-133.preview.emergentagent.com/admin/kyc-queue"
+                sent = False
+                if to:
+                    sent = await _send_resend_email(to, subject, html, text)
+                await db.notifications.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "kind": "kyc_admin_escalation",
+                    "title": f"⏰ KYC overdue — {c.get('name')}",
+                    "body": f"{hours}h waiting for your final approval. {'Email sent.' if sent else 'Email could not be sent.'}",
+                    "audience": "admin",
+                    "contact_id": c["id"],
+                    "created_at": _now(),
+                    "read": False,
+                })
+                await db.contacts.update_one({"id": c["id"]}, {"$set": {"escalation_admin_at": _now(), "escalation_email_sent": sent}})
+                logger.info(f"escalation: admin overdue on {c.get('name')} (email sent={sent})")
+        except Exception as e:
+            logger.error(f"escalation tick failed: {e}")
+        await asyncio.sleep(interval_seconds)
+
+
 _bg_task: Optional[asyncio.Task] = None
+_sync_task: Optional[asyncio.Task] = None
+_esc_task: Optional[asyncio.Task] = None
 
 
 def start_dispatcher(db):
-    global _bg_task
+    global _bg_task, _sync_task, _esc_task
     if _bg_task is None or _bg_task.done():
         _bg_task = asyncio.create_task(dispatcher_loop(db))
         logger.info("admin_bridge dispatcher started")
+    if _sync_task is None or _sync_task.done():
+        _sync_task = asyncio.create_task(user_sync_loop(db))
+        logger.info("admin_users sync loop started (5min interval)")
+    if _esc_task is None or _esc_task.done():
+        _esc_task = asyncio.create_task(escalation_loop(db))
+        logger.info("escalation loop started (15min interval)")
 
 
 def stop_dispatcher():
-    global _bg_task
-    if _bg_task and not _bg_task.done():
-        _bg_task.cancel()
-        _bg_task = None
+    global _bg_task, _sync_task, _esc_task
+    for t in (_bg_task, _sync_task, _esc_task):
+        if t and not t.done():
+            t.cancel()
+    _bg_task = _sync_task = _esc_task = None

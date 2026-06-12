@@ -53,6 +53,19 @@ export default function AdminBridgePanel() {
     setSending(false);
   };
 
+  const syncUsers = async () => {
+    setErr("");
+    setSending(true);
+    try {
+      const { data } = await api.post("/admin/bridge/sync-users");
+      setErr(`Synced: ${data.fetched} fetched · ${data.created} created · ${data.updated} updated · ${data.skipped} skipped`);
+      load();
+    } catch (e) {
+      setErr(e?.response?.data?.detail || "Sync failed");
+    }
+    setSending(false);
+  };
+
   const retry = async (id) => {
     try { await api.post(`/admin/bridge/retry/${id}`); load(); } catch {}
   };
@@ -71,6 +84,9 @@ export default function AdminBridgePanel() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={syncUsers} disabled={sending || !cfg.admin_api_key_configured} data-testid="bridge-sync-users-btn" className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold bg-white border border-[#DFE1E6] rounded hover:border-[#0052CC] disabled:opacity-60">
+            <RefreshCw className="h-3 w-3" /> Sync users now
+          </button>
           <Badge ok={cfg.secret_configured} testid="bridge-secret-badge">{cfg.secret_configured ? "Shared secret OK" : "Secret missing"}</Badge>
           <Badge ok={!!cfg.admin_webhook_url} testid="bridge-url-badge">{cfg.admin_webhook_url ? "Upstream URL set" : "Upstream URL missing"}</Badge>
           <Badge ok={cfg.admin_api_key_configured} kind="info" testid="bridge-key-badge">{cfg.admin_api_key_configured ? "Bearer token set" : "Bearer pending"}</Badge>

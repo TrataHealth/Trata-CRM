@@ -3304,6 +3304,15 @@ async def bridge_test_send(body: AdminBridgeTestSend, current=Depends(get_curren
     return {"ok": True, "queued": record}
 
 
+@api.post("/admin/bridge/sync-users")
+async def bridge_sync_users(current=Depends(get_current_user)):
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Admin/manager only")
+    result = await ab.sync_users_from_admin(db)
+    return {"ok": True, **result}
+
+
+
 @api.post("/admin/bridge/retry/{record_id}")
 async def bridge_retry(record_id: str, current=Depends(get_current_user)):
     if not is_admin_or_manager(current):

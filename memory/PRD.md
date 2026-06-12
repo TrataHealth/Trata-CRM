@@ -52,6 +52,14 @@ Removed Hospital/Clinic/Pathology provider portals. Live Fleet Map (Leaflet) add
 - **Targets** — `GET /api/agent/targets` returns month-to-date actuals vs targets.
 - Tested: 23/23 backend pytest + 17/17 frontend playwright (after fixing /agent route guard).
 
+### Iter 16 (2026-06-12) — Periodic admin-user sync + auto-escalation
+- New `admin_bridge.sync_users_from_admin()` — pulls `/api/admin/users` from Trata Admin App, upserts `ambulance_provider` users into CRM contacts (matches by normalized phone). NEVER overwrites pipeline_stage / assigned_agent_id / KYC state — purely a metadata refresh + `upstream_user_id` cache.
+- New `user_sync_loop` background task — runs every 5 minutes, started on app boot.
+- New `POST /api/admin/bridge/sync-users` endpoint + "Sync users now" button on the Admin Bridge panel (one-click manual trigger).
+- New `escalation_loop` background task (15min interval). Rules: if a lead has been with a sales rep for >36h without KYC submission → in-app notification to their manager. If a KYC has been in master-admin queue >24h → in-app notification + Resend email to master admin's recovery_email with subject `⏰ KYC awaiting your final approval — {name} ({hours}h overdue)`. Marks `escalation_*_at` on the contact so we don't re-notify.
+- All 3 background loops (`dispatcher`, `user_sync`, `escalation`) start cleanly on startup; verified by log lines.
+- Manual sync verified: fetched 30 admin users, updated 1 (Abhishek), skipped 29 non-providers.
+
 ### Iter 15 (2026-06-12) — SLA timer + ops metric
 - New `SlaChip` component with auto-update every minute; color-coded urgency: green <12h, yellow 12-24h, red OVERDUE ≥24h.
 - Wired into 3 places: each KYC queue row, sales-rep review state in `KycMirrorCard`, master-admin awaiting-final state in `KycMirrorCard`.
