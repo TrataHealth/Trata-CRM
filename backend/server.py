@@ -841,6 +841,144 @@ async def list_contacts(
     return {"items": items, "total": total}
 
 
+# ---------- Onboard new provider from CRM ----------
+# Master Admin / Manager can create a provider directly from the CRM (mirrors the
+# admin app's onboarding flow). Creates a CRM contact and emits crm.lead.created →
+# user.upsert outbound so the Trata Admin App + Provider App see the same user.
+PROVIDER_ROLES_ALLOWED = {
+    "ambulance_provider", "hospital", "doctor", "paramedic", "pathologist", "pharmacy",
+}
+
+
+@api.post("/admin/onboard-provider")
+async def onboard_provider(payload: Dict[str, Any] = Body(...), current=Depends(get_current_user)):
+    """Master admin / manager creates a new provider lead in the CRM. The contact is
+    persisted locally and pushed to the Trata Admin App via the outbound webhook bridge
+    (crm.lead.created → user.upsert). After delivery, the provider can OTP-login to the
+    Provider App with the same phone."""
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Only admins/managers can onboard providers")
+
+    role = (payload.get("role") or "").strip()
+    if role not in PROVIDER_ROLES_ALLOWED:
+        raise HTTPException(status_code=400, detail=f"role must be one of {sorted(PROVIDER_ROLES_ALLOWED)}")
+    name = (payload.get("name") or "").strip()
+    phone = _normalize_phone(payload.get("phone") or "")
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    if not phone or len(phone) != 10:
+        raise HTTPException(status_code=400, detail="A valid 10-digit phone is required")
+
+    # Duplicate check
+    existing = await db.contacts.find_one({"phone": phone}, {"_id": 0, "id": 1, "name": 1})
+    if existing:
+        raise HTTPException(status_code=409, detail=f"A provider with phone {phone} already exists: {existing.get('name')}")
+
+    email   = (payload.get("email") or "").strip() or None
+    city    = (payload.get("city") or "").strip() or None
+    state   = (payload.get("state") or "").strip() or None
+    address = (payload.get("address") or "").strip() or None
+
+    # Optional role-specific fields (kept open-ended so different verticals can pass extras)
+    extras: Dict[str, Any] = {}
+    for k in ("hospital_name", "ambulance_count", "specialization", "license_number",
+              "vehicle_reg", "pan_number", "gst_number", "lab_specialty", "pharmacy_type"):
+        v = payload.get(k)
+        if v not in (None, ""):
+            extras[k] = v
+
+    # Auto-assign by territory
+    agent = await _pick_agent_for_territory(city)
+
+    contact_id = str(uuid.uuid4())
+    new_contact = {
+        "id": contact_id,
+        "name": name,
+        "type": role,
+        "phone": phone,
+        "email": email,
+        "city": city,
+        "state": state,
+        "address": address,
+        "is_verified": False,
+        "is_active": False,
+        "pipeline_stage": "contacted",        # they've been actively onboarded — past "lead"
+        "kyc_status": "pending",
+        "deal_value": 0,
+        "assigned_agent_id": agent["id"] if agent else None,
+        "assigned_agent_name": agent["name"] if agent else None,
+        "source": "crm_admin_onboarded",
+        "onboarded_by": current.get("name") or current.get("phone"),
+        "onboarded_at": now_iso(),
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "avatar": None,
+        **extras,
+    }
+    await db.contacts.insert_one(new_contact.copy())
+
+    # Log an activity for the audit trail
+    await db.activities.insert_one({
+        "id": str(uuid.uuid4()),
+        "type": "note",
+        "category": "kyc",
+        "subtype": "provider_onboarded",
+        "title": f"Onboarded {role.replace('_', ' ')} — {name}",
+        "description": f"Created in CRM by {current.get('name')}. Assigned to {agent['name'] if agent else 'unassigned'}.",
+        "contact_id": contact_id,
+        "contact_name": name,
+        "agent_id": current.get("id"),
+        "agent_name": current.get("name"),
+        "status": "completed",
+        "created_at": now_iso(),
+    })
+
+    # Push to Trata Admin App via the outbound webhook bridge — this triggers user.upsert
+    # on the admin side which creates the user record. After that, the provider can OTP-
+    # log into the Provider App using this phone.
+    await ab.queue_outbound(db, "crm.lead.created", {
+        "contact_id": contact_id,
+        "phone": phone,
+        "name": name,
+        "role": role,
+        "user_type": _user_type_for_role(role),
+        "email": email,
+        "city": city,
+        "state": state,
+        "address": address,
+        "verification_status": "pending",
+        "is_active": True,
+        "source": "crm_admin_onboarded",
+        "onboarded_by_crm": current.get("name") or current.get("phone"),
+        **extras,
+    })
+
+    return {
+        "success": True,
+        "contact": new_contact,
+        "login_hint": {
+            "phone": phone,
+            "otp": "Provider can OTP-login at the Provider App. (Universal dev OTP: 123456)",
+            "synced_to_admin": True,
+        },
+    }
+
+
+def _user_type_for_role(role: str) -> str:
+    """Map CRM role → Trata Admin App's `user_type` field (observed in /api/admin/users)."""
+    mapping = {
+        "ambulance_provider": "ambulance_admin",
+        "hospital": "hospital_admin",
+        "doctor": "doctor",
+        "paramedic": "paramedic",
+        "pathologist": "lab",
+        "pharmacy": "pharmacy",
+    }
+    return mapping.get(role, role)
+
+
+
+
 @api.get("/contacts/{contact_id}")
 async def get_contact(contact_id: str, current=Depends(get_current_user)):
     if is_provider(current) and contact_id != current.get("provider_id"):

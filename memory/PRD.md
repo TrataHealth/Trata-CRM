@@ -15,6 +15,12 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
+### Iter 23 (2026-06-12) — Onboard new provider from CRM
+- **Backend** `POST /api/admin/onboard-provider` — admin/manager-only. Validates role (must be one of ambulance_provider, hospital, doctor, paramedic, pathologist, pharmacy), 10-digit phone, and name. Duplicate-phone returns 409. Creates a CRM contact with `pipeline_stage="contacted"`, `kyc_status="pending"`, auto-assigns by territory, logs a `provider_onboarded` activity, and emits the outbound `crm.lead.created` event so the Trata Admin App webhook handler sees it.
+- **Frontend** `OnboardProviderModal.jsx` — sleek modal with role-chip grid + common fields (name, phone, email, city, state, address, PAN, GST) + per-role extras (ambulance: vehicle count/reg/licence; hospital: legal name/specialities/licence; doctor: specialisation/MCI #; paramedic, pathologist, pharmacy variants). "Onboard provider" button (testid `contacts-onboard-btn`) added to Trata Users page header, visible to admin/manager only.
+- **Sync status** transparency — success panel shows a 3-line sync status: ✓ added to CRM, ✓ outbound `crm.lead.created` delivered to Trata Admin App (HTTP 200), ⚠ **honest disclosure**: today the Trata Admin App's webhook handler only *logs* `lead.created` events (`{result: {logged: true}}`) and does not yet auto-create users from them. Provider-App OTP-login will work end-to-end once the Admin App is upgraded to upsert users on inbound `lead.created`.
+- Tested live end-to-end: created "Dr. Test Doctor" via the UI → contact appeared in CRM, outbound event status=sent (HTTP 200) → cleanup verified. Test contacts removed; DB is back to real-data-only (Abhishek + Tathastu + 2 fresh upstream syncs).
+
 ### Iter 22 (2026-06-12) — Dashboard range filter + AI insights
 - **Backend**: `/api/dashboard/stats?range=7d|30d|3m|6m|12m|all` — time-windowed counts for cases, revenue and activity_breakdown. Growth chart adaptively buckets (always ≤14 points) so the chart looks right across all windows. Pipeline/users/tasks stay all-time snapshots.
 - **Backend**: new `POST /api/dashboard/ai-insights` (body `{range}`) — reuses the same stats endpoint as source of truth, sends a compact JSON snapshot + recent activity titles to **Claude Sonnet 4.6** (via emergentintegrations + EMERGENT_LLM_KEY), returns structured markdown with 4 sections (Headline · What's working · What's at risk · Do next). Internal-only.

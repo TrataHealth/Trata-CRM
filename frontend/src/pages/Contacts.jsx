@@ -1,19 +1,24 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { CONTACT_TYPES, PIPELINE_STAGES, typeLabel, fmtCurrency, relativeTime } from "../lib/constants";
-import { Filter, Download, CheckCircle2, XCircle, Search } from "lucide-react";
+import { Filter, Download, CheckCircle2, XCircle, Search, UserPlus } from "lucide-react";
+import OnboardProviderModal from "../components/OnboardProviderModal";
 
 export default function Contacts() {
   const [params, setParams] = useSearchParams();
   const [list, setList] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [onboardOpen, setOnboardOpen] = useState(false);
   const type = params.get("type") || "";
   const stage = params.get("stage") || "";
   const verified = params.get("verified") || "";
   const q = params.get("q") || "";
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canOnboard = !!(user?.is_master_admin || ["admin", "manager", "national_manager", "regional_manager", "zonal_manager", "area_manager"].includes(user?.role));
 
   const fetch = async () => {
     setLoading(true);
@@ -58,14 +63,36 @@ export default function Contacts() {
           </h1>
           <p className="text-sm text-[#5E6C84] mt-1">All users on the Trata network — providers, prospects, and partners.</p>
         </div>
-        <button
-          data-testid="contacts-export-btn"
-          onClick={exportCsv}
-          className="flex items-center gap-2 px-3 py-2 text-sm border border-[#DFE1E6] rounded-md hover:bg-[#F8F9FA]"
-        >
-          <Download className="h-4 w-4" /> Export CSV
-        </button>
+        <div className="flex items-center gap-2">
+          {canOnboard && (
+            <button
+              data-testid="contacts-onboard-btn"
+              onClick={() => setOnboardOpen(true)}
+              className="flex items-center gap-2 px-3.5 py-2 text-sm font-semibold rounded-md text-white bg-[#0052CC] hover:bg-[#0747A6] shadow-sm"
+            >
+              <UserPlus className="h-4 w-4" /> Onboard provider
+            </button>
+          )}
+          <button
+            data-testid="contacts-export-btn"
+            onClick={exportCsv}
+            className="flex items-center gap-2 px-3 py-2 text-sm border border-[#DFE1E6] rounded-md hover:bg-[#F8F9FA]"
+          >
+            <Download className="h-4 w-4" /> Export CSV
+          </button>
+        </div>
       </div>
+
+      {onboardOpen && (
+        <OnboardProviderModal
+          onClose={() => setOnboardOpen(false)}
+          onCreated={(created) => {
+            setOnboardOpen(false);
+            fetch();
+            if (created?.contact?.id) navigate(`/contacts/${created.contact.id}`);
+          }}
+        />
+      )}
 
       {/* Type tabs */}
       <div className="flex flex-nowrap overflow-x-auto scrollbar-thin gap-1.5 border-b border-[#DFE1E6] pb-3 -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="contacts-type-tabs">
