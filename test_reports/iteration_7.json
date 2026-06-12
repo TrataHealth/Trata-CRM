@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 7 — AI KYC Pre-screening (Gemini Vision via emergentintegrations). BACKEND: 5 passed / 2 skipped on /app/backend/tests/test_kyc_ai_prescreen.py. Verified: (1) POST /api/contacts/{id}/kyc-ai-prescreen as Master Admin returns 200 with success=true, populates ai_doc_prescreens (per-doc {recommendation, reason, confidence in 0..1, model}), and ai_prescreen_summary with approve+reject+unclear=total and model='gemini-2.5-flash'. (2) GET /api/contacts/{id} returns the same ai_doc_prescreens + ai_prescreen_summary on contact body (persistence confirmed). (3) Sales rep Rohan (9000000002) on his OWN assigned lead (Abhishek 1442c0a1) — 200, summary populated correctly. (4) An outbound row event='crm.kyc.ai_prescreened' exists in admin_bridge_outbound and is exposed via GET /api/admin/bridge/events.outbound[] (status='sent' because TRATA_ADMIN_API_URL is configured). (5) Smoke: GET /api/contacts/{id}/kyc still returns {available:true, kyc:{docs:[...]}} — no regression. SKIPPED with explanations: provider-owner 403 test (phone 7678218261 has no crm_users row — providers don't auto-provision a CRM auth account, /auth/verify-otp rejects with 'Phone not authorized') and sales-rep-on-other-lead 403 test (DB has exactly 1 contact, no cross-lead target available). FRONTEND: Playwright drove Rohan login (data-testid login-phone-input → login-send-otp-btn → login-otp-input → login-verify-btn → login-password-input → login-password-btn) and navigated to /contacts/1442c0a1. Verified data-testids: kyc-docs section renders, kyc-ai-prescreen-btn label correctly toggles 'Re-scan with AI' / 'AI scanning…', kyc-ai-summary purple banner shows 'AI suggests: 0 approve · 1 reject · 0 unclear (model: gemini-2.5-flash) — final call is yours.', kyc-doc-ai-{doc_id} pill shows 'AI: Reject (100% conf)' + reason in red. Use-suggestion link is correctly hidden because the test contact already has a sales-rep review (myReview present). Re-scan click triggered the spinner and updated state.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_kyc_ai_prescreen.py",
+    "/app/test_reports/pytest/kyc_ai_prescreen.xml"
+  ],
+  "action_items": [
+    "Provider 7678218261 cannot authenticate to CRM via /auth/verify-otp because no crm_users row exists for him. If the product expectation is that provider_owner gets 403 from kyc-ai-prescreen specifically, you'll need to seed/auto-provision a provider_owner crm_users row for him on first login (the existing _ensure_master_admin_user path is only wired for the master phone). Today the gate is 'Phone not authorized' (403 at login) which still blocks access but for a different reason. Code review: is_internal() check at server.py:1290 IS correct — it will return 403 if a provider ever reaches the endpoint.",
+    "Cross-lead 403 path is untestable today because DB has only 1 contact. Recommend keeping the assertion `if is_sales_rep(current) and c.get('assigned_agent_id') != current['id']: 403` and adding a small contract test once a second contact lands in the system (or seeding TEST_ scoped contact in test fixtures).",
+    "CARRY-OVER (iteration 6): /api/admin/webhooks/test-send + /api/admin/webhooks/events still allow sales_rep via require_internal — tighten to admin/manager. Independent of this iteration.",
+    "CARRY-OVER (iteration 3/4): /agent route in App.js lacks internalOnly guard — provider visiting /agent doesn't redirect. Independent of this iteration."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/server.py is now ~3650 lines — strongly recommend extracting at least the new AI pre-screen block (lines 1144-1367, ~220 lines) into /app/backend/ai_kyc_prescreen.py with its helpers (_DOC_MIME_BY_EXT, _mime_from, _download_admin_doc, _parse_ai_json, _ai_screen_doc) and importing the router. Eases future LLM-model swaps and unit testing.",
+    "_ai_screen_doc iterates docs sequentially (server.py:1325-1337) — for contacts with 5+ docs the wall-clock time grows linearly (3-8s/doc). Consider asyncio.gather() with bounded concurrency (e.g. 4 parallel) to cut latency. Today's contact has 1 doc so impact is invisible.",
+    "_download_admin_doc writes to a NamedTemporaryFile in /tmp with no size cap — a malicious/oversized upstream URL could fill the container disk. Add a httpx response.aread() max-bytes check, or stream with a limit, before persisting.",
+    "ai_prescreen_kyc returns 503 if EMERGENT_LLM_KEY missing (good) but does NOT return a structured error for the partial-failure case (e.g. one doc returns {'model': 'error'}). The summary counts that doc as 'unclear' silently. Consider exposing a 'failures' count in ai_prescreen_summary so the UI can warn the rep that not every doc was scanned.",
+    "Outbound queue write at server.py:1354 fires AFTER docs are scanned but BEFORE the response — if upstream is slow this can stretch the request. Today it's an async db insert into admin_bridge_outbound (the actual HTTP delivery happens in a background sweeper) so latency impact is negligible — verified by reading queue_outbound.",
+    "Frontend KycMirrorCard.jsx:62 calls api.post then await load(false) — during the reload the docs section briefly shows 'Loading KYC from Trata Admin App…' and the summary banner disappears. Consider keeping state.contact.ai_prescreen_summary visible during reload (optimistic update from the POST response) instead of going to skeleton.",
+    "OUTBOUND_NAME_MAP maps crm.kyc.ai_prescreened → kyc.note_added. Conceptually 'ai_prescreened' is a richer event than 'note_added' — the upstream admin app loses the structured summary. Consider adding a dedicated kyc.ai_prescreened event on the admin side instead of bucketing into note_added.",
+    "Use-suggestion link (KycMirrorCard.jsx:269) is gated on `!myReview && aiRec.recommendation !== 'unclear'`. If the rep already has a myReview from a previous flow, the link disappears entirely — so for the canonical 'AI recommended approve, rep already rejected' confusion case there's no UI affordance to flip back. Acceptable but worth product validation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_kyc_ai_prescreen.py (NEW — 7 tests across 3 classes: TestAdminPrescreen [3 tests], TestRBAC [3 tests, 2 skipped with reason], TestExistingKycFlowSmoke [1 test])"
+  ],
+  "success_rate": {
+    "backend": "100% (5/5 executed, 2 skipped with documented reason in test_report)",
+    "frontend": "100% — all data-testids found (kyc-ai-prescreen-btn, kyc-ai-summary, kyc-doc-ai-{id}); Re-scan flow verified; Use-suggestion correctly hidden when myReview exists"
+  },
+  "test_credentials": "Master Admin 9873117605 / Master@123 (still gated behind /security-setup on FE but backend login-password works fine), Rohan 9000000002 / Trata@123 (sales_rep, security setup done — used as primary FE persona).",
+  "seed_data_creation": "No new seed data. Backend tests reuse the existing contact 1442c0a1-0fd4-407a-a2d3-adbbe1275c7c (Abhishek Ambulance) and only WRITE to it via the endpoint under test (ai_doc_prescreens + ai_prescreen_summary). Three crm.kyc.ai_prescreened rows were appended to admin_bridge_outbound (status='sent' — upstream URL is configured) during the test run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Re-run: REACT_APP_BACKEND_URL=https://patient-hub-133.preview.emergentagent.com python -m pytest /app/backend/tests/test_kyc_ai_prescreen.py -v (~20s, makes real Gemini calls each run — TestAdminPrescreen and test_sales_rep_on_own_lead_allowed both POST to the endpoint, so 2x billable Gemini calls per run). The 2 skipped tests will stay skipped until (a) a provider_owner crm_users row is seeded for 7678218261 and (b) a second contact lands in the DB. Frontend script flow: Rohan login (9000000002/Trata@123) → /contacts/1442c0a1-0fd4-407a-a2d3-adbbe1275c7c → wait for [data-testid=kyc-docs] → assert [data-testid=kyc-ai-prescreen-btn] / [data-testid=kyc-ai-summary] / [data-testid^=kyc-doc-ai-]. Login testids confirmed: login-phone-input, login-send-otp-btn, login-otp-input, login-verify-btn, login-password-input, login-password-btn (NOTE: it's login-verify-btn not login-verify-otp-btn as iteration 6 expected).",
+  "rca of the issue": "No bugs found in iteration 7. One inherited friction: during AI re-scan the KycMirrorCard.load(false) refresh briefly puts the docs section into 'Loading KYC from Trata Admin App…' skeleton, which makes the summary banner disappear for 1-2s. Suggested mitigation: optimistically merge the POST /kyc-ai-prescreen response into state.contact before triggering load(), or call load() in a way that doesn't blank the docs section (e.g. setState({...state, loadingKyc: true}) instead of setState({loading: true, data: null, contact: null}) at KycMirrorCard.jsx:36)."
+}

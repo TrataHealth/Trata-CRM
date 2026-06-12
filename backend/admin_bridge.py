@@ -102,6 +102,7 @@ OUTBOUND_EVENTS = {
     "crm.kyc.doc_reviewed",
     "crm.kyc.agent_completed",
     "crm.kyc.admin_verified",
+    "crm.kyc.ai_prescreened",
     "crm.activity.logged",
     "crm.deal.closed",
     "crm.note.added",
@@ -118,6 +119,7 @@ OUTBOUND_NAME_MAP = {
     "crm.kyc.doc_reviewed":     "kyc.note_added",
     "crm.kyc.agent_completed":  "kyc.review_requested",   # signals admin to do final review
     "crm.kyc.admin_verified":   "kyc.note_added",          # final master-admin verification
+    "crm.kyc.ai_prescreened":   "kyc.note_added",          # AI doc-screen recommendation
     "crm.deal.closed":          "deal.closed",
     "crm.note.added":           "user.upsert",
 }

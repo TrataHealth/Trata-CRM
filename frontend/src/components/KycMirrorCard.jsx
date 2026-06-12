@@ -3,7 +3,7 @@ import api from "../lib/api";
 import { useAuth } from "../lib/auth";
 import {
   ShieldCheck, ShieldAlert, ShieldQuestion, Loader2, RefreshCw, ExternalLink,
-  CheckCircle2, XCircle, FileText, FileQuestion, AlertCircle, MessagesSquare, Send, Sparkles, Crown,
+  CheckCircle2, XCircle, FileText, FileQuestion, AlertCircle, MessagesSquare, Send, Sparkles, Crown, Wand2,
 } from "lucide-react";
 import { relativeTime } from "../lib/constants";
 import SlaChip from "./SlaChip";
@@ -28,6 +28,7 @@ export default function KycMirrorCard({ contactId }) {
   const [docReviewing, setDocReviewing] = useState({ docId: null, decision: "approved", notes: "" });
   const [submitting, setSubmitting] = useState(false);
   const [adminForm, setAdminForm] = useState({ open: false, decision: "verified", notes: "" });
+  const [aiScanning, setAiScanning] = useState(false);
 
   const isAdmin = me?.is_master_admin || me?.role === "admin";
 
@@ -47,7 +48,23 @@ export default function KycMirrorCard({ contactId }) {
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [contactId]);
 
   const reviewDoc = async (docId, decision) => {
-    setDocReviewing({ docId, decision, notes: docReviewing.notes });
+    const ai = (state.contact?.ai_doc_prescreens || {})[docId];
+    const aiDecision = ai?.recommendation === "approve" ? "approved" : ai?.recommendation === "reject" ? "rejected" : null;
+    const aiHint = ai && aiDecision === decision && ai.reason ? `AI: ${ai.reason}` : "";
+    setDocReviewing({ docId, decision, notes: aiHint });
+  };
+
+  const runAiPrescreen = async () => {
+    if (aiScanning) return;
+    setAiScanning(true);
+    setState((s) => ({ ...s, err: "" }));
+    try {
+      await api.post(`/contacts/${contactId}/kyc-ai-prescreen`);
+      await load(false);
+    } catch (e) {
+      setState((s) => ({ ...s, err: e?.response?.data?.detail || "AI pre-screen failed" }));
+    }
+    setAiScanning(false);
   };
 
   const submitDocReview = async () => {
@@ -169,7 +186,34 @@ export default function KycMirrorCard({ contactId }) {
         </div>
 
         <div className="p-5" data-testid="kyc-docs">
-          <div className="overline mb-3">Uploaded documents ({(kyc.docs || []).length})</div>
+          <div className="overline mb-3 flex items-center justify-between gap-2 flex-wrap">
+            <span>Uploaded documents ({(kyc.docs || []).length})</span>
+            {(kyc.docs || []).length > 0 && (
+              <button
+                onClick={runAiPrescreen}
+                disabled={aiScanning}
+                data-testid="kyc-ai-prescreen-btn"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded text-white bg-gradient-to-r from-[#6554C0] to-[#403294] hover:opacity-95 disabled:opacity-60 normal-case tracking-normal"
+                title="Use Gemini Vision to suggest approve/reject for every document"
+              >
+                {aiScanning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
+                {aiScanning ? "AI scanning…" : (state.contact?.ai_prescreen_summary ? "Re-scan with AI" : "AI pre-screen")}
+              </button>
+            )}
+          </div>
+          {state.contact?.ai_prescreen_summary && (
+            <div className="mb-3 text-[11px] text-[#42526E] bg-[#EAE6FF] border border-[#6554C0]/30 rounded p-2 flex items-center gap-1.5 flex-wrap" data-testid="kyc-ai-summary">
+              <Sparkles className="h-3 w-3 text-[#6554C0]" />
+              <b className="text-[#403294]">AI suggests:</b>
+              <span className="text-[#006644]">{state.contact.ai_prescreen_summary.approve} approve</span>
+              <span>·</span>
+              <span className="text-[#BF2600]">{state.contact.ai_prescreen_summary.reject} reject</span>
+              <span>·</span>
+              <span className="text-[#974F0C]">{state.contact.ai_prescreen_summary.unclear} unclear</span>
+              <span className="text-[#5E6C84]">(model: {state.contact.ai_prescreen_summary.model})</span>
+              <span className="text-[#5E6C84]">— final call is yours.</span>
+            </div>
+          )}
           {(kyc.docs || []).length === 0 ? (
             <div className="text-sm text-[#5E6C84]">No documents uploaded yet.</div>
           ) : (
@@ -178,7 +222,16 @@ export default function KycMirrorCard({ contactId }) {
                 const s = DOC_STATUS_STYLE[d.status] || DOC_STATUS_STYLE.pending;
                 const Icon = s.icon;
                 const myReview = (state.contact?.agent_doc_reviews || {})[d.id];
+                const aiRec = (state.contact?.ai_doc_prescreens || {})[d.id];
                 const isReviewing = docReviewing.docId === d.id;
+                const aiStyle = aiRec
+                  ? (aiRec.recommendation === "approve"
+                      ? { bg: "#E3FCEF", fg: "#006644", border: "#36B37E", icon: CheckCircle2, label: "AI: Approve" }
+                      : aiRec.recommendation === "reject"
+                      ? { bg: "#FFEBE6", fg: "#BF2600", border: "#FF5630", icon: XCircle, label: "AI: Reject" }
+                      : { bg: "#FFFAE6", fg: "#974F0C", border: "#FFAB00", icon: AlertCircle, label: "AI: Unclear" })
+                  : null;
+                const AiIcon = aiStyle?.icon;
                 return (
                   <li key={d.id} className="border border-[#DFE1E6] rounded p-2.5" data-testid={`kyc-doc-${d.id}`}>
                     <div className="flex items-start justify-between gap-2 flex-wrap">
@@ -197,6 +250,33 @@ export default function KycMirrorCard({ contactId }) {
                       <a href={d.url} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 text-[11px] text-[#0052CC] font-semibold hover:underline" data-testid={`kyc-doc-link-${d.id}`}>
                         <ExternalLink className="h-3 w-3" /> View document
                       </a>
+                    )}
+                    {/* AI pre-screen recommendation */}
+                    {aiStyle && (
+                      <div
+                        className="mt-2 px-2 py-1 rounded border text-[11px] flex items-start gap-1.5"
+                        style={{ background: aiStyle.bg, borderColor: aiStyle.border + "55", color: aiStyle.fg }}
+                        data-testid={`kyc-doc-ai-${d.id}`}
+                      >
+                        <Sparkles className="h-3 w-3 mt-0.5 shrink-0 text-[#6554C0]" />
+                        <span className="flex-1">
+                          <b>{aiStyle.label}</b>
+                          {typeof aiRec.confidence === "number" && (
+                            <span className="ml-1 text-[10px] opacity-80">({Math.round(aiRec.confidence * 100)}% conf)</span>
+                          )}
+                          {aiRec.reason && <span className="block text-[11px] opacity-90 mt-0.5">{aiRec.reason}</span>}
+                        </span>
+                        {!myReview && aiRec.recommendation !== "unclear" && (
+                          <button
+                            onClick={() => reviewDoc(d.id, aiRec.recommendation === "approve" ? "approved" : "rejected")}
+                            data-testid={`kyc-doc-ai-accept-${d.id}`}
+                            className="text-[10px] font-semibold underline whitespace-nowrap"
+                            title="Open review with AI reasoning pre-filled"
+                          >
+                            Use suggestion
+                          </button>
+                        )}
+                      </div>
                     )}
                     {/* My agent-side review */}
                     {myReview ? (

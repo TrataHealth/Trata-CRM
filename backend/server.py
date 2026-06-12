@@ -1141,6 +1141,233 @@ async def review_kyc_doc(contact_id: str, data: KycDocReviewBody, current=Depend
     return {"success": True, "agent_doc_reviews": reviews}
 
 
+# ---------- AI KYC Pre-screening (Phase 6.6) ----------
+# Scans every KYC doc with Gemini Vision and pre-fills approve/reject recommendations
+# so the sales rep starts from an AI suggestion instead of a blank slate.
+_DOC_MIME_BY_EXT = {
+    "pdf": "application/pdf",
+    "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+    "heic": "image/heic", "heif": "image/heif",
+}
+
+
+def _mime_from(url: str, fallback: str = "application/octet-stream") -> str:
+    u = (url or "").split("?")[0].lower()
+    for ext, mt in _DOC_MIME_BY_EXT.items():
+        if u.endswith("." + ext):
+            return mt
+    return fallback
+
+
+async def _download_admin_doc(url: str) -> Optional[tuple]:
+    """Download a KYC doc from the Trata Admin App. Returns (tmp_path, mime_type) or None."""
+    import httpx
+    import tempfile
+    key = os.environ.get("TRATA_ADMIN_API_KEY", "")
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            r = await client.get(url, headers=headers)
+        if r.status_code != 200:
+            logger.warning(f"_download_admin_doc {url} -> {r.status_code}")
+            return None
+        mime = r.headers.get("content-type", "").split(";")[0].strip() or _mime_from(url)
+        # Pick extension for the temp file so Gemini can sniff it
+        ext_map = {v: "." + k for k, v in _DOC_MIME_BY_EXT.items()}
+        suffix = ext_map.get(mime) or "." + (_mime_from(url, "bin").split("/")[-1])
+        fd = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        fd.write(r.content)
+        fd.close()
+        return fd.name, mime
+    except Exception as e:
+        logger.error(f"_download_admin_doc failed for {url}: {e}")
+        return None
+
+
+def _parse_ai_json(text: str) -> Dict[str, Any]:
+    """Best-effort JSON extraction from an LLM response."""
+    s = (text or "").strip()
+    # Strip code fences
+    if s.startswith("```"):
+        s = s.split("```", 2)[-1] if s.count("```") >= 2 else s.strip("`")
+        if s.lower().startswith("json"):
+            s = s[4:]
+    # Find the first {...}
+    start, end = s.find("{"), s.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(s[start:end + 1])
+        except Exception:
+            pass
+    return {}
+
+
+async def _ai_screen_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Send a single KYC document to Gemini Vision and return a structured recommendation.
+
+    Returns: {recommendation: 'approve'|'reject'|'unclear', reason: str, confidence: 0..1, model: str}
+    """
+    import os as _os
+    from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
+
+    kind = doc.get("kind") or "kyc_document"
+    name = doc.get("name") or kind
+    url = doc.get("url") or ""
+
+    if not url:
+        return {"recommendation": "unclear", "reason": "No document URL available.", "confidence": 0.0, "model": "skipped"}
+
+    dl = await _download_admin_doc(url)
+    if not dl:
+        return {"recommendation": "unclear", "reason": "Could not download document from upstream.", "confidence": 0.0, "model": "skipped"}
+    path, mime = dl
+
+    # Gemini Flash supports image/* and application/pdf via FileContentWithMimeType.
+    supported = mime.startswith("image/") or mime == "application/pdf"
+    if not supported:
+        try:
+            _os.unlink(path)
+        except Exception:
+            pass
+        return {"recommendation": "unclear", "reason": f"Unsupported mime type: {mime}", "confidence": 0.0, "model": "skipped"}
+
+    system = (
+        "You are a KYC document verification assistant for TrataHealth's ambulance-provider "
+        "onboarding workflow. You inspect uploaded Indian compliance documents (PAN card, "
+        "Aadhaar, GST certificate, RC, insurance, fitness certificate, drug license, etc.) and "
+        "give the sales rep a fast first-pass recommendation. You are NOT the final approver — "
+        "the sales rep and master admin make the binding decision. Be strict: only recommend "
+        "APPROVE if the document is clearly legible, the document type matches the expected "
+        "kind, and there are no obvious tampering or expiry red flags. Otherwise recommend "
+        "REJECT and explain in 1-2 short sentences."
+    )
+    prompt = (
+        f"Expected document kind: {kind}\nFile name: {name}\n\n"
+        "Inspect the attached file and respond with ONLY a single JSON object on one line, no prose, no markdown:\n"
+        '{"recommendation":"approve"|"reject"|"unclear","reason":"<one short sentence>","confidence":<0.0-1.0>}'
+    )
+
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"kyc-ai-screen-{doc.get('id') or uuid.uuid4()}",
+            system_message=system,
+        ).with_model("gemini", "gemini-2.5-flash")
+        attachment = FileContentWithMimeType(file_path=path, mime_type=mime)
+        reply = await chat.send_message(UserMessage(text=prompt, file_contents=[attachment]))
+        parsed = _parse_ai_json(str(reply))
+        rec = (parsed.get("recommendation") or "").strip().lower()
+        if rec not in {"approve", "reject", "unclear"}:
+            rec = "unclear"
+        try:
+            conf = float(parsed.get("confidence", 0.0))
+        except Exception:
+            conf = 0.0
+        conf = max(0.0, min(1.0, conf))
+        return {
+            "recommendation": rec,
+            "reason": str(parsed.get("reason") or "").strip()[:400] or "No reason returned.",
+            "confidence": conf,
+            "model": "gemini-2.5-flash",
+        }
+    except Exception as e:
+        logger.error(f"_ai_screen_doc failed: {e}")
+        return {"recommendation": "unclear", "reason": f"AI scan failed: {str(e)[:160]}", "confidence": 0.0, "model": "error"}
+    finally:
+        try:
+            _os.unlink(path)
+        except Exception:
+            pass
+
+
+@api.post("/contacts/{contact_id}/kyc-ai-prescreen")
+async def ai_prescreen_kyc(contact_id: str, current=Depends(get_current_user)):
+    """Run AI vision pre-screening over every uploaded KYC document for this lead.
+    Stores per-doc {recommendation, reason, confidence} on contact.ai_doc_prescreens
+    so the sales rep starts from an AI suggestion in KycMirrorCard."""
+    if not is_internal(current):
+        raise HTTPException(status_code=403, detail="Internal users only")
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=503, detail="AI not configured (EMERGENT_LLM_KEY missing)")
+    c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if is_sales_rep(current) and c.get("assigned_agent_id") != current["id"]:
+        raise HTTPException(status_code=403, detail="Not your lead")
+
+    upstream_user_id = c.get("upstream_user_id")
+    if not upstream_user_id:
+        admin_user = await ab.find_admin_user_by_phone(c.get("phone") or "")
+        if not admin_user:
+            raise HTTPException(status_code=400, detail="No matching Trata Admin user — open KYC tab first to sync.")
+        upstream_user_id = admin_user["id"]
+
+    kyc = await ab.fetch_kyc(upstream_user_id)
+    if not kyc:
+        raise HTTPException(status_code=502, detail="Could not fetch KYC from Trata Admin App.")
+
+    docs = kyc.get("docs") or []
+    if not docs:
+        raise HTTPException(status_code=400, detail="No documents uploaded yet — nothing to scan.")
+
+    admin_base = os.environ.get("TRATA_ADMIN_API_URL", "").rstrip("/")
+    for d in docs:
+        u = d.get("url") or ""
+        if u.startswith("/") and admin_base:
+            d["url"] = admin_base + u
+
+    prescreens: Dict[str, Any] = c.get("ai_doc_prescreens") or {}
+    approve_n = reject_n = unclear_n = 0
+    started = now_iso()
+
+    for d in docs:
+        result = await _ai_screen_doc(d)
+        result["doc_kind"] = d.get("kind")
+        result["doc_name"] = d.get("name")
+        result["scanned_at"] = now_iso()
+        result["scanned_by"] = current.get("name") or current.get("phone")
+        prescreens[d.get("id") or d.get("kind")] = result
+        if result["recommendation"] == "approve":
+            approve_n += 1
+        elif result["recommendation"] == "reject":
+            reject_n += 1
+        else:
+            unclear_n += 1
+
+    summary = {
+        "approve": approve_n,
+        "reject": reject_n,
+        "unclear": unclear_n,
+        "total": len(docs),
+        "scanned_at": now_iso(),
+        "scanned_by": current.get("name") or current.get("phone"),
+        "model": "gemini-2.5-flash",
+    }
+    await db.contacts.update_one({"id": contact_id}, {"$set": {
+        "ai_doc_prescreens": prescreens,
+        "ai_prescreen_summary": summary,
+        "updated_at": now_iso(),
+    }})
+
+    await ab.queue_outbound(db, "crm.kyc.ai_prescreened", {
+        "phone": c.get("phone"),
+        "contact_name": c["name"],
+        "kyc_id": c.get("kyc_id"),
+        "upstream_user_id": c.get("upstream_user_id"),
+        "text": f"AI pre-screen: {approve_n} approve / {reject_n} reject / {unclear_n} unclear (model gemini-2.5-flash)",
+        "author_phone": current.get("phone"),
+        "author_role": current.get("role") or "sales_rep",
+        "author_name": current.get("name"),
+        "summary": summary,
+        "scanned_at": started,
+    })
+
+    return {"success": True, "ai_doc_prescreens": prescreens, "ai_prescreen_summary": summary}
+
+
+
 @api.post("/contacts/{contact_id}/kyc-submit-for-admin")
 async def submit_kyc_for_admin_final(contact_id: str, current=Depends(get_current_user)):
     """Sales rep declares 'I'm done reviewing all docs — please final-approve, master admin.'
