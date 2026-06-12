@@ -270,8 +270,12 @@ def _normalize_phone(p: Optional[str]) -> str:
 
 
 async def sync_users_from_admin(db) -> Dict[str, int]:
-    """Pull /api/admin/users from the admin app and upsert ambulance_provider records as CRM contacts.
-    Skipped: existing contacts get a metadata refresh; never overwrites pipeline_stage or assigned_agent_id."""
+    """Pull /api/admin/users from the admin app and upsert healthcare-provider records as CRM contacts.
+    Includes ambulance_provider, hospital, doctor, paramedic, lab/pathologist, pharmacy.
+    Existing contacts get a metadata refresh; never overwrites pipeline_stage or assigned_agent_id."""
+    PROVIDER_ROLES = {"ambulance_provider", "hospital", "doctor", "paramedic", "lab", "pathologist", "pharmacy"}
+    # Map upstream role → CRM contact type (CRM uses 'pathologist' for labs)
+    ROLE_TO_TYPE = {"lab": "pathologist"}
     payload = await admin_api_get("/api/admin/users")
     if not payload:
         return {"fetched": 0, "created": 0, "updated": 0, "skipped": 0}
@@ -280,19 +284,23 @@ async def sync_users_from_admin(db) -> Dict[str, int]:
     updated = 0
     skipped = 0
     for u in users:
-        if u.get("role") != "ambulance_provider":
+        role = u.get("role")
+        if role not in PROVIDER_ROLES:
             skipped += 1
             continue
+        contact_type = ROLE_TO_TYPE.get(role, role)
         phone = _normalize_phone(u.get("phone"))
         if not phone:
             skipped += 1
             continue
-        existing = await db.contacts.find_one({"phone": phone}, {"_id": 0, "id": 1, "name": 1, "city": 1})
+        existing = await db.contacts.find_one({"phone": phone}, {"_id": 0, "id": 1, "name": 1, "city": 1, "type": 1})
         if existing:
             # Refresh metadata only — never clobber pipeline_stage / assigned_agent / KYC
             patch = {}
             if u.get("name") and u["name"] != existing.get("name"): patch["name"] = u["name"]
             if u.get("city") and u["city"] != existing.get("city"): patch["city"] = u["city"]
+            # If a contact was previously typed differently (e.g. defaulted), correct it to the upstream role
+            if existing.get("type") != contact_type: patch["type"] = contact_type
             patch["upstream_user_id"] = u["id"]
             patch["last_admin_sync_at"] = _now()
             await db.contacts.update_one({"id": existing["id"]}, {"$set": patch})
@@ -304,7 +312,7 @@ async def sync_users_from_admin(db) -> Dict[str, int]:
             new_doc = {
                 "id": str(uuid.uuid4()),
                 "name": u.get("name") or f"Provider {phone}",
-                "type": "ambulance_provider",
+                "type": contact_type,
                 "phone": phone,
                 "city": u.get("city"),
                 "state": u.get("state"),
@@ -378,7 +386,7 @@ async def escalation_loop(db, interval_seconds: int = ESCALATION_INTERVAL_SECOND
                 "assigned_agent_id": {"$ne": None},
                 "created_at": {"$lt": rep_cutoff},
                 "escalation_rep_at": {"$exists": False},
-                "type": "ambulance_provider",
+                "type": {"$in": ["ambulance_provider", "hospital", "doctor", "paramedic", "pathologist", "pharmacy"]},
             }):
                 agent = await db.crm_users.find_one({"id": c["assigned_agent_id"]}, {"_id": 0, "id": 1, "name": 1, "reports_to": 1})
                 if not agent:

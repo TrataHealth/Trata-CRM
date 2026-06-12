@@ -15,6 +15,12 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
+### Iter 21 (2026-06-12) — Multi-provider type sync (hospitals, labs, doctors, etc.)
+- `admin_bridge.sync_users_from_admin` now syncs **all healthcare provider roles** (ambulance_provider, hospital, doctor, paramedic, lab/pathologist, pharmacy) instead of ambulance-only.
+- Upstream role → CRM contact type 1:1 (with `lab` → `pathologist` alias). Existing contacts get a `type` correction if it had drifted.
+- Escalation loop broadened to flag stale leads across all provider types.
+- Verified: forced sync now imports Tathastu Institute of Medical Sciences & Hospital alongside Abhishek Ambulance. UI "Trata Users" tab shows both rows correctly tagged HOSPITAL and AMBULANCE.
+
 ### Iter 20 (2026-06-12) — Apply AI-extracted fields to contact (one-click)
 - New endpoint `POST /api/contacts/{id}/apply-extracted-fields` body `{fields?: string[]}`. Empty body = apply all. Strict whitelist (`AI_FIELD_TO_CONTACT_FIELD`) — only the 13 vetted KYC keys map to contact fields. Length-capped at 200 chars per value. Internal-only; sales reps gated to their own leads. Logs a `type='note', outcome='ai_fields_applied'` activity for the audit trail.
 - Frontend: aggregated "AI-extracted fields" panel now has a "Apply all to contact" button (testid `kyc-apply-all-fields-btn`) plus per-field "Apply" links (testid `kyc-apply-{field}`). When the contact already has the same value, the link is replaced with a green "✓ applied" badge (testid `kyc-applied-{field}`). Optimistic update — the green checkmarks appear instantly after apply.
