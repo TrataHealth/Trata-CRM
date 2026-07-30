@@ -15,6 +15,21 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
+### Iter 26 (2026-07-30) — Supabase migration Phase A (shared-Postgres read layer)
+- **New shared Supabase project** `wpjttwbolrpodrnyriym.supabase.co` (Patient / Provider / Admin apps + CRM all read/write here). Schema already provisioned — 141 tables including `users`, `sanjeevani_agents` (=CRM staff), `agent_activities`, `agent_tasks`, `emergency_cases`, `ambulance_providers`, `hospital_profiles`, `kyc_documents`, `customer_profiles`, `notifications`, `webhook_outbox`, etc.
+- **Backend**:
+  - New `/app/backend/supabase_db.py` — asyncpg pool via Transaction Pooler (`statement_cache_size=0`, URL-encoded password) + read helpers `fetch_emergency_cases`, `fetch_case`, `fetch_patients`, `fetch_network_stats`, `fetch_kyc_overview`, `fetch_ambulance_providers`.
+  - Env vars added: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`, `DATABASE_URL` (Transaction Pooler DSN).
+  - New endpoints (parity with `/upstream/*`): `/api/supabase/status`, `/api/supabase/cases`, `/api/supabase/cases/{id}`, `/api/supabase/patients`, `/api/supabase/network-stats`, `/api/supabase/kyc-overview`. All internal-only, all read-only in Phase A.
+- **Frontend** — Network page gets a **data-source toggle** (testid `network-source-toggle` + `network-source-{supabase|restapi}`) that persists to localStorage. Child tabs accept a `prefix` prop and hit either `/supabase/*` or `/upstream/*` accordingly. Fallback to REST if Supabase health-check fails. Field-name normalization on stats tab (Supabase snake_case vs REST camelCase).
+- **Verified live**: `/api/supabase/status` returns `connected: true`, network-stats returns 2 users (matches Supabase seed data), all 5 endpoints return 200. Toggle screenshot confirms both data sources render side-by-side.
+
+**What Phase A does NOT include (deferred to Phase B/C):**
+- Writes to Supabase (all CRM writes still land in MongoDB).
+- Migration of `contacts` / `activities` / `tasks` / `notifications` from MongoDB to Postgres.
+- Auth cutover (still on custom JWT + bcrypt; Supabase Auth cutover is Phase C).
+- Removal of `admin_bridge.py` webhook queue (still active for admin-app REST parity).
+
 ### Iter 25 (2026-06-12) — Network section: live mirror of Trata Admin App
 - **Backend** (no admin-app changes needed — all read-only proxy):
   - `admin_bridge.fetch_cases()`, `fetch_network_stats()`, `fetch_ambulance_providers()`

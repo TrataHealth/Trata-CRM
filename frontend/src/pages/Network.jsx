@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Activity, Users as UsersIcon, ShieldCheck, BarChart3, Ambulance, MapPin,
   AlertTriangle, CheckCircle2, XCircle, Clock, ChevronRight, Search, RefreshCw,
-  Loader2, Phone, FileText, ExternalLink, Sparkles,
+  Loader2, Phone, FileText, ExternalLink, Sparkles, Database, Cloud,
 } from "lucide-react";
 import { relativeTime } from "../lib/constants";
 
@@ -15,17 +15,64 @@ const TABS = [
   { value: "network",  label: "Network stats",   icon: BarChart3 },
 ];
 
+// Data-source toggle — during the Supabase migration both sources coexist so
+// the master admin can flip between them and verify parity before we retire
+// the Admin App REST proxy in Phase B.
+const SOURCES = {
+  supabase: { label: "Supabase (shared DB)", prefix: "/supabase", icon: Database, tone: "text-[#3ECF8E]" },
+  restapi:  { label: "Admin App REST",       prefix: "/upstream", icon: Cloud,    tone: "text-[#5E6C84]" },
+};
+
 export default function Network() {
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") || "cases";
   const setTab = (t) => { const p = new URLSearchParams(params); p.set("tab", t); setParams(p); };
 
+  // Persist selected data source across refreshes / tab changes
+  const [source, setSource] = useState(() => localStorage.getItem("trata.network.source") || "supabase");
+  useEffect(() => { localStorage.setItem("trata.network.source", source); }, [source]);
+  const [supaStatus, setSupaStatus] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await api.get("/supabase/status");
+        setSupaStatus(data);
+        if (!data.connected) setSource("restapi");   // graceful fallback
+      } catch { setSupaStatus({ connected: false }); }
+    })();
+  }, []);
+  const prefix = SOURCES[source].prefix;
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6" data-testid="network-page">
-      <div>
-        <div className="overline">Live from Trata Admin App</div>
-        <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">Network</h1>
-        <p className="text-sm text-[#5E6C84] mt-1">Real-time view of every emergency case, patient and KYC across the TrataHealth platform — synced directly from the Provider App backend.</p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="overline">Live from Trata Admin App</div>
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">Network</h1>
+          <p className="text-sm text-[#5E6C84] mt-1">Real-time view of every emergency case, patient and KYC across the TrataHealth platform — synced directly from the Provider App backend.</p>
+        </div>
+
+        {/* Data-source toggle */}
+        <div className="inline-flex items-center bg-white border border-[#DFE1E6] rounded-full p-0.5 shadow-sm" data-testid="network-source-toggle" title="Switch between the shared Supabase DB and the Admin App REST proxy">
+          {Object.entries(SOURCES).map(([k, s]) => {
+            const I = s.icon;
+            const selected = source === k;
+            const disabled = k === "supabase" && supaStatus && !supaStatus.connected;
+            return (
+              <button
+                key={k}
+                onClick={() => !disabled && setSource(k)}
+                disabled={disabled}
+                data-testid={`network-source-${k}`}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-full transition-colors ${
+                  selected ? "bg-[#091E42] text-white" : "text-[#42526E] hover:text-[#091E42] hover:bg-[#F4F5F7]"
+                } ${disabled ? "opacity-40 cursor-not-allowed" : ""}`}
+              >
+                <I className={`h-3.5 w-3.5 ${selected ? "text-white" : s.tone}`} /> {s.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -50,10 +97,10 @@ export default function Network() {
       </div>
 
       {/* Tab content */}
-      {tab === "cases" && <CasesTab />}
-      {tab === "patients" && <PatientsTab />}
-      {tab === "kyc" && <KycTab />}
-      {tab === "network" && <NetworkStatsTab />}
+      {tab === "cases" && <CasesTab prefix={prefix} />}
+      {tab === "patients" && <PatientsTab prefix={prefix} />}
+      {tab === "kyc" && <KycTab prefix={prefix} />}
+      {tab === "network" && <NetworkStatsTab prefix={prefix} />}
     </div>
   );
 }
@@ -61,7 +108,7 @@ export default function Network() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Emergency Cases
 // ─────────────────────────────────────────────────────────────────────────────
-function CasesTab() {
+function CasesTab({ prefix }) {
   const [state, setState] = useState({ loading: true, items: [], counts: {}, total: 0, upstream: true });
   const [filter, setFilter] = useState({ status: "", case_type: "" });
   const [detail, setDetail] = useState(null);
@@ -69,7 +116,7 @@ function CasesTab() {
   const load = async () => {
     setState((s) => ({ ...s, loading: true }));
     try {
-      const { data } = await api.get("/upstream/cases", {
+      const { data } = await api.get(`${prefix}/cases`, {
         params: { status: filter.status || undefined, case_type: filter.case_type || undefined },
       });
       setState({ loading: false, items: data.items, counts: data.counts, total: data.total, upstream: data.upstream_available });
@@ -77,7 +124,7 @@ function CasesTab() {
       setState((s) => ({ ...s, loading: false, upstream: false }));
     }
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [filter.status, filter.case_type]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [filter.status, filter.case_type, prefix]);
 
   if (!state.upstream && !state.loading) return <UpstreamDown />;
 
@@ -207,19 +254,19 @@ function CaseDetailDrawer({ caseObj, onClose }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Patients
 // ─────────────────────────────────────────────────────────────────────────────
-function PatientsTab() {
+function PatientsTab({ prefix }) {
   const [state, setState] = useState({ loading: true, items: [], total: 0, upstream: true });
   const [q, setQ] = useState("");
   const load = async () => {
     setState((s) => ({ ...s, loading: true }));
     try {
-      const { data } = await api.get("/upstream/patients", { params: { q: q || undefined } });
+      const { data } = await api.get(`${prefix}/patients`, { params: { q: q || undefined } });
       setState({ loading: false, items: data.items, total: data.total, upstream: data.upstream_available });
     } catch {
       setState((s) => ({ ...s, loading: false, upstream: false }));
     }
   };
-  useEffect(() => { const id = setTimeout(load, q ? 250 : 0); return () => clearTimeout(id); /* eslint-disable-next-line */ }, [q]);
+  useEffect(() => { const id = setTimeout(load, q ? 250 : 0); return () => clearTimeout(id); /* eslint-disable-next-line */ }, [q, prefix]);
   if (!state.upstream && !state.loading) return <UpstreamDown />;
   return (
     <div className="space-y-4" data-testid="network-patients">
@@ -261,19 +308,19 @@ function PatientsTab() {
 // ─────────────────────────────────────────────────────────────────────────────
 // KYC manager
 // ─────────────────────────────────────────────────────────────────────────────
-function KycTab() {
+function KycTab({ prefix }) {
   const navigate = useNavigate();
   const [state, setState] = useState({ loading: true, items: [], total: 0, upstream: true });
   const load = async () => {
     setState((s) => ({ ...s, loading: true }));
     try {
-      const { data } = await api.get("/upstream/kyc-overview");
+      const { data } = await api.get(`${prefix}/kyc-overview`);
       setState({ loading: false, items: data.items, total: data.total, upstream: data.upstream_available });
     } catch {
       setState((s) => ({ ...s, loading: false, upstream: false }));
     }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [prefix]);
   if (!state.upstream && !state.loading) return <UpstreamDown />;
   return (
     <div className="space-y-4" data-testid="network-kyc">
@@ -329,31 +376,38 @@ function KycTab() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Network stats
 // ─────────────────────────────────────────────────────────────────────────────
-function NetworkStatsTab() {
+function NetworkStatsTab({ prefix }) {
   const [state, setState] = useState({ loading: true, stats: null, upstream: true });
   useEffect(() => {
     (async () => {
+      setState((s) => ({ ...s, loading: true }));
       try {
-        const { data } = await api.get("/upstream/network-stats");
+        const { data } = await api.get(`${prefix}/network-stats`);
         setState({ loading: false, stats: data.stats, upstream: data.upstream_available });
       } catch {
         setState({ loading: false, stats: null, upstream: false });
       }
     })();
-  }, []);
+  }, [prefix]);
   if (state.loading) return <SkeletonRows />;
   if (!state.upstream || !state.stats) return <UpstreamDown />;
   const s = state.stats;
+  // Field names differ between REST (camelCase) and Supabase (snake_case) — normalise
+  const ehrTotal    = s.ehr?.total_records ?? s.ehr?.totalRecords ?? 0;
+  const hgZones     = s.health_guard?.zones ?? s.healthGuard?.totalZones ?? 0;
+  const hgAnomalies = s.health_guard?.anomalies_active ?? s.healthGuard?.activeAnomalies ?? 0;
+  const ambVerified = s.verification?.ambulanceProviders?.verified ?? 0;
+  const hospVerified = s.verification?.hospitals?.verified ?? 0;
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" data-testid="network-stats">
       <Tile label="Total users"           value={s.users?.total} sub={`${s.users?.newToday || 0} today`} icon={UsersIcon} />
       <Tile label="Patients"              value={s.users?.patients} sub="on the Provider App" icon={UsersIcon} />
-      <Tile label="Ambulance providers"   value={s.users?.ambulance_providers} sub={`${s.verification?.ambulanceProviders?.verified || 0} verified`} icon={Ambulance} />
-      <Tile label="Hospitals"             value={s.users?.hospitals} sub={`${s.verification?.hospitals?.verified || 0} verified`} icon={ShieldCheck} />
+      <Tile label="Ambulance providers"   value={s.users?.ambulance_providers ?? s.users?.ambulanceProviders} sub={`${ambVerified} verified`} icon={Ambulance} />
+      <Tile label="Hospitals"             value={s.users?.hospitals} sub={`${hospVerified} verified`} icon={ShieldCheck} />
       <Tile label="Cases total"           value={s.cases?.total} sub={`${s.cases?.active || 0} active`} icon={Activity} />
-      <Tile label="Cases today"           value={s.cases?.today} sub={`${s.cases?.thisWeek || 0} this week`} icon={Clock} />
-      <Tile label="EHR records"           value={s.ehr?.totalRecords} sub="patient health records" icon={FileText} />
-      <Tile label="HealthGuard zones"     value={s.healthGuard?.totalZones} sub={`${s.healthGuard?.activeAnomalies || 0} anomalies`} icon={AlertTriangle} />
+      <Tile label="Cases today"           value={s.cases?.today} sub={`${s.cases?.week ?? s.cases?.thisWeek ?? 0} this week`} icon={Clock} />
+      <Tile label="EHR records"           value={ehrTotal} sub="patient health records" icon={FileText} />
+      <Tile label="HealthGuard zones"     value={hgZones} sub={`${hgAnomalies} anomalies`} icon={AlertTriangle} />
     </div>
   );
 }

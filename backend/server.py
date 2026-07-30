@@ -27,6 +27,7 @@ import csv
 
 import upstream_sync as us
 import admin_bridge as ab
+import supabase_db as sb
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -4079,6 +4080,109 @@ async def admin_api_get_via_bridge(path: str):
     """Tiny wrapper so the proxy endpoints can call admin_bridge.admin_api_get without
     re-importing the module name inside every function."""
     return await ab.admin_api_get(path)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Supabase (shared Postgres) proxy — Phase A read-only
+# ═══════════════════════════════════════════════════════════════════════════
+# Every /api/supabase/* endpoint reads directly from the shared Supabase
+# project that the Patient / Provider / Admin apps also write to. During the
+# migration these coexist with the /api/upstream/* endpoints (which proxy the
+# Admin App's REST layer) — the frontend has a data-source toggle so the user
+# can flip between them and verify parity before we retire the REST path.
+
+def _supabase_ready() -> bool:
+    return sb.is_configured()
+
+
+@api.get("/supabase/status")
+async def supabase_status(current=Depends(require_internal)):
+    """Cheap health-check the frontend calls before showing the Supabase toggle."""
+    if not _supabase_ready():
+        return {"configured": False, "connected": False, "reason": "DATABASE_URL not set"}
+    try:
+        stats = await sb.fetch_network_stats()
+        return {"configured": True, "connected": True, "sample": {"users": stats["users"]["total"], "cases": stats["cases"]["total"]}}
+    except Exception as e:
+        return {"configured": True, "connected": False, "reason": str(e)[:200]}
+
+
+@api.get("/supabase/cases")
+async def supabase_cases(status: Optional[str] = None, case_type: Optional[str] = None,
+                         current=Depends(require_internal)):
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    cases = await sb.fetch_emergency_cases(status=status, case_type=case_type, limit=500)
+    counts = {"by_status": {}, "by_type": {}}
+    for c in cases:
+        s = c.get("status") or "—"
+        t = c.get("case_type") or "—"
+        counts["by_status"][s] = counts["by_status"].get(s, 0) + 1
+        counts["by_type"][t] = counts["by_type"].get(t, 0) + 1
+    return {"items": cases, "total": len(cases), "counts": counts, "upstream_available": True, "source": "supabase"}
+
+
+@api.get("/supabase/cases/{case_id}")
+async def supabase_case_detail(case_id: str, current=Depends(require_internal)):
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    c = await sb.fetch_case(case_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return {"case": c}
+
+
+@api.get("/supabase/patients")
+async def supabase_patients(q: Optional[str] = None, current=Depends(require_internal)):
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    items = await sb.fetch_patients(q=q, limit=200)
+    return {"items": items, "total": len(items), "upstream_available": True, "source": "supabase"}
+
+
+@api.get("/supabase/network-stats")
+async def supabase_network_stats(current=Depends(require_internal)):
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    return {"stats": await sb.fetch_network_stats(), "upstream_available": True, "source": "supabase"}
+
+
+@api.get("/supabase/kyc-overview")
+async def supabase_kyc_overview(current=Depends(require_internal)):
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    upstream = await sb.fetch_kyc_overview()
+
+    # Cross-reference with CRM contacts (still in Mongo during Phase A) so we
+    # keep the per-doc agent-review + AI pre-screen state visible.
+    phones = [u.get("phone") for u in upstream if u.get("phone")]
+    crm_by_phone: Dict[str, Dict[str, Any]] = {}
+    async for c in db.contacts.find(
+        {"phone": {"$in": phones}},
+        {"_id": 0, "id": 1, "phone": 1, "kyc_status": 1, "assigned_agent_name": 1,
+         "pipeline_stage": 1, "agent_doc_reviews": 1, "ai_prescreen_summary": 1, "local_decision": 1},
+    ):
+        crm_by_phone[c["phone"]] = c
+
+    items = []
+    for u in upstream:
+        crm = crm_by_phone.get(u.get("phone")) or {}
+        reviews = crm.get("agent_doc_reviews") or {}
+        approve_n = sum(1 for v in reviews.values() if (v or {}).get("decision") == "approved")
+        reject_n  = sum(1 for v in reviews.values() if (v or {}).get("decision") == "rejected")
+        items.append({
+            **u,
+            "crm_contact_id": crm.get("id"),
+            "crm_kyc_status": crm.get("kyc_status"),
+            "pipeline_stage": crm.get("pipeline_stage"),
+            "assigned_agent_name": crm.get("assigned_agent_name"),
+            "doc_reviews": {"approved": approve_n, "rejected": reject_n},
+            "ai_prescreen": crm.get("ai_prescreen_summary"),
+            "master_admin_decision": (crm.get("local_decision") or {}).get("master"),
+        })
+    return {"items": items, "total": len(items), "upstream_available": True, "source": "supabase"}
+
+
 
 
 
