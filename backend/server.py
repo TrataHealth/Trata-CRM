@@ -4183,6 +4183,34 @@ async def supabase_kyc_overview(current=Depends(require_internal)):
     return {"items": items, "total": len(items), "upstream_available": True, "source": "supabase"}
 
 
+# ── CRM-owned tables served from Postgres (Phase B) ─────────────────────────
+@api.get("/supabase/contacts")
+async def supabase_contacts(type: Optional[str] = None, stage: Optional[str] = None,
+                            q: Optional[str] = None, limit: int = 200,
+                            current=Depends(require_internal)):
+    """Provider-lead list served from crm_provider_leads (Postgres).
+    Same response shape as /api/contacts so the frontend can swap seamlessly."""
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    # Sales reps only see their own leads
+    assigned = current["id"] if is_sales_rep(current) else None
+    payload = await sb.fetch_crm_contacts(type_=type, stage=stage, q=q,
+                                           assigned_agent_id=assigned, limit=limit)
+    return {"items": payload["items"], "total": payload["total"], "source": "supabase"}
+
+
+@api.get("/supabase/contacts/{contact_id}")
+async def supabase_contact(contact_id: str, current=Depends(require_internal)):
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    c = await sb.fetch_crm_contact(contact_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if is_sales_rep(current) and c.get("assigned_agent_id") != current["id"]:
+        raise HTTPException(status_code=403, detail="Not your lead")
+    return {"contact": c}
+
+
 
 
 

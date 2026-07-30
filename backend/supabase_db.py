@@ -251,3 +251,49 @@ async def fetch_ambulance_providers() -> List[Dict[str, Any]]:
           ORDER BY ap.created_at DESC NULLS LAST
         """)
     return _rows(rs)
+
+
+# ── CRM-owned tables (Phase B — read paths) ──────────────────────────────────
+async def fetch_crm_contacts(type_: Optional[str] = None, stage: Optional[str] = None,
+                             q: Optional[str] = None, assigned_agent_id: Optional[str] = None,
+                             limit: int = 200) -> Dict[str, Any]:
+    """List provider leads owned by the CRM. Mirrors the shape of GET /api/contacts."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        clauses = ["1=1"]
+        args: List[Any] = []
+        if type_:
+            args.append(type_)
+            clauses.append(f"type = ${len(args)}")
+        if stage:
+            args.append(stage)
+            clauses.append(f"pipeline_stage = ${len(args)}")
+        if assigned_agent_id:
+            args.append(assigned_agent_id)
+            clauses.append(f"assigned_agent_id = ${len(args)}")
+        if q:
+            args.append(f"%{q.lower()}%")
+            clauses.append(f"(lower(name) LIKE ${len(args)} OR phone LIKE ${len(args)})")
+        # count
+        total_row = await conn.fetchrow(
+            f"SELECT count(*) AS c FROM public.crm_provider_leads WHERE {' AND '.join(clauses)}",
+            *args,
+        )
+        args.append(limit)
+        rs = await conn.fetch(
+            f"""SELECT * FROM public.crm_provider_leads
+                WHERE {' AND '.join(clauses)}
+             ORDER BY updated_at DESC NULLS LAST
+                LIMIT ${len(args)}""",
+            *args,
+        )
+    return {"items": _rows(rs), "total": total_row["c"]}
+
+
+async def fetch_crm_contact(contact_id: str) -> Optional[Dict[str, Any]]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        r = await conn.fetchrow(
+            "SELECT * FROM public.crm_provider_leads WHERE id = $1", contact_id
+        )
+    return _row(r)

@@ -15,6 +15,19 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
+### Iter 27 (2026-07-30) — Supabase migration Phase B.1 (schema + data backfill + read parity)
+- **New Postgres table** `public.crm_provider_leads` (46 columns + 5 indexes) — the only CRM-owned table that didn't already exist in the shared schema. Everything else (`sanjeevani_agents`, `agent_activities`, `agent_tasks`, `notifications`) was already provisioned by the Patient/Provider/Admin apps.
+- **DDL script** `/app/backend/tools/create_crm_tables.py` — idempotent, safe to re-run.
+- **Migration script** `/app/backend/tools/migrate_mongo_to_postgres.py` — one-shot backfill from Mongo → Postgres for `contacts`, `crm_users`, `activities`, `tasks`. Handles: JSONB serialization, datetime coercion, FK dedupe (master admin phone already in shared `users` gets linked instead of re-created), ON CONFLICT DO UPDATE for idempotency, best-effort `agent_id` FK enforcement.
+- **Backfill results (verified)**: 18 provider leads, 4 staff (incl. Master Admin), 4 activities all migrated. Empty tables (`tasks`, `notes`, `notifications`) skipped cleanly.
+- **New Postgres-backed reads** in `supabase_db.py`: `fetch_crm_contacts`, `fetch_crm_contact`. Exposed as `GET /api/supabase/contacts?type=&stage=&q=` and `GET /api/supabase/contacts/{id}`. Response shape matches `/api/contacts` so the frontend can drop-in swap.
+- **Verified parity**: `/api/supabase/contacts?type=hospital` returns the exact same 9 rows in the exact same order as `/api/contacts?type=hospital` — identical name/phone/pipeline_stage/assigned_agent.
+
+### Not in Phase B.1 (moved to Phase B.2)
+- **Write-path cutover**: every POST/PATCH that touches `contacts`/`activities`/`tasks` still writes only to MongoDB. Next session: dual-write to both stores, then flip primary to Postgres.
+- **Frontend flip**: `Contacts.jsx` still calls `/api/contacts`. Once Phase B.2 dual-write is stable, we swap to `/api/supabase/contacts` and Mongo becomes a read-only fallback.
+- `activities`/`tasks` endpoints (agent-side reads) are still Mongo-only.
+
 ### Iter 26 (2026-07-30) — Supabase migration Phase A (shared-Postgres read layer)
 - **New shared Supabase project** `wpjttwbolrpodrnyriym.supabase.co` (Patient / Provider / Admin apps + CRM all read/write here). Schema already provisioned — 141 tables including `users`, `sanjeevani_agents` (=CRM staff), `agent_activities`, `agent_tasks`, `emergency_cases`, `ambulance_providers`, `hospital_profiles`, `kyc_documents`, `customer_profiles`, `notifications`, `webhook_outbox`, etc.
 - **Backend**:
