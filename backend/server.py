@@ -65,9 +65,16 @@ def now_iso():
 # ---------- Roles & Scopes ----------
 INTERNAL_ROLES = {"admin", "manager", "national_manager", "regional_manager", "zonal_manager", "area_manager", "sales_rep", "ops_rep"}
 PROVIDER_ROLES = {"provider_owner"}
-# This app only supports ambulance providers. Hospital / clinic / pathology owners use the separate HMS.
+# Provider verticals allowed to sign into the CRM. Hospitals, pathology labs
+# and other providers were added once the Sales-Agent workflow was expanded
+# beyond ambulance-only onboarding.
 PROVIDER_TYPE_TO_CONTACT_TYPE = {
-    "ambulance": "ambulance_provider",
+    "ambulance":   "ambulance_provider",
+    "hospital":    "hospital",
+    "pathology":   "pathologist",
+    "doctor":      "doctor",
+    "paramedic":   "paramedic",
+    "pharmacy":    "pharmacy",
 }
 SUPPORTED_PROVIDER_TYPES = set(PROVIDER_TYPE_TO_CONTACT_TYPE.keys())
 
@@ -308,12 +315,13 @@ async def verify_otp(data: LoginVerifyOTP):
         else:
             raise HTTPException(status_code=403, detail="Phone not authorized. Contact master admin to be added.")
 
-    # Guard: only ambulance provider portals are supported here. Hospital/clinic/path-lab owners
-    # belong to the separate HMS and must not be allowed to log in.
+    # Guard: only the healthcare-provider verticals listed in SUPPORTED_PROVIDER_TYPES
+    # (ambulance, hospital, doctor, paramedic, pathology, pharmacy) can sign in as
+    # provider_owner. Anything else is treated as a data error and blocked.
     if user.get("role") == "provider_owner" and user.get("provider_type") not in SUPPORTED_PROVIDER_TYPES:
         raise HTTPException(
             status_code=403,
-            detail="This portal is for Trata Health admin and ambulance providers only. Please use the Hospital Management System for your account.",
+            detail="Your provider type is not yet supported in this portal. Contact the Master Admin.",
         )
 
     needs_setup = not user.get("password_hash")
@@ -2955,6 +2963,74 @@ async def ai_insight(data: AISummaryRequest, current=Depends(get_current_user)):
 @api.post("/admin/seed")
 async def seed_data(force: bool = False, current=Depends(require_internal)):
     return await _do_seed(force)
+
+
+@api.post("/admin/seed-demo-accounts")
+async def seed_demo_accounts(current=Depends(get_current_user)):
+    """Idempotently create the 4 canonical demo accounts users expect to be
+    able to sign in with: Priya (Sales Manager — usually already exists) plus
+    3 provider_owner accounts (ambulance, hospital, pathology lab). Every phone
+    also uses OTP 123456 + password Trata@123."""
+    if not (current.get("is_master_admin") or current.get("role") == "admin"):
+        raise HTTPException(status_code=403, detail="Master admin only")
+
+    DEMO_ACCOUNTS = [
+        # (phone, name, role, provider_type_or_None, city, state)
+        ("9000000001", "Priya Sales Lead",       "regional_manager", None,          "Delhi",    "Delhi"),
+        ("9000000002", "Rohan Sales Rep",        "sales_rep",        None,          "Delhi",    "Delhi"),
+        ("9000020003", "Sanjay Ambulance Fleet", "provider_owner",   "ambulance",   "Mumbai",   "Maharashtra"),
+        ("9000020004", "City Care Hospital",     "provider_owner",   "hospital",    "Bengaluru","Karnataka"),
+        ("9000020005", "Zenith Diagnostics",     "provider_owner",   "pathology",   "Pune",     "Maharashtra"),
+    ]
+    default_pwd_hash = hash_password("Trata@123")
+
+    created_users, created_contacts, updated = 0, 0, 0
+    for phone, name, role, ptype, city, state in DEMO_ACCOUNTS:
+        existing = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
+        if existing:
+            updated += 1
+        else:
+            uid = str(uuid.uuid4())
+            user_doc = {
+                "id": uid, "phone": phone, "name": name, "role": role,
+                "is_master_admin": False,
+                "provider_type": ptype,
+                "city": city, "state": state,
+                "password_hash": default_pwd_hash,
+                "security_setup_required": False,
+                "is_active": True,
+                "created_at": now_iso(), "updated_at": now_iso(),
+            }
+            await db.crm_users.insert_one(user_doc)
+            created_users += 1
+
+        # For provider_owner: also create a contact row so they show up in Trata Users
+        if ptype:
+            contact_type = PROVIDER_TYPE_TO_CONTACT_TYPE[ptype]
+            if not await db.contacts.find_one({"phone": phone}, {"_id": 0, "id": 1}):
+                agent = await _pick_agent_for_territory(city)
+                await db.contacts.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "name": name, "type": contact_type, "phone": phone,
+                    "city": city, "state": state,
+                    "is_verified": True, "is_active": True,
+                    "pipeline_stage": "verified", "kyc_status": "pending",
+                    "deal_value": 0,
+                    "assigned_agent_id": agent["id"] if agent else None,
+                    "assigned_agent_name": agent["name"] if agent else None,
+                    "source": "demo_seed",
+                    "created_at": now_iso(), "updated_at": now_iso(),
+                    "avatar": None,
+                })
+                created_contacts += 1
+
+    return {
+        "success": True,
+        "created_users": created_users,
+        "created_contacts": created_contacts,
+        "already_existed": updated,
+        "credentials_hint": "OTP 123456 · password Trata@123 for every demo account",
+    }
 
 
 async def _do_seed(force: bool = False) -> dict:

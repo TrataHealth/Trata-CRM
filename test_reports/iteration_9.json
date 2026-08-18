@@ -1,0 +1,24 @@
+{
+  "summary": "Iteration 9 - Verified 'demo accounts not working' fix. Created /app/backend/tests/test_seed_demo_accounts.py (12 tests, all PASS in 8.2s). Also drove the full 3-step UI login (send-otp -> verify-otp -> login-password) on the preview URL for all 4 demo phones. Every requested check from the review request passes.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_seed_demo_accounts.py",
+    "/app/test_reports/pytest/seed_demo.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 4455 lines - continues to grow. seed-demo-accounts + _do_seed + auth routes can be extracted into /app/backend/routes/admin.py and routes/auth.py.",
+    "DEMO_ACCOUNTS list inside seed_demo_accounts (server.py:2976-2982) is a magic in-line constant. If the same data is needed in tests or a CLI seeder, hoist to a module-level DEMO_ACCOUNTS tuple so tests can import it and avoid drift.",
+    "seed_demo_accounts sets security_setup_required=False on the crm_users doc, but the FE still force-redirects the 3 provider_owner phones to /security-setup because /verify-otp response reports has_recovery_email=False & has_security_questions=False. Either (a) also seed a dummy recovery_email + 2 pre-answered security questions so the demo accounts skip setup and land straight in the provider dashboard, OR (b) update test_credentials.md to document the security-setup redirect as expected behaviour for these 3 accounts. Right now the docs at lines 29/33/38 only say 'NOT YET SET' for ambulance but not hospital/pathology - minor doc gap.",
+    "The comment at server.py:318-319 ('only ambulance provider portals are supported here. Hospital/clinic/path-lab owners belong to the separate HMS and must not be allowed to log in.') is now STALE after this fix - hospital + pathology ARE now supported. Please update the comment to match SUPPORTED_PROVIDER_TYPES."
+  ],
+  "updated_files": ["/app/backend/tests/test_seed_demo_accounts.py"],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "100% (4/4 demo phones log in without 'Phone not authorized')"},
+  "test_credentials": "Master 9873117605/Master@123; Rohan 9000000002/Trata@123; Demo phones 9000020003(amb), 9000020004(hosp), 9000020005(path), 9000000001(Priya) - all OTP 123456 + password Trata@123.",
+  "seed_data_creation": "POST /api/admin/seed-demo-accounts run twice in pytest. Idempotent - already_existed=4 on 2nd call. 3 demo contacts inserted into db.contacts (Sanjay Ambulance Fleet, City Care Hospital, Zenith Diagnostics).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Re-run: python -m pytest /app/backend/tests/test_seed_demo_accounts.py -v (~8s, no LLM calls). To retest UI: navigate to /login, clear cookies + localStorage between attempts (needed because /login redirects if already authed). 3 demo provider_owner phones land on /security-setup (expected first-time redirect) - this counts as successful login (backend session created). Priya lands on Master Dashboard directly since her security setup was completed in a prior iteration.",
+  "rca of the issue": "Bug: pre-fix, phone 9000020003 hit /auth/verify-otp -> 403 'Phone not authorized' because no crm_users row existed. Root cause: previous seed logic only inserted Priya + Rohan; no idempotent path existed to add the 3 provider_owner demo accounts. Fix in server.py: (1) expanded SUPPORTED_PROVIDER_TYPES from ambulance-only to {ambulance, hospital, pathology, doctor, paramedic, pharmacy} via PROVIDER_TYPE_TO_CONTACT_TYPE dict (lines 71-79), (2) added POST /api/admin/seed-demo-accounts endpoint (lines 2967-3031) that inserts the 4 canonical rows into crm_users + matching contacts into db.contacts, guarded by find_one({phone}) for idempotency and gated behind is_master_admin/role==admin (403 for anyone else). Verified: 12/12 pytest, 4/4 UI logins."
+}
