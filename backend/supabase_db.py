@@ -297,3 +297,74 @@ async def fetch_crm_contact(contact_id: str) -> Optional[Dict[str, Any]]:
             "SELECT * FROM public.crm_provider_leads WHERE id = $1", contact_id
         )
     return _row(r)
+
+
+# ── Ambulance-provider PC dashboard (Phase 2 vertical slice) ────────────────
+async def fetch_ambulance_provider_dashboard(user_id: str) -> Dict[str, Any]:
+    """Home tiles + recent cases + fleet + earnings for one ambulance provider.
+    `user_id` is public.users.id (the same id the mobile app uses)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        provider = await conn.fetchrow(
+            """SELECT id, business_name, phone, city, state, status,
+                      total_bookings, completed_bookings, average_rating,
+                      total_earnings, created_at
+                 FROM public.ambulance_providers WHERE user_id = $1""", user_id)
+        if not provider:
+            return {"provider": None}
+        pid = provider["id"]
+        kpi_row = await conn.fetchrow(
+            """SELECT
+                 (SELECT count(*) FROM public.emergency_cases
+                    WHERE ambulance_provider_id=$1
+                      AND upper(status) IN ('DISPATCHED','ACTIVE','IN_PROGRESS','AMBULANCE_ASSIGNED','EN_ROUTE')) AS active_trips,
+                 (SELECT count(*) FROM public.emergency_cases
+                    WHERE ambulance_provider_id=$1 AND created_at >= now() - interval '1 day') AS trips_today,
+                 (SELECT count(*) FROM public.emergency_cases
+                    WHERE ambulance_provider_id=$1 AND upper(status)='COMPLETED'
+                      AND created_at >= now() - interval '7 days') AS trips_week,
+                 (SELECT count(*) FROM public.ambulances
+                    WHERE provider_id=$1) AS fleet_total,
+                 (SELECT count(*) FROM public.ambulances
+                    WHERE provider_id=$1 AND upper(coalesce(status,'AVAILABLE'))='AVAILABLE') AS fleet_available,
+                 (SELECT count(*) FROM public.kyc_documents
+                    WHERE user_id=$2 AND lower(coalesce(status,''))='approved') AS kyc_approved,
+                 (SELECT count(*) FROM public.kyc_documents
+                    WHERE user_id=$2 AND lower(coalesce(status,'')) IN ('','pending','submitted','uploaded')) AS kyc_pending
+            """, pid, user_id)
+        recent = await conn.fetch(
+            """SELECT id, case_type, status, priority, customer_phone,
+                      created_at, patient_profile::text AS patient_profile_json,
+                      distance
+                 FROM public.emergency_cases
+                WHERE ambulance_provider_id=$1
+             ORDER BY created_at DESC NULLS LAST
+                LIMIT 10""", pid)
+        fleet = await conn.fetch(
+            """SELECT id, vehicle_number, ambulance_type, model, status,
+                      assigned_driver_name, assigned_driver_phone,
+                      current_location::text AS current_location_json,
+                      insurance_expiry, fitness_expiry, permit_expiry, total_trips
+                 FROM public.ambulances
+                WHERE provider_id=$1
+             ORDER BY vehicle_number LIMIT 20""", pid)
+    recent_rows = []
+    for r in _rows(recent):
+        pj = r.pop("patient_profile_json", None)
+        if isinstance(pj, str) and pj:
+            try: r["patient_profile"] = json.loads(pj)
+            except Exception: r["patient_profile"] = None
+        recent_rows.append(r)
+    fleet_rows = []
+    for r in _rows(fleet):
+        lj = r.pop("current_location_json", None)
+        if isinstance(lj, str) and lj:
+            try: r["current_location"] = json.loads(lj)
+            except Exception: r["current_location"] = None
+        fleet_rows.append(r)
+    return {
+        "provider": _row(provider),
+        "kpis": dict(kpi_row) if kpi_row else {},
+        "recent_cases": recent_rows,
+        "fleet": fleet_rows,
+    }

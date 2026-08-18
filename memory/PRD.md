@@ -15,6 +15,17 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
+### Iter 28 (2026-08-18) — Provider PC Console (Phase 1 auth + Phase 2 Ambulance)
+- **Phase 1 (auth unification)**: `verify-otp` now falls back to Supabase `public.users` when a phone isn't in the CRM's `crm_users`. If it's a healthcare-provider vertical (ambulance, hospital, doctor, paramedic, pathologist, pharmacy), a `crm_users` row is materialized on-the-fly with `role=provider_owner`, mapped `provider_type`, and `supabase_user_id` linked to the shared row. First login triggers password setup; subsequent logins use the standard 3-step flow. New helper: `_try_supabase_provider_lookup`.
+- **Phase 2 (Ambulance PC dashboard)**: new `GET /api/provider/pc-dashboard` reads directly from shared Postgres tables (`ambulance_providers`, `emergency_cases`, `ambulances`, `kyc_documents`). Zero sync — same 100ms data the mobile app sees. Returns: provider profile · KPI tiles (active trips, trips today/week, fleet avail/total, KYC approved/pending) · lifetime bookings/completed/earnings strip · 10 most recent cases · full fleet.
+- **Frontend**: `ProviderDashboard.jsx` fully rewritten. 4 KPI tiles + business summary strip + two-column recent cases / fleet. Live-badge indicator shows the shared-DB status. Testids: `provider-dashboard`, `provider-kpis`, `provider-tile-*`, `provider-lifetime-strip`, `provider-recent-cases`, `provider-fleet`, `provider-shared-db-badge`.
+- **Live verification (screenshot confirmed)**: Abhishek (`7678218261`, real ambulance owner already in Supabase `users` with an `ambulance_providers` profile) logged in with the exact same phone he uses on his mobile Provider App → landed on the "Trata Ambulance Service" PC console showing his business name, city (Mumbai Suburban), status (`pending`), and empty-state prompts pointing back to the mobile app for adding vehicles.
+
+### Not in this iter (deferred)
+- **Provider verticals other than Ambulance**: `/provider/pc-dashboard` currently returns 501 for hospital/doctor/pathology/paramedic/pharmacy. Extending is a copy-of-pattern per vertical.
+- **Write actions**: PC dashboard is read-only. Accept case / upload doc / request payout live on the mobile app.
+- **Realtime**: still using page-load reads. Postgres LISTEN/NOTIFY subscription is Phase 4.
+
 ### Iter 27 (2026-07-30) — Supabase migration Phase B.1 (schema + data backfill + read parity)
 - **New Postgres table** `public.crm_provider_leads` (46 columns + 5 indexes) — the only CRM-owned table that didn't already exist in the shared schema. Everything else (`sanjeevani_agents`, `agent_activities`, `agent_tasks`, `notifications`) was already provisioned by the Patient/Provider/Admin apps.
 - **DDL script** `/app/backend/tools/create_crm_tables.py` — idempotent, safe to re-run.

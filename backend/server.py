@@ -301,6 +301,78 @@ async def _ensure_master_admin_user(phone: str) -> dict:
     }
 
 
+# Supabase role → CRM provider_type mapping. Used when materialising a shared-DB
+# user into the CRM's own crm_users collection at first sign-in.
+SUPABASE_ROLE_TO_PROVIDER_TYPE = {
+    "ambulance_provider": "ambulance",
+    "hospital":           "hospital",
+    "doctor":             "doctor",
+    "paramedic":          "paramedic",
+    "pathologist":        "pathology",
+    "lab":                "pathology",
+    "pharmacy":           "pharmacy",
+}
+
+
+async def _try_supabase_provider_lookup(phone: str) -> Optional[dict]:
+    """If a phone isn't in crm_users, look it up in the shared Supabase `users`
+    table. If it's a healthcare-provider vertical, materialise a CRM-side row
+    (no password yet — they'll set it on first login) and return the freshly
+    inserted user. Everyone else returns None so the caller can 403."""
+    if not sb.is_configured():
+        return None
+    try:
+        pool = await sb.get_pool()
+    except Exception as e:
+        logger.warning(f"supabase pool init failed during provider lookup: {e}")
+        return None
+    async with pool.acquire() as conn:
+        # Match on the normalised phone AND on the "+91<phone>" variant that
+        # the mobile Provider App sometimes stores.
+        row = await conn.fetchrow(
+            """SELECT id, phone, name, email, role
+                 FROM public.users
+                WHERE phone = $1 OR phone = $2
+                LIMIT 1""",
+            phone, f"+91{phone}",
+        )
+        if not row:
+            return None
+        r = dict(row)
+        provider_type = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(r.get("role"))
+        if not provider_type:
+            return None                             # not a provider vertical → block
+        # Try to grab the provider profile id (ambulance_providers.id, hospital_profiles.id, …)
+        profile_id = None
+        if provider_type == "ambulance":
+            pr = await conn.fetchrow("SELECT id FROM public.ambulance_providers WHERE user_id = $1", r["id"])
+            profile_id = pr["id"] if pr else None
+        elif provider_type == "hospital":
+            pr = await conn.fetchrow("SELECT id FROM public.hospital_profiles WHERE user_id = $1", r["id"])
+            profile_id = pr["id"] if pr else None
+    # Materialise into crm_users so downstream code (get_current_user, RBAC) works
+    doc = {
+        "id": str(r["id"]),
+        "phone": phone,                             # store the normalised 10-digit version
+        "name": r.get("name") or f"Provider {phone}",
+        "email": r.get("email"),
+        "role": "provider_owner",
+        "is_master_admin": False,
+        "is_active": True,
+        "avatar": None,
+        "provider_type": provider_type,
+        "provider_id": profile_id,                  # points into the vertical-specific table
+        "supabase_user_id": str(r["id"]),           # canonical link to shared users row
+        "supabase_role": r.get("role"),
+        "password_hash": None,                      # first-login must set one
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.crm_users.insert_one(doc.copy())
+    logger.info(f"materialised Supabase provider into crm_users: {phone} · {r.get('role')}")
+    return doc
+
+
 @api.post("/auth/verify-otp")
 async def verify_otp(data: LoginVerifyOTP):
     phone = normalize_phone(data.phone)
@@ -313,7 +385,12 @@ async def verify_otp(data: LoginVerifyOTP):
             user = await _ensure_master_admin_user(phone)
             await db.crm_users.insert_one(user.copy())
         else:
-            raise HTTPException(status_code=403, detail="Phone not authorized. Contact master admin to be added.")
+            # Try the shared Supabase `users` table — a real provider that
+            # already signed up via the mobile Provider App can sign into the
+            # CRM PC dashboard without needing a Master Admin to pre-add them.
+            user = await _try_supabase_provider_lookup(phone)
+            if not user:
+                raise HTTPException(status_code=403, detail="Phone not authorized. Contact master admin to be added.")
 
     # Guard: only the healthcare-provider verticals listed in SUPPORTED_PROVIDER_TYPES
     # (ambulance, hospital, doctor, paramedic, pathology, pharmacy) can sign in as
@@ -4285,6 +4362,30 @@ async def supabase_contact(contact_id: str, current=Depends(require_internal)):
     if is_sales_rep(current) and c.get("assigned_agent_id") != current["id"]:
         raise HTTPException(status_code=403, detail="Not your lead")
     return {"contact": c}
+
+
+# ── Provider PC Dashboard (Phase 2 — Ambulance vertical slice) ──────────────
+@api.get("/provider/pc-dashboard")
+async def provider_pc_dashboard(current=Depends(get_current_user)):
+    """Provider's own PC dashboard. Reads directly from the shared Postgres
+    project so what they see here == what they see on their mobile Provider App."""
+    if current.get("role") != "provider_owner":
+        raise HTTPException(status_code=403, detail="Provider account required")
+    if current.get("provider_type") != "ambulance":
+        raise HTTPException(
+            status_code=501,
+            detail=f"Provider PC dashboard for {current.get('provider_type')} is not built yet — coming next.",
+        )
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    user_id = current.get("supabase_user_id") or current["id"]
+    data = await sb.fetch_ambulance_provider_dashboard(user_id)
+    if not data.get("provider"):
+        raise HTTPException(
+            status_code=404,
+            detail="No ambulance_providers profile found for this user in the shared DB. Complete onboarding on the mobile Provider App first.",
+        )
+    return data
 
 
 
