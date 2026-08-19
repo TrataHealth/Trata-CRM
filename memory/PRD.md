@@ -15,8 +15,22 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 30 (2026-02, this session) — Hospital Emergency Command Centre (P0 shipped)
-- **New `/api/hospital/*` endpoints** (server.py:4611+): `GET /hospital/command-center`, `POST /hospital/emergencies/{id}/accept`, `POST .../decline`, `POST .../admit`, `POST /hospital/admissions/{id}/discharge`, `POST /hospital/beds/{id}/toggle`, `POST /hospital/beds`, `GET/POST /hospital/case-chat/{case_id}`. All backed by asyncpg writes against the shared Supabase tables the mobile Hospital Provider App writes to.
+### Iter 31 (2026-02, this session) — Dual-Write · KYC Uploader · Push Realtime
+- **Phase B.2 · CRM Contacts ↔ Postgres dual-write LIVE**. `supabase_db.upsert_provider_lead()` maps every Mongo `contacts` doc → `crm_provider_leads` schema (JSON-serialising jsonb cols, coercing ISO strings → datetime for asyncpg timestamp binding). `_mirror_contact()` helper in server.py fires post-write on `PATCH /contacts/{id}` and `PATCH /contacts/{id}/assign`. Best-effort — swallow failures so Mongo stays authoritative during cutover. Seed-demo endpoint now also mirrors every seeded contact automatically.
+- **New `POST /api/admin/mirror-contacts-to-postgres`** — master-admin one-shot backfill. 26/26 contacts mirrored on first run.
+- **Phase C · Hospital KYC Uploader shipped**. New endpoints `GET /api/hospital/kyc/documents` + `POST /api/hospital/kyc/upload` — writes to shared `kyc_documents` table with `provider_type='hospital'`, base64 file_data (≤ 4 MB), matches the mobile KYC review pattern (already reads file_data). 10 canonical hospital doc types.
+- **Frontend KYC panel** added inline to `HospitalCommandCenter.jsx` — dropdown for doc type, display-name input, file picker (image/PDF ≤ 4 MB with base64 encoding on client), submitted-docs table with status chips + reviewer comments.
+- **Phase A · Push Realtime via SSE**. New `GET /api/hospital/command-center/stream?token=<jwt>` streams a hashed-fingerprint snapshot every 1.5s only when data actually changes (heartbeat every 20s). Auth via query param (browsers can't set Authorization on EventSource). Frontend swapped `setInterval(3s)` → EventSource with automatic polling fallback if SSE gets blocked/dropped. Live-push badge now reads "Live push · updated just now".
+- **New auth helper `get_current_user_from_query()`** in server.py so SSE endpoints can extract JWT from `?token=` param (never used for writes).
+- **Verified**: 
+  - Backfill: 26/26 contacts → Postgres.
+  - Live PATCH: Mongo pipeline_stage change reflected instantly in Postgres.
+  - KYC upload: base64 PNG persisted, list endpoint returns it with `status='submitted'`.
+  - SSE: `curl -N` streams snapshot event within 200ms of connect.
+  - UI screenshot: KYC section renders with uploaded doc, "Live push" badge visible, bed grid + incoming SOS still working.
+
+
+### Iter 30 (2026-02, previous) — Hospital Emergency Command Centre (P0 shipped)- **New `/api/hospital/*` endpoints** (server.py:4611+): `GET /hospital/command-center`, `POST /hospital/emergencies/{id}/accept`, `POST .../decline`, `POST .../admit`, `POST /hospital/admissions/{id}/discharge`, `POST /hospital/beds/{id}/toggle`, `POST /hospital/beds`, `GET/POST /hospital/case-chat/{case_id}`. All backed by asyncpg writes against the shared Supabase tables the mobile Hospital Provider App writes to.
 - **Schema discovery**: hospital_id on emergency_cases, hospital_beds, patient_admissions all FK to `users.id` (not hospital_profiles.id); case_chats FKs to hospital_cases.id. `_hospital_owner_user_id()` helper wraps this, and `accept_emergency_case` lazily inserts a `hospital_cases` lifecycle row so chats/admissions link correctly.
 - **Walk-in patient synthesis**: admissions require patient_id → users.id. When the source SOS was placed without a signed-in patient, the admit endpoint creates a synthetic `role='patient'` walk-in user so the admission still records cleanly (emergency_cases.patient_id is varchar(20) so we intentionally don't back-link the full-UUID walk-in there).
 - **New page `/provider/command-center`** (HospitalCommandCenter.jsx, ~360 lines) with 5 KPI tiles + Incoming + Active + inline Chat + inline Admit form + Bed Grid (per bed_type, click-to-toggle) + Admissions table with inline Discharge. Polls every 3s for near-realtime.

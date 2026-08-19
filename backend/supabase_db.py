@@ -835,3 +835,167 @@ async def discharge_patient(user_id: str, admission_id: str,
                 VALUES ($1::text, $2, 'discharge', 'Discharge summary', $3, $4, 'hospital', FALSE, now())
             """, str(_uuid.uuid4()), admission_id, notes, user_id)
     return {"success": True, "outcome": outcome or "discharged"}
+
+
+# ── Phase B.2 — CRM Contacts ↔ Postgres dual-write ──────────────────────────
+_LEAD_COLUMNS = (
+    "id", "upstream_user_id", "name", "type", "phone", "email",
+    "city", "state", "address", "is_verified", "is_active",
+    "pipeline_stage", "kyc_status", "kyc_id", "deal_value",
+    "assigned_agent_id", "assigned_agent_name",
+    "source", "onboarded_by", "onboarded_at", "avatar",
+    "specialization", "pan_number", "gst_number",
+    "vehicle_reg", "vehicle_make_model", "aadhaar_last4",
+    "father_name", "dob", "hospital_name", "ambulance_count",
+    "license_number", "lab_specialty", "pharmacy_type",
+    "kyc_doc_issue_date", "kyc_doc_expiry_date", "kyc_doc_authority",
+    "kyc_document_number",
+    "ai_doc_prescreens", "ai_prescreen_summary", "ai_extracted_fields",
+    "agent_doc_reviews", "local_decision",
+    "ai_fields_applied_at", "ai_fields_applied_by",
+    "last_admin_sync_at", "created_at", "updated_at",
+)
+_LEAD_JSON_COLS = {
+    "ai_doc_prescreens", "ai_prescreen_summary", "ai_extracted_fields",
+    "agent_doc_reviews", "local_decision",
+}
+_LEAD_TIMESTAMP_COLS = {
+    "onboarded_at", "ai_fields_applied_at", "last_admin_sync_at",
+    "created_at", "updated_at",
+}
+
+
+def _to_datetime(v):
+    """Best-effort coerce ISO-8601 string / datetime → datetime for asyncpg."""
+    if v is None or v == "":
+        return None
+    from datetime import datetime
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, str):
+        try:
+            # Python 3.11+ tolerates the trailing 'Z' but strip just in case
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except Exception:
+            return None
+    return None
+
+
+def _lead_row_from_contact(c: Dict[str, Any]) -> Dict[str, Any]:
+    """Map a Mongo `contacts` doc → the columns of Postgres `crm_provider_leads`.
+    Everything not present becomes NULL. JSON columns are pre-serialised;
+    timestamp columns are parsed from ISO strings to datetime for asyncpg."""
+    def _get(k, default=None):
+        v = c.get(k, default)
+        return v if v is not None else default
+    row = {col: _get(col) for col in _LEAD_COLUMNS}
+    # NOT NULL columns fall back to sensible defaults
+    row["id"] = c.get("id") or c.get("_id")
+    row["name"] = c.get("name") or c.get("business_name") or c.get("phone") or "Unnamed"
+    row["type"] = c.get("type") or c.get("provider_type") or "other"
+    row["phone"] = c.get("phone") or ""
+    row["pipeline_stage"] = c.get("pipeline_stage") or "lead"
+    # JSON columns → serialised strings for asyncpg jsonb binding
+    for j in _LEAD_JSON_COLS:
+        v = row.get(j)
+        if v is None:
+            continue
+        if not isinstance(v, str):
+            try:
+                row[j] = json.dumps(v)
+            except Exception:
+                row[j] = None
+    # Timestamp columns → datetime instances (Mongo stores ISO strings)
+    for t in _LEAD_TIMESTAMP_COLS:
+        row[t] = _to_datetime(row.get(t))
+    return row
+
+
+async def upsert_provider_lead(contact: Dict[str, Any]) -> Dict[str, Any]:
+    """Idempotently mirror a Mongo `contacts` document to Postgres
+    `crm_provider_leads`. Silently no-ops if Supabase is offline — best-effort
+    dual-write, never a blocker for the primary Mongo write."""
+    if not is_configured():
+        return {"success": False, "reason": "supabase_offline"}
+    if not contact or not (contact.get("id") or contact.get("_id")):
+        return {"success": False, "reason": "missing_id"}
+    if not contact.get("phone"):
+        return {"success": False, "reason": "missing_phone"}
+
+# ── Hospital KYC document uploader (Phase C) ────────────────────────────────
+_HOSPITAL_KYC_DOC_TYPES = (
+    "hospital_license", "nabh_certificate", "gst_certificate", "pan_card",
+    "owner_id_proof", "clinical_establishment_reg", "fire_safety_noc",
+    "biomedical_waste_auth", "pharmacy_license", "other",
+)
+
+
+async def list_hospital_kyc_documents(user_id: str) -> List[Dict[str, Any]]:
+    """List every KYC doc this hospital owner has uploaded — no file blobs."""
+    if not await _hospital_owner_user_id(user_id):
+        return []
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rs = await conn.fetch("""
+            SELECT id, document_name, document_type, doc_category, status,
+                   rejection_reason, rejection_comment,
+                   submitted_at, reviewed_at, reviewed_by, created_at
+              FROM public.kyc_documents
+             WHERE user_id = $1
+             ORDER BY created_at DESC
+             LIMIT 100
+        """, user_id)
+    return _rows(rs)
+
+
+async def upload_hospital_kyc_document(user_id: str, document_type: str,
+                                       document_name: str, file_b64: str,
+                                       doc_category: Optional[str] = None) -> Dict[str, Any]:
+    """Persist a KYC doc into the shared `kyc_documents` table as base64 so
+    the mobile KYC review flow (which already reads `file_data`) picks it up
+    immediately. Kept intentionally small — reject files larger than 4 MB."""
+    if not await _hospital_owner_user_id(user_id):
+        return {"success": False, "reason": "hospital_profile_missing"}
+    if document_type not in _HOSPITAL_KYC_DOC_TYPES:
+        return {"success": False, "reason": "invalid_document_type"}
+    # Reject giants — Postgres row limit is 1GB but we want fast admin reviews.
+    approx_bytes = int(len(file_b64) * 3 / 4)
+    if approx_bytes > 4 * 1024 * 1024:
+        return {"success": False, "reason": "file_too_large"}
+    import uuid as _uuid
+    doc_id = str(_uuid.uuid4())
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO public.kyc_documents
+              (id, user_id, provider_type, document_name, document_type,
+               doc_category, file_data, status, submitted_at, created_at, updated_at)
+            VALUES ($1::text, $2, 'hospital', $3, $4, $5, $6, 'submitted',
+                    now(), now(), now())
+        """, doc_id, user_id, document_name, document_type,
+            doc_category or "hospital_operations", file_b64)
+    return {"success": True, "document_id": doc_id, "status": "submitted"}
+
+
+    row = _lead_row_from_contact(contact)
+    cols = list(row.keys())
+    values = [row[c] for c in cols]
+    placeholders = ", ".join(f"${i+1}" for i in range(len(cols)))
+    updates = ", ".join(
+        f"{c} = EXCLUDED.{c}"
+        for c in cols
+        if c not in ("id", "created_at", "updated_at")
+    )
+    sql = f"""
+        INSERT INTO public.crm_provider_leads ({', '.join(cols)})
+        VALUES ({placeholders})
+        ON CONFLICT (id) DO UPDATE SET {updates}, updated_at = now()
+    """
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(sql, *values)
+        return {"success": True, "id": row["id"]}
+    except Exception as e:
+        logger.warning(f"upsert_provider_lead({row.get('id')}) failed: {e}")
+        return {"success": False, "reason": str(e)}

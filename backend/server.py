@@ -179,6 +179,22 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     return user
 
 
+async def get_current_user_from_query(token: Optional[str] = None) -> dict:
+    """Same as get_current_user but sources the token from the `?token=` query
+    param — required for EventSource / SSE which can't set the Authorization
+    header. Never expose this on write endpoints."""
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    try:
+        payload = decode_token(token, expected_type="access")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user = await db.crm_users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
 async def require_internal(user: dict = Depends(get_current_user)) -> dict:
     if not is_internal(user):
         raise HTTPException(status_code=403, detail="Admin access only")
@@ -1108,6 +1124,8 @@ async def update_contact(contact_id: str, data: ContactStatusUpdate, current=Dep
     update["updated_at"] = now_iso()
     await db.contacts.update_one({"id": contact_id}, {"$set": update})
     c2 = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    # Phase B.2 — dual-write mirror to Supabase crm_provider_leads
+    await _mirror_contact(c2)
     # Emit crm.deal.closed if the lead just reached verified/active from another stage (CRM side, not via inbound)
     if (
         update.get("pipeline_stage") in {"verified", "active"}
@@ -1142,6 +1160,8 @@ async def assign_lead(contact_id: str, data: AssignLead, current=Depends(get_cur
         {"id": contact_id},
         {"$set": {"assigned_agent_id": data.agent_id, "assigned_agent_name": agent_name, "updated_at": now_iso()}},
     )
+    # Phase B.2 — dual-write mirror to Supabase crm_provider_leads
+    await _mirror_contact(await db.contacts.find_one({"id": contact_id}, {"_id": 0}))
     # Emit lead.assigned outbound
     c = await db.contacts.find_one({"id": contact_id}, {"_id": 0, "phone": 1, "name": 1, "city": 1, "type": 1})
     old_agent = None
@@ -2706,13 +2726,31 @@ async def agent_leaderboard(current=Depends(get_current_user)):
 # ---------- Provider (multi-tenant) ----------
 @api.get("/provider/me")
 async def provider_me(current=Depends(get_current_user)):
-    """Returns the calling provider's own contact record + KYC + summary."""
+    """Returns the calling provider's own contact record + KYC + summary.
+    We look up the contact by `provider_id` if set, then fall back to `phone`
+    (which is what materialised-from-Supabase providers use since they don't
+    carry a `provider_id` field on the crm_users row)."""
     if not is_provider(current):
         raise HTTPException(status_code=403, detail="Provider access only")
+    contact = None
     pid = current.get("provider_id")
-    contact = await db.contacts.find_one({"id": pid}, {"_id": 0})
+    if pid:
+        contact = await db.contacts.find_one({"id": pid}, {"_id": 0})
+    if not contact and current.get("phone"):
+        contact = await db.contacts.find_one({"phone": current["phone"]}, {"_id": 0})
     if not contact:
-        raise HTTPException(status_code=404, detail="Provider record not found")
+        # Return a minimal stub so the UI can still render name/phone/type
+        # instead of hard-failing with 404.
+        contact = {
+            "id": None,
+            "name": current.get("name"),
+            "phone": current.get("phone"),
+            "type": current.get("provider_type"),
+            "city": current.get("city"),
+            "state": current.get("state"),
+            "kyc_status": "pending",
+            "pipeline_stage": "lead",
+        }
     return {"contact": contact, "user": current}
 
 
@@ -3230,15 +3268,47 @@ async def seed_demo_accounts(current=Depends(get_current_user)):
     # incoming SOS so their Emergency Command Centre has something to play with.
     demo_ops = await _seed_hospital_demo_ops()
 
+    # Phase B.2 — mirror every demo contact into Supabase crm_provider_leads
+    leads_mirrored = 0
+    async for c in db.contacts.find({"source": "demo_seed"}, {"_id": 0}):
+        res = await sb.upsert_provider_lead(c)
+        if res.get("success"):
+            leads_mirrored += 1
+
     return {
         "success": True,
         "created_users": created_users,
         "created_contacts": created_contacts,
         "already_existed": updated,
         "supabase_mirrored": mirrored,
+        "leads_mirrored_to_postgres": leads_mirrored,
         "demo_ops": demo_ops,
         "credentials_hint": "OTP 123456 · password Trata@123 for every demo account",
     }
+
+
+@api.post("/admin/mirror-contacts-to-postgres")
+async def mirror_contacts_to_postgres(current=Depends(get_current_user)):
+    """Phase B.2 one-shot backfill: iterate every Mongo `contacts` doc and
+    upsert into Supabase `crm_provider_leads`. Safe to re-run — the upsert
+    keys off contact.id. Master-admin only."""
+    if not (current.get("is_master_admin") or current.get("role") == "admin"):
+        raise HTTPException(status_code=403, detail="Master admin only")
+    if not sb.is_configured():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+
+    total = ok = failed = 0
+    reasons: Dict[str, int] = {}
+    async for c in db.contacts.find({}, {"_id": 0}):
+        total += 1
+        res = await sb.upsert_provider_lead(c)
+        if res.get("success"):
+            ok += 1
+        else:
+            failed += 1
+            key = res.get("reason", "unknown")
+            reasons[key] = reasons.get(key, 0) + 1
+    return {"success": True, "total": total, "mirrored": ok, "failed": failed, "failure_reasons": reasons}
 
 
 async def _seed_hospital_demo_ops() -> Dict[str, Any]:
@@ -3805,6 +3875,20 @@ def _verify_webhook_signature(raw_body: bytes, signature_header: Optional[str]) 
 
 def sign_webhook_payload(raw_body: bytes) -> str:
     return "sha256=" + hmac.new(PROVIDER_WEBHOOK_SECRET.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+
+
+
+async def _mirror_contact(contact_doc: Optional[Dict[str, Any]]) -> None:
+    """Phase B.2 dual-write: best-effort mirror a Mongo contact into Supabase
+    `crm_provider_leads`. Never raises — failures are logged and swallowed
+    so the primary Mongo path stays authoritative during cutover."""
+    if not contact_doc:
+        return
+    try:
+        await sb.upsert_provider_lead(contact_doc)
+    except Exception as e:
+        logger.debug(f"_mirror_contact suppressed: {e}")
+
 
 
 async def _pick_agent_for_territory(city: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -4723,6 +4807,94 @@ async def hospital_discharge(admission_id: str, body: DischargeRequest, current=
     res = await sb.discharge_patient(_hospital_user_id(current), admission_id, body.outcome, body.notes)
     if not res.get("success"):
         raise HTTPException(status_code=400, detail=res.get("reason", "discharge_failed"))
+    return res
+
+
+# ── Hospital KYC uploader (Phase C) ─────────────────────────────────────────
+@api.get("/hospital/kyc/documents")
+async def hospital_list_kyc(current=Depends(get_current_user)):
+    _require_hospital(current)
+    docs = await sb.list_hospital_kyc_documents(_hospital_user_id(current))
+    return {"documents": docs, "document_types": list(sb._HOSPITAL_KYC_DOC_TYPES)}
+
+
+# ── Hospital SSE realtime stream (Phase A) ──────────────────────────────────
+@api.get("/hospital/command-center/stream")
+async def hospital_command_center_stream(token: Optional[str] = None):
+    """Server-Sent Events stream of the hospital command centre snapshot.
+    Auth is passed via `?token=<jwt>` since browsers don't send Authorization
+    on EventSource. Server-side polls Supabase every ~1.5s and only pushes
+    when the snapshot's fingerprint changes — near-realtime UX without
+    exposing a Supabase anon key on the client."""
+    import asyncio
+    import hashlib
+    current = await get_current_user_from_query(token)
+    if current.get("role") != "provider_owner" or current.get("provider_type") != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital provider only")
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    user_id = _hospital_user_id(current)
+
+    async def event_stream():
+        # Kick-off — send the current snapshot immediately.
+        prev_hash = None
+        # Heartbeat every 20s to keep intermediaries from killing the pipe.
+        last_heartbeat = 0.0
+        try:
+            while True:
+                try:
+                    data = await sb.fetch_hospital_command_center(user_id)
+                except Exception as e:
+                    yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+                    await asyncio.sleep(3.0)
+                    continue
+
+                body = json.dumps(data, default=str, sort_keys=True)
+                h = hashlib.md5(body.encode("utf-8")).hexdigest()
+                now_ts = asyncio.get_event_loop().time()
+                if h != prev_hash:
+                    prev_hash = h
+                    last_heartbeat = now_ts
+                    yield f"event: snapshot\ndata: {body}\n\n"
+                elif now_ts - last_heartbeat > 20.0:
+                    last_heartbeat = now_ts
+                    yield ": keepalive\n\n"
+
+                await asyncio.sleep(1.5)
+        except asyncio.CancelledError:
+            # client disconnected — exit cleanly
+            return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",  # disable nginx buffering
+            "Connection": "keep-alive",
+        },
+    )
+
+
+class KycUploadBody(BaseModel):
+    document_type: str
+    document_name: str
+    file_base64: str  # base64-encoded body of the document (image/PDF)
+    doc_category: Optional[str] = None
+
+
+@api.post("/hospital/kyc/upload")
+async def hospital_upload_kyc(body: KycUploadBody, current=Depends(get_current_user)):
+    _require_hospital(current)
+    if not body.file_base64 or not body.file_base64.strip():
+        raise HTTPException(status_code=400, detail="Empty file")
+    res = await sb.upload_hospital_kyc_document(
+        _hospital_user_id(current),
+        body.document_type, body.document_name.strip() or body.document_type,
+        body.file_base64, body.doc_category,
+    )
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("reason", "upload_failed"))
     return res
 
 
