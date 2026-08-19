@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity, BedDouble, UserCog,
   BarChart3, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
   Building2, ClipboardList, IdCard, Wallet, Compass, Trophy, Settings as SettingsIcon, ShieldCheck,
-  UserPlus,
+  UserPlus, HeartPulse,
   Network as NetworkIcon,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
@@ -17,6 +17,7 @@ const ADMIN_NAV = [
   { to: "/network", label: "Network", icon: NetworkIcon },
   { to: "/pipeline", label: "Pipeline", icon: GitBranch },
   { to: "/admin/onboarding", label: "Onboarding", icon: UserPlus },
+  { to: "/admin/patients", label: "Patients", icon: HeartPulse },
   { to: "/admin/kyc-queue", label: "KYC Final Approval", icon: ShieldCheck, badgeKey: "kyc_admin_queue" },
   { to: "/activities", label: "Activities", icon: Activity },
   { to: "/tasks", label: "Tasks", icon: ListChecks },
@@ -38,6 +39,7 @@ const PROVIDER_NAV = [
   { to: "/provider/command-center", label: "Command Center", icon: Activity, hospitalOnly: true },
   { to: "/provider/beds", label: "Beds", icon: BedDouble, hospitalOnly: true },
   { to: "/provider/staff", label: "Staff", icon: UserCog, hospitalOnly: true },
+  { to: "/provider/patients", label: "Patients", icon: HeartPulse, hospitalOnly: true },
   { to: "/provider/activities", label: "My Activities", icon: Activity },
   { to: "/provider/earnings", label: "Earnings & Payouts", icon: Wallet },
   { to: "/provider/profile", label: "Profile", icon: IdCard },

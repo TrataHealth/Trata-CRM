@@ -1547,6 +1547,54 @@ async def admin_onboarding_approve_all(user_id: str, current=Depends(get_current
     return res
 
 
+# ── Patients (shared with mobile Provider App · Iter 38) ───────────────────
+@api.get("/admin/patients")
+async def admin_list_patients(q: Optional[str] = None, current=Depends(get_current_user)):
+    """Master admin roster of every patient on the shared Trata platform."""
+    _require_admin(current)
+    rows = await sb.list_all_patients_admin(q=q, limit=200)
+    return {"patients": rows, "total": len(rows)}
+
+
+@api.get("/admin/patients/{user_id}")
+async def admin_get_patient(user_id: str, current=Depends(get_current_user)):
+    """Master admin patient detail — profile + every case, appointment,
+    admission and ambulance ride across the network."""
+    _require_admin(current)
+    detail = await sb.fetch_patient_detail(user_id, hospital_scope_id=None)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return detail
+
+
+@api.get("/provider/patients")
+async def provider_list_patients(q: Optional[str] = None, current=Depends(get_current_user)):
+    """Provider-scoped patient roster. Hospitals see their `hospital_patients`
+    (same source the mobile Provider App reads). Other verticals return an
+    empty list for now — the mobile app is still the primary surface there."""
+    _require_provider(current)
+    if current.get("provider_type") == "hospital":
+        rows = await sb.list_hospital_patients_for_provider(
+            _hospital_user_id(current), q=q, limit=200)
+        return {"patients": rows, "total": len(rows), "scope": "hospital"}
+    return {"patients": [], "total": 0, "scope": current.get("provider_type"),
+            "message": f"Patient roster for {current.get('provider_type')} providers is coming soon on the PC console."}
+
+
+@api.get("/provider/patients/{user_id}")
+async def provider_get_patient(user_id: str, current=Depends(get_current_user)):
+    """Provider-scoped patient detail. Hospital providers see only rows tied
+    to their hospital_id — no leaking of other hospitals' patient histories."""
+    _require_provider(current)
+    if current.get("provider_type") != "hospital":
+        raise HTTPException(status_code=400, detail="Patient detail is only available for hospitals right now")
+    hospital_id = _hospital_user_id(current)
+    detail = await sb.fetch_patient_detail(user_id, hospital_scope_id=hospital_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Patient not found or not linked to this hospital")
+    return detail
+
+
 
 
 

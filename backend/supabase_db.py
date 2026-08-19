@@ -1279,3 +1279,157 @@ async def list_admin_onboarded_providers(limit: int = 100) -> List[Dict[str, Any
              LIMIT $1
         """, limit)
     return _rows(rs)
+
+
+# ── Patients (shared with mobile Provider App · Iter 38) ────────────────────
+async def list_all_patients_admin(q: Optional[str], limit: int = 200) -> List[Dict[str, Any]]:
+    """Master-admin roster: every user with role='patient', with a rollup of
+    total emergency cases + appointments + admissions so the roster can show
+    activity counts alongside identity."""
+    where = ["u.role = 'patient'"]
+    args: List[Any] = []
+    if q and q.strip():
+        args.append(f"%{q.strip().lower()}%")
+        where.append(f"(lower(coalesce(u.name,'')) LIKE ${len(args)} OR u.phone LIKE ${len(args)})")
+    args.append(limit)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rs = await conn.fetch(f"""
+            SELECT u.id, u.name, u.phone, u.email, u.dob, u.patient_id, u.is_active,
+                   u.verification_status, u.created_at, u.last_login_at,
+                   (SELECT count(*) FROM public.emergency_cases c WHERE c.patient_id = u.id OR c.customer_id = u.id) AS cases,
+                   (SELECT count(*) FROM public.appointments a WHERE a.patient_id = u.id)                          AS appts,
+                   (SELECT count(*) FROM public.patient_admissions ad WHERE ad.patient_id = u.id)                  AS admits
+              FROM public.users u
+             WHERE {' AND '.join(where)}
+             ORDER BY u.created_at DESC NULLS LAST
+             LIMIT ${len(args)}
+        """, *args)
+    return _rows(rs)
+
+
+async def list_hospital_patients_for_provider(hospital_user_id: str, q: Optional[str],
+                                              limit: int = 200) -> List[Dict[str, Any]]:
+    """Provider-scoped roster for a hospital: every `hospital_patients` row
+    plus the patient's `users` phone/name if we can match by phone."""
+    hospital_id = await _hospital_owner_user_id(hospital_user_id)
+    if not hospital_id:
+        return []
+    where = ["hp.hospital_id = $1"]
+    args: List[Any] = [hospital_id]
+    if q and q.strip():
+        args.append(f"%{q.strip().lower()}%")
+        where.append(f"(lower(coalesce(hp.name,'')) LIKE ${len(args)} OR hp.phone LIKE ${len(args)} OR lower(coalesce(hp.diagnosis,'')) LIKE ${len(args)})")
+    args.append(limit)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rs = await conn.fetch(f"""
+            SELECT hp.id, hp.patient_id, hp.trata_patient_id, hp.name, hp.age, hp.sex,
+                   hp.phone, hp.email, hp.blood_group, hp.address, hp.allergies,
+                   hp.chronic_conditions, hp.emergency_contact, hp.diagnosis,
+                   hp.status, hp.admission_date, hp.discharge_date, hp.bed_id, hp.created_at
+              FROM public.hospital_patients hp
+             WHERE {' AND '.join(where)}
+             ORDER BY hp.admission_date DESC NULLS LAST, hp.created_at DESC NULLS LAST
+             LIMIT ${len(args)}
+        """, *args)
+    return _rows(rs)
+
+
+async def _fetch_patient_associations(user_id: str, hospital_scope_id: Optional[str] = None) -> Dict[str, Any]:
+    """Every case / appointment / booking a patient is linked to. If
+    `hospital_scope_id` is provided, restrict to rows owned by that hospital
+    (so a provider only sees their own slice)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if hospital_scope_id:
+            emergencies = await conn.fetch("""
+                SELECT id, case_type, priority, status, reason, hospital_id,
+                       ambulance_provider_id, created_at
+                  FROM public.emergency_cases
+                 WHERE (patient_id = $1 OR customer_id = $1) AND hospital_id = $2
+                 ORDER BY created_at DESC LIMIT 20
+            """, user_id, hospital_scope_id)
+            appointments = await conn.fetch("""
+                SELECT id, doctor_id, hospital_id, appointment_date, time_slot,
+                       reason, status, created_at
+                  FROM public.appointments
+                 WHERE patient_id = $1 AND hospital_id = $2
+                 ORDER BY appointment_date DESC NULLS LAST, created_at DESC LIMIT 20
+            """, user_id, hospital_scope_id)
+            admissions = await conn.fetch("""
+                SELECT id, admission_number, admission_type, case_type, chief_complaint,
+                       ward_type, bed_number, status, triage_priority, triage_time
+                  FROM public.patient_admissions
+                 WHERE patient_id = $1 AND hospital_id = $2
+                 ORDER BY triage_time DESC NULLS LAST LIMIT 20
+            """, user_id, hospital_scope_id)
+        else:
+            emergencies = await conn.fetch("""
+                SELECT id, case_type, priority, status, reason, hospital_id,
+                       ambulance_provider_id, created_at
+                  FROM public.emergency_cases
+                 WHERE patient_id = $1 OR customer_id = $1
+                 ORDER BY created_at DESC LIMIT 20
+            """, user_id)
+            appointments = await conn.fetch("""
+                SELECT id, doctor_id, hospital_id, appointment_date, time_slot,
+                       reason, status, created_at
+                  FROM public.appointments
+                 WHERE patient_id = $1
+                 ORDER BY appointment_date DESC NULLS LAST, created_at DESC LIMIT 20
+            """, user_id)
+            admissions = await conn.fetch("""
+                SELECT id, admission_number, admission_type, case_type, chief_complaint,
+                       ward_type, bed_number, status, triage_priority, triage_time, hospital_id
+                  FROM public.patient_admissions
+                 WHERE patient_id = $1
+                 ORDER BY triage_time DESC NULLS LAST LIMIT 20
+            """, user_id)
+        ambulance_rides = await conn.fetch("""
+            SELECT id, booking_id, booking_type, ambulance_type, is_emergency,
+                   pickup_address, drop_address, status, scheduled_time, total_fare,
+                   provider_id, created_at
+              FROM public.ambulance_bookings
+             WHERE customer_id = $1
+             ORDER BY created_at DESC LIMIT 20
+        """, user_id)
+    return {
+        "emergency_cases": _rows(emergencies),
+        "appointments":    _rows(appointments),
+        "admissions":      _rows(admissions),
+        "ambulance_rides": _rows(ambulance_rides),
+    }
+
+
+async def fetch_patient_detail(user_id: str, hospital_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Return the patient profile (from `users` + best-match hospital_patients row)
+    plus their associated cases/appointments/admissions/bookings. If
+    hospital_scope_id is set, associations are filtered to that hospital."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        user = await conn.fetchrow("""
+            SELECT id, name, phone, email, dob, patient_id, is_active,
+                   verification_status, created_at, last_login_at, role, user_type
+              FROM public.users WHERE id = $1
+        """, user_id)
+        if not user or user["role"] != "patient":
+            return None
+        # Latest hospital_patients row (best clinical profile the mobile app has)
+        hp = await conn.fetchrow("""
+            SELECT id, hospital_id, name, age, sex, blood_group, address, allergies,
+                   chronic_conditions, emergency_contact, diagnosis, status,
+                   admission_date, discharge_date, bed_id, phone, email
+              FROM public.hospital_patients
+             WHERE trata_patient_id = $1 OR patient_id = $1
+                OR (phone IS NOT NULL AND phone = $2)
+             ORDER BY admission_date DESC NULLS LAST, created_at DESC NULLS LAST
+             LIMIT 1
+        """, user_id, user["phone"])
+    associations = await _fetch_patient_associations(user_id, hospital_scope_id)
+    return {
+        "patient": _row(user),
+        "clinical_profile": _row(hp),
+        **associations,
+    }
+

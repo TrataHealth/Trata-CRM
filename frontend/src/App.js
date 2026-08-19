@@ -31,6 +31,8 @@ import Settings from "./pages/Settings";
 import KycAdminQueue from "./pages/KycAdminQueue";
 import AdminOnboarding from "./pages/AdminOnboarding";
 import AdminProviderKyc from "./pages/AdminProviderKyc";
+import Patients from "./pages/Patients";
+import PatientDetail from "./pages/PatientDetail";
 import Network from "./pages/Network";
 import { Toaster } from "sonner";
 import { registerSW } from "./lib/registerSW";
@@ -93,6 +95,8 @@ function App() {
           <Route path="/admin/kyc-queue" element={<RequireAuth adminOnly><KycAdminQueue /></RequireAuth>} />
           <Route path="/admin/onboarding" element={<RequireAuth adminOnly><AdminOnboarding /></RequireAuth>} />
           <Route path="/admin/onboarding/:userId" element={<RequireAuth adminOnly><AdminProviderKyc /></RequireAuth>} />
+          <Route path="/admin/patients" element={<RequireAuth adminOnly><Patients mode="admin" /></RequireAuth>} />
+          <Route path="/admin/patients/:userId" element={<RequireAuth adminOnly><PatientDetail mode="admin" /></RequireAuth>} />
           <Route path="/network" element={<RequireAuth adminOnly><Network /></RequireAuth>} />
 
           {/* Shared (admins + providers + sales reps) */}
@@ -108,6 +112,8 @@ function App() {
           <Route path="/provider/command-center" element={<RequireAuth providerOnly><HospitalCommandCenter /></RequireAuth>} />
           <Route path="/provider/beds" element={<RequireAuth providerOnly><HospitalBeds /></RequireAuth>} />
           <Route path="/provider/staff" element={<RequireAuth providerOnly><HospitalStaff /></RequireAuth>} />
+          <Route path="/provider/patients" element={<RequireAuth providerOnly><Patients mode="provider" /></RequireAuth>} />
+          <Route path="/provider/patients/:userId" element={<RequireAuth providerOnly><PatientDetail mode="provider" /></RequireAuth>} />
           <Route path="/provider/kyc" element={<RequireAuth providerOnly><ProviderKyc /></RequireAuth>} />
           <Route path="/provider/activities" element={<RequireAuth providerOnly><ProviderActivities /></RequireAuth>} />
           <Route path="/provider/earnings" element={<RequireAuth providerOnly><ProviderEarnings /></RequireAuth>} />
