@@ -15,6 +15,16 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
+### Iter 29 (2026-02, this session) — Provider PC Console Phase 2b (all verticals live)
+- **Extended `/api/provider/pc-dashboard` from ambulance-only → all 6 verticals** (hospital, paramedic, doctor, pathology, pharmacy) via `fetch_generic_provider_dashboard` in `supabase_db.py`. Uses table introspection so it stays schema-agnostic across `hospital_profiles`, `paramedic_profiles`, `doctors`, `pathologists`, `pharmacy_profiles`.
+- **Added `pharmacist` + `lab_tech` role mappings** to `SUPABASE_ROLE_TO_PROVIDER_TYPE` (server.py:306) and generalised profile_id lookup in `_try_supabase_provider_lookup` (server.py:342) to fetch from the correct vertical table on materialisation.
+- **Case-count KPIs now work for paramedic too** (via `paramedic_id` on `emergency_cases`) — hospital already had them via `hospital_id`.
+- **`ProviderDashboard.jsx` conditional rendering finalised** — KPI tile set, lifetime-earnings strip, AND Fleet section all gated on `vertical === 'ambulance'`. Non-ambulance verticals show a clean 4-tile row (Active cases · Today · Status · KYC docs) + single Recent-cases column.
+- **`Login.jsx` copy** updated to reflect the CRM now serves every healthcare provider vertical (was still saying "Hospitals/clinics/path labs → use HMS instead"). Demo-accounts panel unchanged.
+- **Verified**: 12/12 pytest green (`test_provider_pc_dashboard.py`), curl E2E for hospital 9310018056 · paramedic 9939971813 · ambulance 7678218261 all return correct vertical + payload. UI screenshot confirms hospital dashboard hides Fleet section.
+
+
+
 ### Iter 28 (2026-08-18) — Provider PC Console (Phase 1 auth + Phase 2 Ambulance)
 - **Phase 1 (auth unification)**: `verify-otp` now falls back to Supabase `public.users` when a phone isn't in the CRM's `crm_users`. If it's a healthcare-provider vertical (ambulance, hospital, doctor, paramedic, pathologist, pharmacy), a `crm_users` row is materialized on-the-fly with `role=provider_owner`, mapped `provider_type`, and `supabase_user_id` linked to the shared row. First login triggers password setup; subsequent logins use the standard 3-step flow. New helper: `_try_supabase_provider_lookup`.
 - **Phase 2 (Ambulance PC dashboard)**: new `GET /api/provider/pc-dashboard` reads directly from shared Postgres tables (`ambulance_providers`, `emergency_cases`, `ambulances`, `kyc_documents`). Zero sync — same 100ms data the mobile app sees. Returns: provider profile · KPI tiles (active trips, trips today/week, fleet avail/total, KYC approved/pending) · lifetime bookings/completed/earnings strip · 10 most recent cases · full fleet.

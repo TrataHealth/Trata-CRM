@@ -103,8 +103,8 @@ export default function Login() {
               Every trip.
             </h1>
             <p className="text-base text-white/70 max-w-md leading-relaxed">
-              For TrataHealth HQ and ambulance fleet partners. Run live SOS dispatch, KYC, fleet utilisation, earnings and AI insights from one place.
-              <span className="block mt-2 text-white/50 text-sm">Hospitals, clinics and path labs — please continue using the Trata HMS.</span>
+              For TrataHealth HQ, ambulance fleets, hospitals, clinics, path labs, paramedics and pharmacies. Run live SOS dispatch, KYC, fleet utilisation, earnings and AI insights from one place.
+              <span className="block mt-2 text-white/50 text-sm">Same phone + OTP as your Trata Provider App — sign in and your PC dashboard mirrors your mobile.</span>
             </p>
             <div className="grid grid-cols-3 gap-4 pt-4">
               {[
@@ -279,7 +279,7 @@ function DemoCreds() {
         <li>9000020003 · Ambulance owner · <span className="text-[#091E42]">Trata@123</span></li>
       </ul>
       <div className="mt-2 text-[10px] text-[#5E6C84] font-sans">
-        Hospital / clinic / path-lab owners → use the Trata HMS instead.
+        Real Provider App accounts (any vertical) sign in the same way — first login sets your PC password.
       </div>
     </div>
   );

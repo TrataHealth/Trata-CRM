@@ -368,3 +368,85 @@ async def fetch_ambulance_provider_dashboard(user_id: str) -> Dict[str, Any]:
         "recent_cases": recent_rows,
         "fleet": fleet_rows,
     }
+
+
+# Vertical → (table, business-name column, extra columns) so we can render every
+# vertical with one generic dashboard shape.
+_VERTICAL_PROFILE_SPEC = {
+    "hospital":   ("hospital_profiles",  "name",         ["capacity", "available_beds", "specialization", "facilities"]),
+    "doctor":     ("doctors",            "full_name",    ["specialization", "qualification", "experience", "doctor_type"]),
+    "paramedic":  ("paramedic_profiles", "full_name",    ["skills", "average_response_time", "total_cases_handled", "rating"]),
+    "pathology":  ("pathologists",       "lab_name",     ["registration_number", "gst_number", "display_name"]),
+    "pharmacy":   ("pharmacy_profiles",  "pharmacy_name",["drug_licence_number", "pharmacist_name", "gst_number", "owner_name"]),
+}
+
+
+async def fetch_generic_provider_dashboard(user_id: str, vertical: str) -> Dict[str, Any]:
+    """Dashboard for hospital / doctor / paramedic / pathology / pharmacy.
+    Ambulance has its own richer function above."""
+    spec = _VERTICAL_PROFILE_SPEC.get(vertical)
+    if not spec:
+        return {"provider": None}
+    table, name_col, extras = spec
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Columns to always fetch when they exist. We check first to keep this table-agnostic.
+        cols = {c["column_name"] for c in await conn.fetch(
+            "SELECT column_name FROM information_schema.columns WHERE table_name=$1", table)}
+        select_cols = ["id", "user_id"]
+        if name_col in cols:                  select_cols.append(f"{name_col} AS business_name")
+        for c in ("phone", "email", "city", "state", "address"):
+            if c in cols:                     select_cols.append(c)
+        for c in ("verification_status", "status", "is_active", "is_verified"):
+            if c in cols:                     select_cols.append(c)
+        for c in ("created_at", "average_rating", "rating"):
+            if c in cols:                     select_cols.append(c)
+        for extra in extras:
+            if extra in cols:                 select_cols.append(extra)
+        provider = await conn.fetchrow(
+            f"SELECT {', '.join(select_cols)} FROM public.{table} WHERE user_id = $1", user_id)
+        if not provider:
+            return {"provider": None}
+        # Cases count — meaningful for hospital (via hospital_id on cases) and paramedic (via paramedic_id).
+        # Other verticals don't have a direct foreign key on emergency_cases, so KPIs stay at 0.
+        cases_active = cases_today = 0
+        if vertical == "hospital":
+            row = await conn.fetchrow(
+                """SELECT
+                     (SELECT count(*) FROM public.emergency_cases WHERE hospital_id=$1
+                        AND upper(status) IN ('DISPATCHED','ACTIVE','IN_PROGRESS','AMBULANCE_ASSIGNED','EN_ROUTE')) AS act,
+                     (SELECT count(*) FROM public.emergency_cases WHERE hospital_id=$1
+                        AND created_at >= now() - interval '1 day') AS td""",
+                provider["id"])
+            if row:
+                cases_active, cases_today = row["act"], row["td"]
+        elif vertical == "paramedic":
+            row = await conn.fetchrow(
+                """SELECT
+                     (SELECT count(*) FROM public.emergency_cases WHERE paramedic_id=$1
+                        AND upper(status) IN ('DISPATCHED','ACTIVE','IN_PROGRESS','AMBULANCE_ASSIGNED','EN_ROUTE')) AS act,
+                     (SELECT count(*) FROM public.emergency_cases WHERE paramedic_id=$1
+                        AND created_at >= now() - interval '1 day') AS td""",
+                provider["id"])
+            if row:
+                cases_active, cases_today = row["act"], row["td"]
+        kyc_row = await conn.fetchrow(
+            """SELECT
+                 (SELECT count(*) FROM public.kyc_documents WHERE user_id=$1 AND lower(coalesce(status,''))='approved') AS approved,
+                 (SELECT count(*) FROM public.kyc_documents WHERE user_id=$1 AND lower(coalesce(status,'')) IN ('','pending','submitted','uploaded')) AS pending""",
+            user_id)
+    return {
+        "provider": _row(provider),
+        "kpis": {
+            "active_trips": cases_active,
+            "trips_today": cases_today,
+            "trips_week": 0,
+            "fleet_total": None,
+            "fleet_available": None,
+            "kyc_approved": kyc_row["approved"] if kyc_row else 0,
+            "kyc_pending":  kyc_row["pending"]  if kyc_row else 0,
+        },
+        "recent_cases": [],
+        "fleet": [],
+        "vertical": vertical,
+    }

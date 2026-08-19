@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 10 — Verified provider PC dashboard extended to hospital + paramedic + ambulance. Backend /api/provider/pc-dashboard works for all 3 verticals (12/12 pytest). Frontend KPI tiles + lifetime strip conditional rendering correct. BUG: Fleet <section> in ProviderDashboard.jsx is NOT wrapped in a vertical==='ambulance' check → the empty 'Fleet — No ambulances registered yet' block renders for hospital & paramedic providers. Login copy updated correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/provider/pc-dashboard (paramedic)", "issue": "paramedic_profiles table has no city/state columns, so provider.city and provider.state are absent from response. FE handles gracefully ('Location not set'), but consider adding city/state to paramedic_profiles or returning null keys for schema consistency across verticals."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ProviderDashboard.jsx", "issue": "Fleet <section data-testid='provider-fleet'> is rendered UNCONDITIONALLY. For hospital + paramedic + doctor + pathology + pharmacy verticals it still shows an empty 'FLEET · No ambulances registered yet. Add them on the mobile Provider App.' box at the bottom of the dashboard. The parent grid wrapper already toggles lg:grid-cols-2 based on vertical==='ambulance' but the fleet <section> itself is not gated. Screenshot of paramedic dashboard confirms.", "selector": "[data-testid='provider-fleet']", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_provider_pc_dashboard.py",
+    "/app/test_reports/pytest/provider_pc_dashboard.xml"
+  ],
+  "action_items": [
+    "Wrap the Fleet <section data-testid='provider-fleet'> in ProviderDashboard.jsx (lines 138-152) with `{state.data.vertical === 'ambulance' && ( ... )}` so it is hidden for hospital/paramedic/doctor/pathology/pharmacy verticals — mirrors the existing conditional on the lifetime-earnings strip (line 110)."
+  ],
+  "critical_code_review_comments": [
+    "ProviderDashboard.jsx line 119-153: the grid wrapper switches column count based on vertical but the fleet <section> inside is not gated. Should be `{state.data.vertical === 'ambulance' && (<section data-testid='provider-fleet'>...</section>)}`.",
+    "supabase_db.py fetch_generic_provider_dashboard: for paramedic vertical there's no way to compute 'cases assigned' since paramedic_profiles isn't referenced in emergency_cases table. Both active_trips and trips_today hardcode to 0 for non-hospital verticals — flag this as a known limitation in code comment or wire up a paramedic_profile_id → emergency_cases join when the schema supports it.",
+    "server.py:318-319 comment still says 'only ambulance provider portals are supported here' — stale after this iteration's fix (also flagged in iteration_9).",
+    "server.py is now 4567 lines — should be split into routes/auth.py, routes/provider.py, routes/admin.py."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_provider_pc_dashboard.py"
+  ],
+  "success_rate": {"backend": "100% (12/12 pytest, 4 skipped are parameter-guards)", "frontend": "75% (login copy PASS, ambulance PASS, hospital+paramedic FAIL on fleet-section leak)"},
+  "test_credentials": "Master 9873117605/Master@123; Ambulance 7678218261/Provider@123; Hospital 9310018056/HFRTest@123 (security-setup completed with smoketest@example.com + 'trata' answers in this run); Paramedic 9939971813/Para@123 (security-setup completed with smoketest@example.com + 'trata' answers in this run). All OTP 123456.",
+  "seed_data_creation": "Completed one-time /security-setup for hospital 9310018056 and paramedic 9939971813 with recovery_email=smoketest@example.com and answer='trata' for 2 security questions. Future logins for these accounts will land directly on /provider.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent wraps the Fleet section in a vertical==='ambulance' guard, re-run: (1) `python -m pytest /app/backend/tests/test_provider_pc_dashboard.py -v` should stay green; (2) UI: fresh browser, login as 9310018056/HFRTest@123 and 9939971813/Para@123 (both now have security setup done — will land directly on /provider) and verify [data-testid='provider-fleet'] is absent. Ambulance login 7678218261/Provider@123 must still show it. Login copy already fixed and verified.",
+  "rca of the issue": "Root cause: ProviderDashboard.jsx re-render pass added the vertical-conditional check for KPI tiles (line 94) and lifetime strip (line 110), and toggled the grid column count based on vertical (line 119), but forgot to wrap the actual Fleet <section> tag (lines 138-152). Result: for non-ambulance verticals the grid becomes single-column but both children still render — the empty Fleet card ends up stacked below Recent Cases. One-line fix: `{state.data.vertical === 'ambulance' && (<section data-testid='provider-fleet'>...</section>)}`."
+}

@@ -310,7 +310,9 @@ SUPABASE_ROLE_TO_PROVIDER_TYPE = {
     "paramedic":          "paramedic",
     "pathologist":        "pathology",
     "lab":                "pathology",
+    "lab_tech":           "pathology",
     "pharmacy":           "pharmacy",
+    "pharmacist":         "pharmacy",
 }
 
 
@@ -343,12 +345,18 @@ async def _try_supabase_provider_lookup(phone: str) -> Optional[dict]:
         if not provider_type:
             return None                             # not a provider vertical → block
         # Try to grab the provider profile id (ambulance_providers.id, hospital_profiles.id, …)
+        _PROFILE_TABLE = {
+            "ambulance": "ambulance_providers",
+            "hospital":  "hospital_profiles",
+            "doctor":    "doctors",
+            "paramedic": "paramedic_profiles",
+            "pathology": "pathologists",
+            "pharmacy":  "pharmacy_profiles",
+        }
         profile_id = None
-        if provider_type == "ambulance":
-            pr = await conn.fetchrow("SELECT id FROM public.ambulance_providers WHERE user_id = $1", r["id"])
-            profile_id = pr["id"] if pr else None
-        elif provider_type == "hospital":
-            pr = await conn.fetchrow("SELECT id FROM public.hospital_profiles WHERE user_id = $1", r["id"])
+        table = _PROFILE_TABLE.get(provider_type)
+        if table:
+            pr = await conn.fetchrow(f"SELECT id FROM public.{table} WHERE user_id = $1", r["id"])
             profile_id = pr["id"] if pr else None
     # Materialise into crm_users so downstream code (get_current_user, RBAC) works
     doc = {
@@ -4368,24 +4376,25 @@ async def supabase_contact(contact_id: str, current=Depends(require_internal)):
 @api.get("/provider/pc-dashboard")
 async def provider_pc_dashboard(current=Depends(get_current_user)):
     """Provider's own PC dashboard. Reads directly from the shared Postgres
-    project so what they see here == what they see on their mobile Provider App."""
+    project so what they see here == what they see on their mobile Provider App.
+    Ambulance vertical has a richer view (fleet + trip history); other verticals
+    use the generic profile-based view."""
     if current.get("role") != "provider_owner":
         raise HTTPException(status_code=403, detail="Provider account required")
-    if current.get("provider_type") != "ambulance":
-        raise HTTPException(
-            status_code=501,
-            detail=f"Provider PC dashboard for {current.get('provider_type')} is not built yet — coming next.",
-        )
     if not _supabase_ready():
         raise HTTPException(status_code=503, detail="Supabase not configured")
     user_id = current.get("supabase_user_id") or current["id"]
-    data = await sb.fetch_ambulance_provider_dashboard(user_id)
+    vertical = current.get("provider_type")
+    if vertical == "ambulance":
+        data = await sb.fetch_ambulance_provider_dashboard(user_id)
+    else:
+        data = await sb.fetch_generic_provider_dashboard(user_id, vertical)
     if not data.get("provider"):
         raise HTTPException(
             status_code=404,
-            detail="No ambulance_providers profile found for this user in the shared DB. Complete onboarding on the mobile Provider App first.",
+            detail=f"No {vertical or 'provider'} profile found for this user in the shared DB. Complete onboarding on the mobile Provider App first.",
         )
-    return data
+    return {**data, "vertical": vertical}
 
 
 

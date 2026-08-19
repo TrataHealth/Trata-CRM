@@ -91,20 +91,32 @@ export default function ProviderDashboard() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="provider-kpis">
-        <Tile label="Active trips" value={kpis.active_trips} sub="dispatched or en route" icon={Activity} tone="#DE350B" />
-        <Tile label="Trips today"  value={kpis.trips_today}  sub={`${kpis.trips_week ?? 0} in last 7 days`} icon={Clock} tone="#0052CC" />
-        <Tile label="Fleet"        value={`${kpis.fleet_available ?? 0}/${kpis.fleet_total ?? 0}`} sub="available / total" icon={Ambulance} tone="#006644" />
+        {state.data.vertical === "ambulance" ? (
+          <>
+            <Tile label="Active trips" value={kpis.active_trips} sub="dispatched or en route" icon={Activity} tone="#DE350B" />
+            <Tile label="Trips today"  value={kpis.trips_today}  sub={`${kpis.trips_week ?? 0} in last 7 days`} icon={Clock} tone="#0052CC" />
+            <Tile label="Fleet"        value={`${kpis.fleet_available ?? 0}/${kpis.fleet_total ?? 0}`} sub="available / total" icon={Ambulance} tone="#006644" />
+          </>
+        ) : (
+          <>
+            <Tile label={state.data.vertical === "hospital" ? "Active cases" : "Cases assigned"} value={kpis.active_trips ?? 0} sub="in progress" icon={Activity} tone="#DE350B" />
+            <Tile label="Today" value={kpis.trips_today ?? 0} sub="new today" icon={Clock} tone="#0052CC" />
+            <Tile label="Status" value={provider.status || provider.verification_status || (provider.is_verified ? "verified" : "pending")} sub="on the network" icon={ShieldCheck} tone="#006644" />
+          </>
+        )}
         <Tile label="KYC docs"     value={kpis.kyc_approved} sub={`${kpis.kyc_pending ?? 0} pending`} icon={ShieldCheck} tone="#5243AA" />
       </div>
 
-      <div className="bg-white border border-[#DFE1E6] rounded-md p-4 grid grid-cols-2 sm:grid-cols-4 gap-4" data-testid="provider-lifetime-strip">
-        <div><div className="text-[10px] uppercase text-[#5E6C84] font-semibold">Total bookings</div><div className="text-lg font-bold text-[#091E42] mt-0.5">{provider.total_bookings || 0}</div></div>
-        <div><div className="text-[10px] uppercase text-[#5E6C84] font-semibold">Completed</div><div className="text-lg font-bold text-[#091E42] mt-0.5">{provider.completed_bookings || 0}</div></div>
-        <div><div className="text-[10px] uppercase text-[#5E6C84] font-semibold">Lifetime earnings</div><div className="text-lg font-bold text-[#091E42] mt-0.5">₹{Number(provider.total_earnings || 0).toLocaleString("en-IN")}</div></div>
-        <div><div className="text-[10px] uppercase text-[#5E6C84] font-semibold">Onboarded</div><div className="text-lg font-bold text-[#091E42] mt-0.5">{provider.created_at ? relativeTime(provider.created_at) : "—"}</div></div>
-      </div>
+      {state.data.vertical === "ambulance" && (
+        <div className="bg-white border border-[#DFE1E6] rounded-md p-4 grid grid-cols-2 sm:grid-cols-4 gap-4" data-testid="provider-lifetime-strip">
+          <div><div className="text-[10px] uppercase text-[#5E6C84] font-semibold">Total bookings</div><div className="text-lg font-bold text-[#091E42] mt-0.5">{provider.total_bookings || 0}</div></div>
+          <div><div className="text-[10px] uppercase text-[#5E6C84] font-semibold">Completed</div><div className="text-lg font-bold text-[#091E42] mt-0.5">{provider.completed_bookings || 0}</div></div>
+          <div><div className="text-[10px] uppercase text-[#5E6C84] font-semibold">Lifetime earnings</div><div className="text-lg font-bold text-[#091E42] mt-0.5">₹{Number(provider.total_earnings || 0).toLocaleString("en-IN")}</div></div>
+          <div><div className="text-[10px] uppercase text-[#5E6C84] font-semibold">Onboarded</div><div className="text-lg font-bold text-[#091E42] mt-0.5">{provider.created_at ? relativeTime(provider.created_at) : "—"}</div></div>
+        </div>
+      )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className={`grid grid-cols-1 ${state.data.vertical === "ambulance" ? "lg:grid-cols-2" : ""} gap-4`}>
         <section className="bg-white border border-[#DFE1E6] rounded-md overflow-hidden" data-testid="provider-recent-cases">
           <div className="px-4 py-2 text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold border-b border-[#DFE1E6] bg-[#F8F9FA]">Recent cases · last 10</div>
           {(!recent_cases || recent_cases.length === 0) ? (
@@ -123,21 +135,23 @@ export default function ProviderDashboard() {
           ))}
         </section>
 
-        <section className="bg-white border border-[#DFE1E6] rounded-md overflow-hidden" data-testid="provider-fleet">
-          <div className="px-4 py-2 text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold border-b border-[#DFE1E6] bg-[#F8F9FA]">Fleet</div>
-          {(!fleet || fleet.length === 0) ? (
-            <div className="p-6 text-center text-sm text-[#5E6C84]" data-testid="provider-fleet-empty">No ambulances registered yet. Add them on the mobile Provider App.</div>
-          ) : fleet.map((v) => (
-            <div key={v.id} className="px-4 py-3 border-b border-[#DFE1E6] last:border-0 flex items-start justify-between gap-3" data-testid={`provider-fleet-${v.id}`}>
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-[#091E42] font-mono truncate">{v.vehicle_number || "—"}</div>
-                <div className="text-[11px] text-[#5E6C84] truncate">{[v.ambulance_type, v.model].filter(Boolean).join(" · ") || "—"}</div>
-                {v.assigned_driver_name && <div className="text-[11px] text-[#42526E]">Driver: {v.assigned_driver_name}{v.assigned_driver_phone ? ` · ${v.assigned_driver_phone}` : ""}</div>}
+        {state.data.vertical === "ambulance" && (
+          <section className="bg-white border border-[#DFE1E6] rounded-md overflow-hidden" data-testid="provider-fleet">
+            <div className="px-4 py-2 text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold border-b border-[#DFE1E6] bg-[#F8F9FA]">Fleet</div>
+            {(!fleet || fleet.length === 0) ? (
+              <div className="p-6 text-center text-sm text-[#5E6C84]" data-testid="provider-fleet-empty">No ambulances registered yet. Add them on the mobile Provider App.</div>
+            ) : fleet.map((v) => (
+              <div key={v.id} className="px-4 py-3 border-b border-[#DFE1E6] last:border-0 flex items-start justify-between gap-3" data-testid={`provider-fleet-${v.id}`}>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-[#091E42] font-mono truncate">{v.vehicle_number || "—"}</div>
+                  <div className="text-[11px] text-[#5E6C84] truncate">{[v.ambulance_type, v.model].filter(Boolean).join(" · ") || "—"}</div>
+                  {v.assigned_driver_name && <div className="text-[11px] text-[#42526E]">Driver: {v.assigned_driver_name}{v.assigned_driver_phone ? ` · ${v.assigned_driver_phone}` : ""}</div>}
+                </div>
+                <div className="text-right shrink-0"><StatusChip value={v.status} /></div>
               </div>
-              <div className="text-right shrink-0"><StatusChip value={v.status} /></div>
-            </div>
-          ))}
-        </section>
+            ))}
+          </section>
+        )}
       </div>
     </div>
   );
