@@ -3226,14 +3226,95 @@ async def seed_demo_accounts(current=Depends(get_current_user)):
                 })
                 created_contacts += 1
 
+    # After the primary demo seed, top up demo hospitals with beds + a demo
+    # incoming SOS so their Emergency Command Centre has something to play with.
+    demo_ops = await _seed_hospital_demo_ops()
+
     return {
         "success": True,
         "created_users": created_users,
         "created_contacts": created_contacts,
         "already_existed": updated,
         "supabase_mirrored": mirrored,
+        "demo_ops": demo_ops,
         "credentials_hint": "OTP 123456 · password Trata@123 for every demo account",
     }
+
+
+async def _seed_hospital_demo_ops() -> Dict[str, Any]:
+    """Idempotently seed 8 beds + 1 broadcasted SOS case for the demo hospital
+    (City Care Hospital · 9000020004). Safe to re-run — inserts only if the
+    target rows don't already exist. Silently no-ops if Supabase is offline
+    or the hospital profile hasn't been mirrored yet."""
+    if not sb.is_configured():
+        return {"skipped": "supabase_offline"}
+    _DEMO_NS = uuid.UUID("11111111-1111-1111-1111-111111111111")
+    # `hospital_id` on beds / emergency_cases / patient_admissions FKs to
+    # `users.id`, not `hospital_profiles.id`. So the demo hospital's "hospital_id"
+    # for downstream ops is exactly the user_id we seeded earlier.
+    hosp_user_id = str(uuid.uuid5(_DEMO_NS, "user:9000020004"))
+    try:
+        pool = await sb.get_pool()
+        async with pool.acquire() as conn:
+            hp = await conn.fetchrow(
+                "SELECT id FROM public.hospital_profiles WHERE user_id = $1", hosp_user_id)
+            if not hp:
+                return {"skipped": "hospital_profile_missing"}
+            hospital_id = hosp_user_id  # << the user_id is what beds/cases FK against
+
+            # Beds — General 101..104, ICU 201..202, Ventilator 301, ER 401
+            beds = [
+                ("General",    "101", "Ward A", 1500),
+                ("General",    "102", "Ward A", 1500),
+                ("General",    "103", "Ward B", 1500),
+                ("General",    "104", "Ward B", 1500),
+                ("ICU",        "201", "ICU-1", 8000),
+                ("ICU",        "202", "ICU-1", 8000),
+                ("Ventilator", "301", "ICU-2", 12000),
+                ("ER",         "401", "Emergency", 2500),
+            ]
+            beds_created = 0
+            for bed_type, bed_number, ward, rate in beds:
+                bed_id = str(uuid.uuid5(_DEMO_NS, f"bed:{hospital_id}:{bed_type}:{bed_number}"))
+                await conn.execute("""
+                    INSERT INTO public.hospital_beds
+                      (id, hospital_id, bed_type, bed_number, ward, is_available, daily_rate, created_at, updated_at)
+                    SELECT $1::text, $2, $3, $4, $5, TRUE, $6, now(), now()
+                     WHERE NOT EXISTS (SELECT 1 FROM public.hospital_beds WHERE id = $1::text)
+                """, bed_id, hospital_id, bed_type, bed_number, ward, rate)
+                beds_created += 1
+
+            # One demo incoming case (hospital_id NULL, notified_hospitals contains our hospital_id)
+            case_id = str(uuid.uuid5(_DEMO_NS, f"case:{hospital_id}:demo-incoming"))
+            existing = await conn.fetchval("SELECT 1 FROM public.emergency_cases WHERE id = $1", case_id)
+            case_created = False
+            if not existing:
+                patient_profile = {
+                    "basicInfo": {"fullName": "Rahul Sharma", "age": 42, "gender": "male", "bloodGroup": "O+"},
+                    "medicalInfo": {"allergies": ["Penicillin"], "conditions": ["Hypertension"]},
+                }
+                vitals = {"pulse": "112 bpm", "bp": "160/100", "spo2": "91%", "temp": "37.4°C"}
+                location = {"lat": 12.9716, "lng": 77.5946, "address": "MG Road, Bengaluru"}
+                await conn.execute("""
+                    INSERT INTO public.emergency_cases
+                      (id, customer_phone, case_type, priority, status,
+                       location, patient_profile, vital_signs, reason,
+                       notified_hospitals, estimated_response_time, distance,
+                       created_at, updated_at)
+                    VALUES ($1::text, $2, $3, $4, $5,
+                            $6::json, $7::json, $8::json, $9,
+                            $10::jsonb, $11, $12,
+                            now(), now())
+                """, case_id, "9876500011", "cardiac", "critical", "PENDING",
+                    json.dumps(location), json.dumps(patient_profile), json.dumps(vitals),
+                    "Sudden chest pain radiating to left arm, sweating profusely for 20 min.",
+                    json.dumps([hospital_id]), 8, 4.2)
+                case_created = True
+
+        return {"hospital_id": hospital_id, "beds_ensured": beds_created, "demo_incoming_case_created": case_created}
+    except Exception as e:
+        logger.warning(f"hospital demo ops seed failed: {e}")
+        return {"error": str(e)}
 
 
 async def _do_seed(force: bool = False) -> dict:
@@ -4513,6 +4594,136 @@ async def provider_pc_dashboard(current=Depends(get_current_user)):
             detail=f"No {vertical or 'provider'} profile found for this user in the shared DB. Complete onboarding on the mobile Provider App first.",
         )
     return {**data, "vertical": vertical}
+
+
+
+
+# ── Hospital Emergency Command Centre (Phase 3 write-parity) ────────────────
+def _require_hospital(current) -> None:
+    if current.get("role") != "provider_owner" or current.get("provider_type") != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital provider only")
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+
+
+def _hospital_user_id(current) -> str:
+    return current.get("supabase_user_id") or current["id"]
+
+
+@api.get("/hospital/command-center")
+async def hospital_command_center(current=Depends(get_current_user)):
+    _require_hospital(current)
+    data = await sb.fetch_hospital_command_center(_hospital_user_id(current))
+    if not data.get("hospital_id"):
+        raise HTTPException(status_code=404, detail="No hospital profile linked to this account.")
+    return data
+
+
+class HospitalCaseAction(BaseModel):
+    reason: Optional[str] = None
+
+
+@api.post("/hospital/emergencies/{case_id}/accept")
+async def hospital_accept_case(case_id: str, current=Depends(get_current_user)):
+    _require_hospital(current)
+    res = await sb.accept_emergency_case(_hospital_user_id(current), case_id)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("reason", "accept_failed"))
+    return res
+
+
+@api.post("/hospital/emergencies/{case_id}/decline")
+async def hospital_decline_case(case_id: str, body: HospitalCaseAction, current=Depends(get_current_user)):
+    _require_hospital(current)
+    res = await sb.decline_emergency_case(_hospital_user_id(current), case_id, body.reason)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("reason", "decline_failed"))
+    return res
+
+
+class BedToggle(BaseModel):
+    is_available: bool
+    reason: Optional[str] = "manual_toggle"
+
+
+@api.post("/hospital/beds/{bed_id}/toggle")
+async def hospital_toggle_bed(bed_id: str, body: BedToggle, current=Depends(get_current_user)):
+    _require_hospital(current)
+    res = await sb.toggle_bed(_hospital_user_id(current), bed_id, body.is_available, body.reason or "manual_toggle")
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("reason", "toggle_failed"))
+    return res
+
+
+class NewBed(BaseModel):
+    bed_type: str
+    bed_number: str
+    ward: Optional[str] = None
+    daily_rate: Optional[float] = None
+
+
+@api.post("/hospital/beds")
+async def hospital_add_bed(body: NewBed, current=Depends(get_current_user)):
+    _require_hospital(current)
+    res = await sb.add_hospital_bed(_hospital_user_id(current), body.bed_type, body.bed_number,
+                                    body.ward, body.daily_rate)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("reason", "create_failed"))
+    return res
+
+
+@api.get("/hospital/case-chat/{case_id}")
+async def hospital_case_chat_read(case_id: str, current=Depends(get_current_user)):
+    _require_hospital(current)
+    msgs = await sb.fetch_case_chat(_hospital_user_id(current), case_id)
+    return {"case_id": case_id, "messages": msgs}
+
+
+class ChatMessage(BaseModel):
+    content: str
+    message_type: Optional[str] = "text"
+
+
+@api.post("/hospital/case-chat/{case_id}")
+async def hospital_case_chat_send(case_id: str, body: ChatMessage, current=Depends(get_current_user)):
+    _require_hospital(current)
+    if not (body.content or "").strip():
+        raise HTTPException(status_code=400, detail="Empty message")
+    res = await sb.send_case_chat(_hospital_user_id(current), case_id,
+                                  body.content.strip(), body.message_type or "text")
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("reason", "send_failed"))
+    return res
+
+
+class AdmitRequest(BaseModel):
+    bed_id: Optional[str] = None
+    chief_complaint: Optional[str] = None
+    triage_priority: Optional[str] = "medium"
+
+
+@api.post("/hospital/emergencies/{case_id}/admit")
+async def hospital_admit(case_id: str, body: AdmitRequest, current=Depends(get_current_user)):
+    _require_hospital(current)
+    res = await sb.admit_from_case(_hospital_user_id(current), case_id,
+                                   body.bed_id, body.chief_complaint, body.triage_priority)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("reason", "admit_failed"))
+    return res
+
+
+class DischargeRequest(BaseModel):
+    outcome: Optional[str] = "discharged"
+    notes: Optional[str] = None
+
+
+@api.post("/hospital/admissions/{admission_id}/discharge")
+async def hospital_discharge(admission_id: str, body: DischargeRequest, current=Depends(get_current_user)):
+    _require_hospital(current)
+    res = await sb.discharge_patient(_hospital_user_id(current), admission_id, body.outcome, body.notes)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("reason", "discharge_failed"))
+    return res
 
 
 

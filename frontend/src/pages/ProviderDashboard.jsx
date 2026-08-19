@@ -107,6 +107,22 @@ export default function ProviderDashboard() {
         <Tile label="KYC docs"     value={kpis.kyc_approved} sub={`${kpis.kyc_pending ?? 0} pending`} icon={ShieldCheck} tone="#5243AA" />
       </div>
 
+      {state.data.vertical === "hospital" && (
+        <a href="/provider/command-center" data-testid="provider-open-command-center"
+          className="block bg-gradient-to-r from-[#0052CC] to-[#0747A6] text-white rounded-md p-4 hover:shadow-lg transition-shadow">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-white/70 font-semibold">Live Ops</div>
+              <div className="font-heading text-lg font-black mt-0.5">Open Emergency Command Centre →</div>
+              <div className="text-xs text-white/80 mt-1">Accept incoming SOS, chat with the ambulance, admit patients, manage beds and discharge — all live from the shared TrataHealth backend.</div>
+            </div>
+            <div className="hidden sm:flex items-center gap-1 text-[11px] text-white/80 whitespace-nowrap">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-white animate-pulse" /> Live · updates every 3s
+            </div>
+          </div>
+        </a>
+      )}
+
       {state.data.vertical === "ambulance" && (
         <div className="bg-white border border-[#DFE1E6] rounded-md p-4 grid grid-cols-2 sm:grid-cols-4 gap-4" data-testid="provider-lifetime-strip">
           <div><div className="text-[10px] uppercase text-[#5E6C84] font-semibold">Total bookings</div><div className="text-lg font-bold text-[#091E42] mt-0.5">{provider.total_bookings || 0}</div></div>

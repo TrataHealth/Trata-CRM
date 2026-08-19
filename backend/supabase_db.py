@@ -408,16 +408,17 @@ async def fetch_generic_provider_dashboard(user_id: str, vertical: str) -> Dict[
         if not provider:
             return {"provider": None}
         # Cases count — meaningful for hospital (via hospital_id on cases) and paramedic (via paramedic_id).
-        # Other verticals don't have a direct foreign key on emergency_cases, so KPIs stay at 0.
+        # NOTE: emergency_cases.hospital_id FKs to users.id, not hospital_profiles.id — so we key off
+        # the caller's user_id, not provider["id"].
         cases_active = cases_today = 0
         if vertical == "hospital":
             row = await conn.fetchrow(
                 """SELECT
                      (SELECT count(*) FROM public.emergency_cases WHERE hospital_id=$1
-                        AND upper(status) IN ('DISPATCHED','ACTIVE','IN_PROGRESS','AMBULANCE_ASSIGNED','EN_ROUTE')) AS act,
+                        AND upper(status) IN ('DISPATCHED','ACTIVE','IN_PROGRESS','AMBULANCE_ASSIGNED','EN_ROUTE','HOSPITAL_ASSIGNED','ARRIVED')) AS act,
                      (SELECT count(*) FROM public.emergency_cases WHERE hospital_id=$1
                         AND created_at >= now() - interval '1 day') AS td""",
-                provider["id"])
+                user_id)
             if row:
                 cases_active, cases_today = row["act"], row["td"]
         elif vertical == "paramedic":
@@ -450,3 +451,387 @@ async def fetch_generic_provider_dashboard(user_id: str, vertical: str) -> Dict[
         "fleet": [],
         "vertical": vertical,
     }
+
+
+# ── Hospital Emergency Command Centre (Phase 3 — full write parity) ─────────
+# NOTE on the schema: across the shared TrataHealth platform, `hospital_id` on
+# emergency_cases, hospital_beds, patient_admissions etc. actually points at
+# `users.id` (the hospital-owner user), NOT `hospital_profiles.id`. So every
+# query in this section keys off the caller's supabase user_id directly.
+async def _hospital_owner_user_id(user_id: str) -> Optional[str]:
+    """Verify the caller actually owns a hospital_profiles row. Returns their
+    user_id (which is the value stored as `hospital_id` on downstream tables)
+    or None if they don't have a hospital profile."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        r = await conn.fetchrow("SELECT 1 FROM public.hospital_profiles WHERE user_id = $1", user_id)
+    return user_id if r else None
+
+
+async def fetch_hospital_command_center(user_id: str) -> Dict[str, Any]:
+    """One-shot snapshot for the hospital command centre — reads all live
+    counters + top-of-queue rows in a single round trip. Frontend polls this
+    every ~3s to get near-realtime updates."""
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id:
+        return {"hospital_id": None}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # ---- incoming (broadcasted to us, not yet accepted anywhere)
+        incoming = await conn.fetch("""
+            SELECT id, case_type, priority, status, customer_phone, reason,
+                   location::text AS location_json,
+                   patient_profile::text AS patient_profile_json,
+                   vital_signs::text AS vital_signs_json,
+                   estimated_response_time, distance, created_at
+              FROM public.emergency_cases
+             WHERE hospital_id IS NULL
+               AND notified_hospitals ? $1
+               AND upper(status) NOT IN ('COMPLETED','CANCELLED','AUTO_CLOSED','DECLINED')
+             ORDER BY created_at DESC NULLS LAST
+             LIMIT 15
+        """, hospital_id)
+        # ---- active (we accepted / were assigned)
+        active = await conn.fetch("""
+            SELECT id, case_type, priority, status, customer_phone, reason,
+                   location::text AS location_json,
+                   patient_profile::text AS patient_profile_json,
+                   ambulance_location::text AS ambulance_location_json,
+                   vital_signs::text AS vital_signs_json,
+                   estimated_response_time, distance,
+                   assigned_hospital_at, ambulance_id, ambulance_provider_id, paramedic_id,
+                   created_at
+              FROM public.emergency_cases
+             WHERE hospital_id = $1
+               AND upper(status) NOT IN ('COMPLETED','CANCELLED','AUTO_CLOSED','DISCHARGED')
+             ORDER BY assigned_hospital_at DESC NULLS LAST, created_at DESC
+             LIMIT 20
+        """, hospital_id)
+        # ---- beds
+        beds = await conn.fetch("""
+            SELECT id, bed_type, bed_number, ward, is_available, patient_id, daily_rate, updated_at
+              FROM public.hospital_beds
+             WHERE hospital_id = $1
+             ORDER BY bed_type, bed_number
+        """, hospital_id)
+        # ---- admissions (in-house, not discharged)
+        admissions = await conn.fetch("""
+            SELECT id, admission_number, patient_id, patient_uid, admission_type, case_type,
+                   triage_priority, chief_complaint, bed_id, bed_number, ward_type, status,
+                   emergency_case_id, admission_time, discharge_time
+              FROM public.patient_admissions
+             WHERE hospital_id = $1 AND discharge_time IS NULL
+             ORDER BY admission_time DESC NULLS LAST
+             LIMIT 20
+        """, hospital_id)
+        # ---- daily stats (today, if present, else compute cheaply)
+        today_row = await conn.fetchrow("""
+            SELECT
+              (SELECT count(*) FROM public.emergency_cases
+                 WHERE hospital_id = $1 AND created_at >= now() - interval '1 day') AS cases_today,
+              (SELECT count(*) FROM public.emergency_cases
+                 WHERE hospital_id = $1
+                   AND upper(status) IN ('AMBULANCE_ASSIGNED','EN_ROUTE','ARRIVED','ACTIVE','IN_PROGRESS')) AS cases_active,
+              (SELECT count(*) FROM public.patient_admissions
+                 WHERE hospital_id = $1 AND admission_time >= now() - interval '1 day') AS admissions_today,
+              (SELECT count(*) FROM public.patient_admissions
+                 WHERE hospital_id = $1 AND discharge_time >= now() - interval '1 day') AS discharges_today,
+              (SELECT count(*) FROM public.hospital_beds
+                 WHERE hospital_id = $1 AND is_available = TRUE) AS beds_free,
+              (SELECT count(*) FROM public.hospital_beds
+                 WHERE hospital_id = $1) AS beds_total
+        """, hospital_id)
+
+    def _normalise(rows, jsons):
+        out = []
+        for r in _rows(rows):
+            for src, dst in jsons:
+                v = r.pop(src, None)
+                if isinstance(v, str) and v:
+                    try: r[dst] = json.loads(v)
+                    except Exception: r[dst] = None
+                else:
+                    r[dst] = v
+            out.append(r)
+        return out
+
+    return {
+        "hospital_id": hospital_id,
+        "incoming": _normalise(incoming, [("location_json","location"),
+                                          ("patient_profile_json","patient_profile"),
+                                          ("vital_signs_json","vital_signs")]),
+        "active":   _normalise(active,   [("location_json","location"),
+                                          ("patient_profile_json","patient_profile"),
+                                          ("ambulance_location_json","ambulance_location"),
+                                          ("vital_signs_json","vital_signs")]),
+        "beds":     _rows(beds),
+        "admissions": _rows(admissions),
+        "stats":    dict(today_row) if today_row else {},
+    }
+
+
+async def accept_emergency_case(user_id: str, case_id: str) -> Dict[str, Any]:
+    """Hospital accepts a broadcasted case. Sets hospital_id, assigned_hospital_at,
+    status → HOSPITAL_ASSIGNED, and creates a hospital_cases lifecycle row (which
+    is what case_chats FK against). Idempotent when we're already assigned."""
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id:
+        return {"success": False, "reason": "hospital_profile_missing"}
+    import uuid as _uuid
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, hospital_id, status, patient_id, customer_id FROM public.emergency_cases WHERE id=$1",
+            case_id)
+        if not row:
+            return {"success": False, "reason": "case_not_found"}
+        if row["hospital_id"] and row["hospital_id"] != hospital_id:
+            return {"success": False, "reason": "already_assigned_to_other_hospital"}
+        # Get hospital name from profile
+        hp = await conn.fetchrow(
+            "SELECT name FROM public.hospital_profiles WHERE user_id = $1", user_id)
+        hospital_name = hp["name"] if hp else None
+        await conn.execute("""
+            UPDATE public.emergency_cases
+               SET hospital_id = $1,
+                   assigned_hospital_at = COALESCE(assigned_hospital_at, now()),
+                   status = 'HOSPITAL_ASSIGNED',
+                   updated_at = now()
+             WHERE id = $2
+        """, hospital_id, case_id)
+        # Lazily create the hospital_cases lifecycle row so chat/admission FKs work
+        existing_hc = await conn.fetchval(
+            "SELECT id FROM public.hospital_cases WHERE emergency_case_id = $1 AND hospital_id = $2",
+            case_id, hospital_id)
+        if not existing_hc:
+            hc_id = str(_uuid.uuid4())
+            await conn.execute("""
+                INSERT INTO public.hospital_cases
+                  (id, emergency_case_id, customer_id, patient_id, hospital_id, hospital_name,
+                   admission_type, status, phase, chat_enabled, created_at, updated_at)
+                VALUES ($1::text, $2, $3, $4, $5, $6, 'emergency', 'accepted', 'incoming', TRUE, now(), now())
+            """, hc_id, case_id, row["customer_id"], row["patient_id"], hospital_id, hospital_name)
+            existing_hc = hc_id
+    return {"success": True, "case_id": case_id, "hospital_id": hospital_id, "hospital_case_id": existing_hc}
+
+
+async def decline_emergency_case(user_id: str, case_id: str, reason: Optional[str]) -> Dict[str, Any]:
+    """Hospital declines a broadcasted case — removes our id from notified_hospitals."""
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id:
+        return {"success": False, "reason": "hospital_profile_missing"}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE public.emergency_cases
+               SET notified_hospitals = COALESCE(notified_hospitals, '[]'::jsonb) - $1,
+                   updated_at = now()
+             WHERE id = $2
+        """, hospital_id, case_id)
+    return {"success": True, "case_id": case_id, "reason_recorded": bool(reason)}
+
+
+async def toggle_bed(user_id: str, bed_id: str, is_available: bool,
+                     reason: str = "manual_toggle") -> Dict[str, Any]:
+    """Flip a bed's availability + write a bed_status_logs row for audit."""
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id:
+        return {"success": False, "reason": "hospital_profile_missing"}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        bed = await conn.fetchrow(
+            "SELECT id, bed_type, is_available FROM public.hospital_beds WHERE id=$1 AND hospital_id=$2",
+            bed_id, hospital_id)
+        if not bed:
+            return {"success": False, "reason": "bed_not_found"}
+        prev_free = await conn.fetchval(
+            "SELECT count(*) FROM public.hospital_beds WHERE hospital_id=$1 AND bed_type=$2 AND is_available=TRUE",
+            hospital_id, bed["bed_type"])
+        await conn.execute(
+            "UPDATE public.hospital_beds SET is_available=$1, updated_at=now() WHERE id=$2",
+            is_available, bed_id)
+        new_free = await conn.fetchval(
+            "SELECT count(*) FROM public.hospital_beds WHERE hospital_id=$1 AND bed_type=$2 AND is_available=TRUE",
+            hospital_id, bed["bed_type"])
+        await conn.execute("""
+            INSERT INTO public.bed_status_logs
+              (id, hospital_id, bed_type, previous_available, new_available, change_reason, changed_by, created_at)
+            VALUES ($1::text, $2, $3, $4, $5, $6, $7, now())
+        """, str(__import__("uuid").uuid4()), hospital_id, bed["bed_type"], prev_free, new_free, reason, user_id)
+    return {"success": True, "bed_id": bed_id, "is_available": is_available,
+            "previous_available": prev_free, "new_available": new_free}
+
+
+async def add_hospital_bed(user_id: str, bed_type: str, bed_number: str,
+                           ward: Optional[str], daily_rate: Optional[float]) -> Dict[str, Any]:
+    """Create a new bed row for this hospital."""
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id:
+        return {"success": False, "reason": "hospital_profile_missing"}
+    import uuid as _uuid
+    bed_id = str(_uuid.uuid4())
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO public.hospital_beds
+              (id, hospital_id, bed_type, bed_number, ward, is_available, daily_rate, created_at, updated_at)
+            VALUES ($1::text, $2, $3, $4, $5, TRUE, $6, now(), now())
+        """, bed_id, hospital_id, bed_type, bed_number, ward, daily_rate)
+    return {"success": True, "bed_id": bed_id}
+
+
+async def fetch_case_chat(user_id: str, case_id: str) -> List[Dict[str, Any]]:
+    """`case_id` here is the emergency_case_id from the URL. case_chats FKs
+    against hospital_cases.id, so we translate first."""
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id:
+        return []
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        hc_id = await conn.fetchval(
+            "SELECT id FROM public.hospital_cases WHERE emergency_case_id=$1 AND hospital_id=$2",
+            case_id, hospital_id)
+        if not hc_id:
+            return []
+        rs = await conn.fetch("""
+            SELECT id, case_id, sender_id, sender_type, message_type, content, file_url,
+                   delivered, created_at
+              FROM public.case_chats
+             WHERE case_id = $1
+             ORDER BY created_at ASC
+             LIMIT 200
+        """, hc_id)
+    return _rows(rs)
+
+
+async def send_case_chat(user_id: str, case_id: str, content: str,
+                         message_type: str = "text") -> Dict[str, Any]:
+    """`case_id` is emergency_case_id. We translate to hospital_cases.id before
+    inserting into case_chats."""
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id:
+        return {"success": False, "reason": "hospital_profile_missing"}
+    import uuid as _uuid
+    msg_id = str(_uuid.uuid4())
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        hc_id = await conn.fetchval(
+            "SELECT id FROM public.hospital_cases WHERE emergency_case_id=$1 AND hospital_id=$2",
+            case_id, hospital_id)
+        if not hc_id:
+            return {"success": False, "reason": "case_not_accepted_by_us"}
+        await conn.execute("""
+            INSERT INTO public.case_chats
+              (id, case_id, sender_id, sender_type, message_type, content, delivered, created_at)
+            VALUES ($1::text, $2, $3, 'hospital', $4, $5, TRUE, now())
+        """, msg_id, hc_id, user_id, message_type, content)
+    return {"success": True, "message_id": msg_id}
+
+
+async def admit_from_case(user_id: str, case_id: str, bed_id: Optional[str],
+                          chief_complaint: Optional[str],
+                          triage_priority: Optional[str]) -> Dict[str, Any]:
+    """Create a patient_admissions row from an active emergency case, mark the
+    case as ARRIVED, and mark the assigned bed occupied."""
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id:
+        return {"success": False, "reason": "hospital_profile_missing"}
+    import uuid as _uuid
+    admission_id = str(_uuid.uuid4())
+    admission_number = f"ADM-{__import__('datetime').datetime.utcnow().strftime('%Y%m%d')}-{admission_id[:6].upper()}"
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        case = await conn.fetchrow(
+            "SELECT id, patient_id, customer_id, customer_phone, patient_profile::text AS pp, case_type, hospital_id FROM public.emergency_cases WHERE id=$1",
+            case_id)
+        if not case or case["hospital_id"] != hospital_id:
+            return {"success": False, "reason": "case_not_ours"}
+        # patient_admissions.patient_id FKs into users(id). For walk-in / unlinked
+        # emergency cases (common when the SOS was placed anonymously), we lazily
+        # create a synthetic "walk-in" user so admission still records correctly.
+        patient_id = case["patient_id"] or case["customer_id"]
+        if not patient_id:
+            walk_in_id = str(_uuid.uuid4())
+            walk_phone = case["customer_phone"] or f"walkin-{case_id[:8]}"
+            walk_name = "Walk-in patient"
+            try:
+                pp = json.loads(case["pp"]) if case["pp"] else None
+                walk_name = (pp or {}).get("basicInfo", {}).get("fullName") or walk_name
+            except Exception:
+                pass
+            await conn.execute("""
+                INSERT INTO public.users (id, phone, name, role, is_active, created_at)
+                VALUES ($1, $2, $3, 'patient', TRUE, now())
+                ON CONFLICT (phone) DO NOTHING
+            """, walk_in_id, walk_phone, walk_name)
+            row = await conn.fetchrow("SELECT id FROM public.users WHERE phone = $1", walk_phone)
+            patient_id = str(row["id"]) if row else walk_in_id
+            # Note: emergency_cases.patient_id is varchar(20) — can't fit a full
+            # 36-char UUID, so we intentionally DON'T back-link the walk-in user
+            # onto the emergency case. Downstream tables (patient_admissions,
+            # hospital_beds) accept 36-char patient_id and use the full UUID.
+        bed_number = None; ward = None
+        if bed_id:
+            bed = await conn.fetchrow(
+                "SELECT bed_number, ward, bed_type FROM public.hospital_beds WHERE id=$1 AND hospital_id=$2 AND is_available=TRUE",
+                bed_id, hospital_id)
+            if not bed:
+                return {"success": False, "reason": "bed_unavailable"}
+            bed_number = bed["bed_number"]
+            ward = bed["ward"] or bed["bed_type"]
+            await conn.execute(
+                "UPDATE public.hospital_beds SET is_available=FALSE, patient_id=$1, updated_at=now() WHERE id=$2",
+                patient_id, bed_id)
+        await conn.execute("""
+            INSERT INTO public.patient_admissions
+              (id, admission_number, patient_id, hospital_id, admission_type, case_type,
+               source, triage_priority, chief_complaint, bed_id, bed_number, ward_type,
+               status, emergency_case_id, admission_time, created_at, updated_at)
+            VALUES ($1::text, $2, $3, $4, 'emergency', $5, 'ambulance', $6, $7, $8, $9, $10,
+                    'admitted', $11, now(), now(), now())
+        """, admission_id, admission_number, patient_id, hospital_id,
+            case["case_type"], triage_priority or "medium", chief_complaint,
+            bed_id, bed_number, ward, case_id)
+        await conn.execute("""
+            UPDATE public.emergency_cases
+               SET status = 'ARRIVED', updated_at = now()
+             WHERE id = $1
+        """, case_id)
+    return {"success": True, "admission_id": admission_id, "admission_number": admission_number}
+
+
+async def discharge_patient(user_id: str, admission_id: str,
+                            outcome: Optional[str], notes: Optional[str]) -> Dict[str, Any]:
+    """Set discharge_time + status=discharged, free the bed, and optionally append
+    an admission_notes row with the discharge summary."""
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id:
+        return {"success": False, "reason": "hospital_profile_missing"}
+    import uuid as _uuid
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        adm = await conn.fetchrow(
+            "SELECT id, bed_id, emergency_case_id, hospital_id FROM public.patient_admissions WHERE id=$1",
+            admission_id)
+        if not adm or adm["hospital_id"] != hospital_id:
+            return {"success": False, "reason": "admission_not_ours"}
+        await conn.execute("""
+            UPDATE public.patient_admissions
+               SET status = 'discharged', discharge_time = now(), updated_at = now()
+             WHERE id = $1
+        """, admission_id)
+        if adm["bed_id"]:
+            await conn.execute(
+                "UPDATE public.hospital_beds SET is_available=TRUE, patient_id=NULL, updated_at=now() WHERE id=$1",
+                adm["bed_id"])
+        if adm["emergency_case_id"]:
+            await conn.execute(
+                "UPDATE public.emergency_cases SET status='COMPLETED', updated_at=now() WHERE id=$1",
+                adm["emergency_case_id"])
+        if notes:
+            await conn.execute("""
+                INSERT INTO public.admission_notes
+                  (id, admission_id, note_type, title, content, author_id, author_role, is_critical, created_at)
+                VALUES ($1::text, $2, 'discharge', 'Discharge summary', $3, $4, 'hospital', FALSE, now())
+            """, str(_uuid.uuid4()), admission_id, notes, user_id)
+    return {"success": True, "outcome": outcome or "discharged"}

@@ -15,7 +15,18 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 29 (2026-02, this session) — Provider PC Console Phase 2b + Full-vertical demo seeding
+### Iter 30 (2026-02, this session) — Hospital Emergency Command Centre (P0 shipped)
+- **New `/api/hospital/*` endpoints** (server.py:4611+): `GET /hospital/command-center`, `POST /hospital/emergencies/{id}/accept`, `POST .../decline`, `POST .../admit`, `POST /hospital/admissions/{id}/discharge`, `POST /hospital/beds/{id}/toggle`, `POST /hospital/beds`, `GET/POST /hospital/case-chat/{case_id}`. All backed by asyncpg writes against the shared Supabase tables the mobile Hospital Provider App writes to.
+- **Schema discovery**: hospital_id on emergency_cases, hospital_beds, patient_admissions all FK to `users.id` (not hospital_profiles.id); case_chats FKs to hospital_cases.id. `_hospital_owner_user_id()` helper wraps this, and `accept_emergency_case` lazily inserts a `hospital_cases` lifecycle row so chats/admissions link correctly.
+- **Walk-in patient synthesis**: admissions require patient_id → users.id. When the source SOS was placed without a signed-in patient, the admit endpoint creates a synthetic `role='patient'` walk-in user so the admission still records cleanly (emergency_cases.patient_id is varchar(20) so we intentionally don't back-link the full-UUID walk-in there).
+- **New page `/provider/command-center`** (HospitalCommandCenter.jsx, ~360 lines) with 5 KPI tiles + Incoming + Active + inline Chat + inline Admit form + Bed Grid (per bed_type, click-to-toggle) + Admissions table with inline Discharge. Polls every 3s for near-realtime.
+- **Sidebar**: "Command Center" item now appears above "My Activities" for hospital provider owners only (`hospitalOnly` flag on the nav config).
+- **CTA on Hospital PC dashboard**: gradient banner links to the Command Centre.
+- **Demo seed**: `/api/admin/seed-demo-accounts` now also inserts 8 beds (General 101–104, ICU 201–202, Ventilator 301, ER 401) + one demo incoming SOS (critical cardiac case for Rahul Sharma at MG Road, Bengaluru with vitals) targeting the demo hospital, so the workflow is playable out-of-the-box.
+- **Verified end-to-end**: curl full lifecycle passes — Accept → Chat send/receive → Admit-with-bed → Discharge → KPIs update, no regressions.
+- **Realtime**: 3s polling for MVP. WebSocket-based Supabase Realtime remains a Phase 4 follow-up (needs either Supabase JS SDK+RLS or FastAPI SSE backed by PG LISTEN/NOTIFY).
+
+
 - **Extended `/api/provider/pc-dashboard` from ambulance-only → all 6 verticals** (hospital, paramedic, doctor, pathology, pharmacy) via `fetch_generic_provider_dashboard` in `supabase_db.py`.
 - **Added `pharmacist` + `lab_tech` role mappings** to `SUPABASE_ROLE_TO_PROVIDER_TYPE` (server.py:306) and generalised profile_id lookup across all 6 vertical tables in `_try_supabase_provider_lookup`.
 - **Paramedic case-count KPIs** now wired through `paramedic_id` on `emergency_cases`.

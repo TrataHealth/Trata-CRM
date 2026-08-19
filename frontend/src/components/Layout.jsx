@@ -33,6 +33,7 @@ const SALES_NAV = [
 
 const PROVIDER_NAV = [
   { to: "/provider", label: "My Dashboard", icon: LayoutDashboard, exact: true },
+  { to: "/provider/command-center", label: "Command Center", icon: Activity, hospitalOnly: true },
   { to: "/provider/activities", label: "My Activities", icon: Activity },
   { to: "/provider/earnings", label: "Earnings & Payouts", icon: Wallet },
   { to: "/provider/profile", label: "Profile & KYC", icon: IdCard },
@@ -41,7 +42,10 @@ const PROVIDER_NAV = [
 
 export default function Layout({ children }) {
   const { user, logout, isProvider, isSalesRep, isAdmin } = useAuth();
-  const NAV = isProvider ? PROVIDER_NAV : isSalesRep ? SALES_NAV : ADMIN_NAV;
+  const isHospital = user?.provider_type === "hospital";
+  const NAV = (isProvider ? PROVIDER_NAV : isSalesRep ? SALES_NAV : ADMIN_NAV).filter(
+    (n) => !n.hospitalOnly || isHospital
+  );
   const navigate = useNavigate();
   const [query, setQuery] = React.useState("");
   const [results, setResults] = React.useState(null);
