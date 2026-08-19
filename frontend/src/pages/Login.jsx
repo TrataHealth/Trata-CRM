@@ -106,7 +106,7 @@ export default function Login() {
               Every case.
             </h1>
             <p className="text-base text-white/70 max-w-md leading-relaxed">
-              Hospitals, ambulances, doctors, labs and pharmacies — the desktop mirror of the Trata Provider App.
+              Hospitals, ambulances, doctors and labs — the desktop mirror of the Trata Provider App.
               <span className="block mt-2 text-white/50 text-sm">Same phone. Same OTP. Live data from the shared Trata backend.</span>
             </p>
             <div className="grid grid-cols-3 gap-4 pt-4">
@@ -149,7 +149,7 @@ export default function Login() {
                 <span className="overline">I&apos;m signing in as</span>
                 <div className="mt-2 grid grid-cols-2 gap-2" data-testid="login-role-selector">
                   {[
-                    { k: "provider", label: "Healthcare Provider", sub: "Hospital · Ambulance · Doctor · Lab · Pharmacy" },
+                    { k: "provider", label: "Healthcare Provider", sub: "Hospital · Ambulance · Doctor · Lab" },
                     { k: "staff",    label: "Trata Staff",         sub: "Master admin · Sales manager · Rep" },
                   ].map((o) => (
                     <button key={o.k} type="button" onClick={() => setLoginAs(o.k)}
@@ -304,10 +304,9 @@ function DemoCreds() {
         <li>9000020004 · Hospital owner · <span className="text-[#091E42]">Trata@123</span></li>
         <li>9000020005 · Pathology lab · <span className="text-[#091E42]">Trata@123</span></li>
         <li>9000020006 · Doctor · <span className="text-[#091E42]">Trata@123</span></li>
-        <li>9000020008 · Pharmacy · <span className="text-[#091E42]">Trata@123</span></li>
       </ul>
       <div className="mt-2 text-[10px] text-[#5E6C84] font-sans">
-        Paramedics: please use the Trata Provider <strong>mobile app</strong>. Other verticals sign in the same way — first login sets your PC password.
+        Paramedics + pharmacies: please use the Trata Provider <strong>mobile app</strong>. Other verticals sign in the same way — first login sets your PC password.
       </div>
     </div>
   );

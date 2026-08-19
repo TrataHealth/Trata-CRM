@@ -76,7 +76,7 @@ PROVIDER_TYPE_TO_CONTACT_TYPE = {
     "paramedic":   "paramedic",
     "pharmacy":    "pharmacy",
 }
-SUPPORTED_PROVIDER_TYPES = set(PROVIDER_TYPE_TO_CONTACT_TYPE.keys()) - {"paramedic"}
+SUPPORTED_PROVIDER_TYPES = set(PROVIDER_TYPE_TO_CONTACT_TYPE.keys()) - {"paramedic", "pharmacy"}
 
 # ── Provider KYC checklist ──────────────────────────────────────────────────
 # Doc keys mirror what the Trata Provider mobile app uses in
@@ -114,10 +114,7 @@ _VERTICAL_KYC_EXTRAS = {
         {"key": "biomedical_waste_auth", "label": "Biomedical waste authorisation", "required": True,  "hint": "State pollution board BMW authorisation."},
         {"key": "pathologist_reg",       "label": "Pathologist MCI registration",   "required": True,  "hint": "Registration of the certifying pathologist."},
     ),
-    "pharmacy": (
-        {"key": "drug_license",          "label": "Drug licence (Form 20/21)",      "required": True,  "hint": "State FDA retail drug licence."},
-        {"key": "pharmacy_council_reg",  "label": "Pharmacy council registration",  "required": True,  "hint": "State pharmacy council registration of the pharmacist-in-charge."},
-    ),
+    # `pharmacy` is served by the mobile Provider App — no PC KYC checklist.
 }
 
 
@@ -378,15 +375,17 @@ SUPABASE_ROLE_TO_PROVIDER_TYPE = {
     "pathologist":        "pathology",
     "lab":                "pathology",
     "lab_tech":           "pathology",
-    "pharmacy":           "pharmacy",
-    "pharmacist":         "pharmacy",
-    # NOTE: `paramedic` is intentionally NOT mapped — paramedics only use the
-    # mobile Provider App. Any paramedic phone hitting the CRM login flow is
-    # rejected with a "use the mobile app" message before a crm_user row is
-    # ever created (see _try_supabase_provider_lookup).
+    # NOTE: `paramedic` and `pharmacy`/`pharmacist` are intentionally NOT mapped
+    # — those verticals only use the mobile Provider App. Any such phone hitting
+    # the CRM login flow is rejected with a "use the mobile app" message before
+    # a crm_user row is ever created (see _try_supabase_provider_lookup).
 }
 PARAMEDIC_MOBILE_ONLY_MESSAGE = (
     "Paramedic accounts must sign in on the Trata Provider mobile app, "
+    "not the PC console."
+)
+PHARMACY_MOBILE_ONLY_MESSAGE = (
+    "Pharmacy accounts must sign in on the Trata Provider mobile app, "
     "not the PC console."
 )
 STAFF_ROLES = {"master_admin", "admin", "regional_manager", "sales_rep"}
@@ -433,6 +432,9 @@ async def _refresh_provider_user_from_supabase(existing: Dict[str, Any], phone: 
         r = dict(row)
         if r.get("role") == "paramedic":
             existing["__paramedic_blocked__"] = True
+            return existing
+        if r.get("role") in ("pharmacy", "pharmacist"):
+            existing["__pharmacy_blocked__"] = True
             return existing
         new_provider_type = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(r.get("role"))
         if not new_provider_type:
@@ -490,10 +492,12 @@ async def _try_supabase_provider_lookup(phone: str) -> Optional[dict]:
         if not row:
             return None
         r = dict(row)
-        # Paramedics are locked to the mobile app. Signal that upstream so we
-        # can surface a clean error to the user instead of a bare 403.
+        # Paramedics and pharmacies are locked to the mobile app. Signal upstream
+        # so we can surface clean errors instead of a bare 403.
         if r.get("role") == "paramedic":
             return {"__paramedic_blocked__": True, "phone": r.get("phone"), "name": r.get("name")}
+        if r.get("role") in ("pharmacy", "pharmacist"):
+            return {"__pharmacy_blocked__": True, "phone": r.get("phone"), "name": r.get("name")}
         provider_type = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(r.get("role"))
         if not provider_type:
             return None                             # not a provider vertical → block
@@ -570,6 +574,8 @@ async def verify_otp(data: LoginVerifyOTP):
             existing = await _refresh_provider_user_from_supabase(existing, phone)
             if existing.get("__paramedic_blocked__"):
                 raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
+            if existing.get("__pharmacy_blocked__"):
+                raise HTTPException(status_code=403, detail=PHARMACY_MOBILE_ONLY_MESSAGE)
             if existing.get("__wrong_provider_role__"):
                 raise HTTPException(status_code=403, detail=PROVIDER_WRONG_ROLE_MESSAGE)
             user = existing
@@ -578,6 +584,8 @@ async def verify_otp(data: LoginVerifyOTP):
             fresh = await _try_supabase_provider_lookup(phone)
             if fresh and fresh.get("__paramedic_blocked__"):
                 raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
+            if fresh and fresh.get("__pharmacy_blocked__"):
+                raise HTTPException(status_code=403, detail=PHARMACY_MOBILE_ONLY_MESSAGE)
             if not fresh:
                 raise HTTPException(status_code=404, detail=PROVIDER_ONBOARD_MISSING_MESSAGE)
             user = fresh
@@ -593,6 +601,8 @@ async def verify_otp(data: LoginVerifyOTP):
                 fresh = await _try_supabase_provider_lookup(phone)
                 if fresh and fresh.get("__paramedic_blocked__"):
                     raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
+                if fresh and fresh.get("__pharmacy_blocked__"):
+                    raise HTTPException(status_code=403, detail=PHARMACY_MOBILE_ONLY_MESSAGE)
                 if not fresh:
                     raise HTTPException(status_code=403, detail="Phone not authorized. Contact master admin to be added.")
                 user = fresh
@@ -602,10 +612,14 @@ async def verify_otp(data: LoginVerifyOTP):
             user = await _refresh_provider_user_from_supabase(user, phone)
             if user.get("__paramedic_blocked__"):
                 raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
+            if user.get("__pharmacy_blocked__"):
+                raise HTTPException(status_code=403, detail=PHARMACY_MOBILE_ONLY_MESSAGE)
 
-    # Paramedics are mobile-only — block any existing crm_user with that vertical too.
+    # Paramedics + pharmacies are mobile-only — block any existing crm_user with those verticals too.
     if user.get("role") == "provider_owner" and user.get("provider_type") == "paramedic":
         raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
+    if user.get("role") == "provider_owner" and user.get("provider_type") == "pharmacy":
+        raise HTTPException(status_code=403, detail=PHARMACY_MOBILE_ONLY_MESSAGE)
 
     # Guard: only the healthcare-provider verticals listed in SUPPORTED_PROVIDER_TYPES
     if user.get("role") == "provider_owner" and user.get("provider_type") not in SUPPORTED_PROVIDER_TYPES:
@@ -3300,15 +3314,15 @@ async def seed_demo_accounts(current=Depends(get_current_user)):
         ("9000020004", "City Care Hospital",     "provider_owner",   "hospital",    "Bengaluru","Karnataka"),
         ("9000020005", "Zenith Diagnostics",     "provider_owner",   "pathology",   "Pune",     "Maharashtra"),
         ("9000020006", "Dr. Meera Clinic",       "provider_owner",   "doctor",      "Hyderabad","Telangana"),
-        ("9000020008", "MedPlus Corner Pharmacy","provider_owner",   "pharmacy",    "Chennai",  "Tamil Nadu"),
-        # NOTE: paramedic demo intentionally omitted — paramedics use the
-        # mobile Provider App only, not the CRM PC console.
+        # NOTE: paramedic + pharmacy demos intentionally omitted — those
+        # verticals use the mobile Provider App only, not the CRM PC console.
     ]
-    # Supabase-side role that mirrors the CRM provider_type
+    # Also drop pharmacy from the mapping so the profile helper never tries
+    # to write into pharmacy_profiles either.
     PROVIDER_TYPE_TO_SB_ROLE = {
         "ambulance": "ambulance_provider", "hospital": "hospital",
-        "doctor": "doctor", "paramedic": "paramedic",
-        "pathology": "pathologist", "pharmacy": "pharmacist",
+        "doctor": "doctor",
+        "pathology": "pathologist",
     }
     default_pwd_hash = hash_password("Trata@123")
     _DEMO_NS = uuid.UUID("11111111-1111-1111-1111-111111111111")

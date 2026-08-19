@@ -137,7 +137,7 @@ export default function ProviderKyc() {
   const { user } = useAuth();
   const [state, setState] = useState({ loading: true, checklist: [], all_documents: [], err: "" });
   const [uploading, setUploading] = useState(false);
-  const supportedByPortal = user?.provider_type && user.provider_type !== "paramedic";
+  const supportedByPortal = user?.provider_type && !["paramedic", "pharmacy"].includes(user.provider_type);
 
   const load = useCallback(async () => {
     try {
@@ -184,7 +184,7 @@ export default function ProviderKyc() {
     return (
       <div className="p-8 max-w-xl mx-auto mt-10 text-sm text-[#5E6C84]">
         <ShieldAlert className="h-5 w-5 mb-2" />
-        KYC uploads are available only for hospital, ambulance, doctor, pathology and pharmacy providers on the CRM console.
+        KYC uploads are available only for hospital, ambulance, doctor and pathology providers on the CRM console.
       </div>
     );
   }

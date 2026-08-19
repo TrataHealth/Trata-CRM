@@ -15,7 +15,15 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 34 (2026-02, this session) — Role-Aware Login · Provider-Presence Check · Stale-Row Refresh
+### Iter 35 (2026-02, this session) — Pharmacy Removed (mobile-only, mirroring paramedic)
+- **Pharmacy PC access disabled**: `SUPABASE_ROLE_TO_PROVIDER_TYPE` no longer maps `pharmacy` / `pharmacist`. `PHARMACY_MOBILE_ONLY_MESSAGE` added, and every branch of `/auth/verify-otp` (staff · provider · legacy) now returns 403 *"Pharmacy accounts must sign in on the Trata Provider mobile app, not the PC console."* for either fresh Supabase lookups or existing crm_user rows with `provider_type=pharmacy`.
+- **`SUPPORTED_PROVIDER_TYPES`** now excludes `pharmacy` (in addition to the already-excluded `paramedic`).
+- **Demo seed cleanup**: removed 9000020008 (MedPlus Corner Pharmacy) from `DEMO_ACCOUNTS`, dropped it from `PROVIDER_TYPE_TO_SB_ROLE`, and hard-deleted the leftover `crm_users` + `contacts` rows so the seed endpoint no longer resurrects pharmacy data. Pharmacy vertical also dropped from the KYC checklist.
+- **Login page copy**: hero description now reads *"Hospitals, ambulances, doctors and labs"* (pharmacy dropped); role selector subtitle updated; demo panel now shows only 4 provider phones; footer note switched to *"Paramedics + pharmacies: please use the Trata Provider mobile app"*.
+- **ProviderKyc `supportedByPortal`** now excludes both paramedic and pharmacy.
+- **Verified**: pharmacy phone → 403 with mobile-only message; ambulance / hospital demos unchanged and still return `success:True` with correct `provider_type`.
+
+
 - **New role selector on the login screen** — two-card toggle "Healthcare Provider" vs "Trata Staff" with icon, description and localStorage persistence (`trata_login_as`). Phone placeholder + helper text swap based on selection. Choice is passed to `/auth/send-otp` + `/auth/verify-otp` as `login_as`.
 - **`/auth/verify-otp` completely rewritten** into 3 branches:
    - `login_as=provider` — Supabase `users` table is the source of truth. Not found → `404 PROVIDER_ONBOARD_MISSING_MESSAGE` ("sign up on the mobile app first"). Found + paramedic → 403 mobile-only. Found + unsupported role (admin/patient/etc.) → 403 with wrong-role message. Found + supported vertical → materialise **and refresh** the crm_users row (name / provider_type / supabase_user_id / supabase_role drift is corrected in-place before any password check).
