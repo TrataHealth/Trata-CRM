@@ -868,6 +868,67 @@ async def fetch_full_provider_profile(user_id: str, vertical: str) -> Optional[D
     return out
 
 
+# ── Hospital staff (mirrors the mobile Provider App staff screen) ───────────
+async def list_hospital_staff(user_id: str) -> List[Dict[str, Any]]:
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id: return []
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rs = await conn.fetch("""
+            SELECT id, name, role, department, specialization, phone, email,
+                   is_active, is_on_duty, shift_start, shift_end, salary,
+                   hpr_id, hpr_verified_at, created_at
+              FROM public.hospital_staff
+             WHERE hospital_id = $1
+             ORDER BY is_on_duty DESC, role, name
+             LIMIT 500
+        """, hospital_id)
+    return _rows(rs)
+
+
+async def add_hospital_staff(user_id: str, name: str, role: str,
+                             department: Optional[str], specialization: Optional[str],
+                             phone: Optional[str], email: Optional[str],
+                             shift_start: Optional[str], shift_end: Optional[str],
+                             salary: Optional[int]) -> Dict[str, Any]:
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id: return {"success": False, "reason": "hospital_profile_missing"}
+    import uuid as _uuid
+    sid = str(_uuid.uuid4())
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO public.hospital_staff
+              (id, hospital_id, name, role, department, specialization, phone, email,
+               is_active, is_on_duty, shift_start, shift_end, salary, created_at, updated_at)
+            VALUES ($1::text, $2, $3, $4, $5, $6, $7, $8, TRUE, FALSE, $9, $10, $11, now(), now())
+        """, sid, hospital_id, name, role, department, specialization, phone, email,
+             shift_start, shift_end, salary)
+    return {"success": True, "id": sid}
+
+
+async def toggle_hospital_staff_duty(user_id: str, staff_id: str, is_on_duty: bool) -> Dict[str, Any]:
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id: return {"success": False, "reason": "hospital_profile_missing"}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        r = await conn.execute(
+            "UPDATE public.hospital_staff SET is_on_duty=$1, updated_at=now() WHERE id=$2 AND hospital_id=$3",
+            is_on_duty, staff_id, hospital_id)
+    return {"success": r.endswith("1")}
+
+
+async def delete_hospital_staff(user_id: str, staff_id: str) -> Dict[str, Any]:
+    hospital_id = await _hospital_owner_user_id(user_id)
+    if not hospital_id: return {"success": False, "reason": "hospital_profile_missing"}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        r = await conn.execute(
+            "DELETE FROM public.hospital_staff WHERE id=$1 AND hospital_id=$2",
+            staff_id, hospital_id)
+    return {"success": r.endswith("1")}
+
+
 # ── Phase B.2 — CRM Contacts ↔ Postgres dual-write ──────────────────────────
 _LEAD_COLUMNS = (
     "id", "upstream_user_id", "name", "type", "phone", "email",

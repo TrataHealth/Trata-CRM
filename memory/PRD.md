@@ -15,7 +15,12 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 35 (2026-02, this session) — Pharmacy Removed (mobile-only, mirroring paramedic)
+### Iter 36 (2026-02, this session) — Hospital Staff Roster · Bug fixes
+- **`/provider/staff` verified end-to-end**. `HospitalStaff.jsx` (`City Care Hospital · Staff`) renders KPI tiles (Total staff / On duty / Active / Top role), an inline Add-staff form (name / role / dept / specialization / phone / email / shift / salary), roster table with search + role filter + duty toggle + delete. Backend CRUD: `GET/POST /api/hospital/staff`, `POST /api/hospital/staff/{id}/duty`, `DELETE /api/hospital/staff/{id}` — all writing to shared `hospital_staff` Postgres table (mirror of mobile app's roster). Sidebar exposes a new "Staff" link for hospital verticals only.
+- **BUG FIX · `fetch_full_provider_profile` was silently returning None**. The previous session accidentally left the `return out` statement in the wrong function (moved into `delete_hospital_staff` as dead code) when the staff CRUD block was inserted. Every call to `/api/provider/me` returned `profile: null`, breaking the Provider Profile page for all verticals. Return statement restored; profile fetch now correctly hydrates the 47-field vertical profile.
+- **BUG FIX · `Layout.jsx` failed to compile** — `UserCog` was double-imported after the "Staff" nav item was added, breaking the entire SPA with a red overlay ("Identifier 'UserCog' has already been declared"). Duplicate import removed.
+
+### Iter 35 (2026-02, previous session) — Pharmacy Removed (mobile-only, mirroring paramedic)
 - **Pharmacy PC access disabled**: `SUPABASE_ROLE_TO_PROVIDER_TYPE` no longer maps `pharmacy` / `pharmacist`. `PHARMACY_MOBILE_ONLY_MESSAGE` added, and every branch of `/auth/verify-otp` (staff · provider · legacy) now returns 403 *"Pharmacy accounts must sign in on the Trata Provider mobile app, not the PC console."* for either fresh Supabase lookups or existing crm_user rows with `provider_type=pharmacy`.
 - **`SUPPORTED_PROVIDER_TYPES`** now excludes `pharmacy` (in addition to the already-excluded `paramedic`).
 - **Demo seed cleanup**: removed 9000020008 (MedPlus Corner Pharmacy) from `DEMO_ACCOUNTS`, dropped it from `PROVIDER_TYPE_TO_SB_ROLE`, and hard-deleted the leftover `crm_users` + `contacts` rows so the seed endpoint no longer resurrects pharmacy data. Pharmacy vertical also dropped from the KYC checklist.

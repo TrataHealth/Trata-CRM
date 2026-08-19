@@ -1,8 +1,8 @@
 import React from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
-  LayoutDashboard, Users, GitBranch, ListChecks, Activity, BedDouble,
-  BarChart3, UserCog, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
+  LayoutDashboard, Users, GitBranch, ListChecks, Activity, BedDouble, UserCog,
+  BarChart3, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
   Building2, ClipboardList, IdCard, Wallet, Compass, Trophy, Settings as SettingsIcon, ShieldCheck,
   Network as NetworkIcon,
 } from "lucide-react";
@@ -35,6 +35,7 @@ const PROVIDER_NAV = [
   { to: "/provider", label: "My Dashboard", icon: LayoutDashboard, exact: true },
   { to: "/provider/command-center", label: "Command Center", icon: Activity, hospitalOnly: true },
   { to: "/provider/beds", label: "Beds", icon: BedDouble, hospitalOnly: true },
+  { to: "/provider/staff", label: "Staff", icon: UserCog, hospitalOnly: true },
   { to: "/provider/activities", label: "My Activities", icon: Activity },
   { to: "/provider/earnings", label: "Earnings & Payouts", icon: Wallet },
   { to: "/provider/profile", label: "Profile", icon: IdCard },

@@ -5030,6 +5030,57 @@ async def hospital_discharge(admission_id: str, body: DischargeRequest, current=
     return res
 
 
+# ── Hospital staff (mirrors mobile Provider App) ─────────────────────────────
+class NewStaff(BaseModel):
+    name: str
+    role: str
+    department: Optional[str] = None
+    specialization: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    shift_start: Optional[str] = None
+    shift_end: Optional[str] = None
+    salary: Optional[int] = None
+
+
+class StaffDutyToggle(BaseModel):
+    is_on_duty: bool
+
+
+@api.get("/hospital/staff")
+async def hospital_list_staff(current=Depends(get_current_user)):
+    _require_hospital(current)
+    return {"staff": await sb.list_hospital_staff(_hospital_user_id(current))}
+
+
+@api.post("/hospital/staff")
+async def hospital_add_staff(body: NewStaff, current=Depends(get_current_user)):
+    _require_hospital(current)
+    res = await sb.add_hospital_staff(
+        _hospital_user_id(current), body.name, body.role, body.department,
+        body.specialization, body.phone, body.email,
+        body.shift_start, body.shift_end, body.salary,
+    )
+    if not res.get("success"): raise HTTPException(status_code=400, detail=res.get("reason", "create_failed"))
+    return res
+
+
+@api.post("/hospital/staff/{staff_id}/duty")
+async def hospital_toggle_staff_duty(staff_id: str, body: StaffDutyToggle, current=Depends(get_current_user)):
+    _require_hospital(current)
+    res = await sb.toggle_hospital_staff_duty(_hospital_user_id(current), staff_id, body.is_on_duty)
+    if not res.get("success"): raise HTTPException(status_code=400, detail="staff_not_found")
+    return res
+
+
+@api.delete("/hospital/staff/{staff_id}")
+async def hospital_delete_staff(staff_id: str, current=Depends(get_current_user)):
+    _require_hospital(current)
+    res = await sb.delete_hospital_staff(_hospital_user_id(current), staff_id)
+    if not res.get("success"): raise HTTPException(status_code=400, detail="staff_not_found")
+    return res
+
+
 # ── Provider KYC (all verticals) ────────────────────────────────────────────
 def _require_provider(current) -> None:
     if current.get("role") != "provider_owner":
