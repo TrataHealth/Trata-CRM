@@ -4,8 +4,8 @@ import { useAuth } from "../lib/auth";
 import { relativeTime } from "../lib/constants";
 import { toast } from "sonner";
 import {
-  Activity, Ambulance, AlertTriangle, BedDouble, CheckCircle2, ChevronDown,
-  Clock, Loader2, MapPin, MessageSquare, Plus, Radio, Send, ShieldCheck,
+  Activity, Ambulance, AlertTriangle, BedDouble, CheckCircle2,
+  Clock, Loader2, MapPin, MessageSquare, Radio, Send, ShieldCheck,
   Siren, SquareX, User, X,
 } from "lucide-react";
 
@@ -202,68 +202,9 @@ function ActiveCard({ c, beds, onAdmit, onOpenChat, chatOpenFor, chatMessages, o
   );
 }
 
-// ── Bed grid ────────────────────────────────────────────────────────────────
-function BedGrid({ beds, onToggle, onAddBed, addBusy }) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ bed_type: "General", bed_number: "", ward: "", daily_rate: "" });
-  const groups = beds.reduce((acc, b) => { (acc[b.bed_type] = acc[b.bed_type] || []).push(b); return acc; }, {});
-  const types = Object.keys(groups).sort();
-  return (
-    <section className={T.card} data-testid="hcc-beds">
-      <div className={T.sectionHead}>
-        <span className="flex items-center gap-1.5"><BedDouble className="h-3 w-3" /> Beds · {beds.filter((b) => b.is_available).length}/{beds.length} free</span>
-        <button className={T.btnGhost} onClick={() => setShowAdd((v) => !v)} data-testid="hcc-add-bed-toggle"><Plus className="h-3 w-3" /> Add bed</button>
-      </div>
-      {showAdd && (
-        <div className="p-3 bg-[#F4F5F7] border-b border-[#DFE1E6] grid grid-cols-2 md:grid-cols-5 gap-2 items-end" data-testid="hcc-add-bed-form">
-          <label className="text-[11px] text-[#42526E]">Type
-            <select className="w-full mt-1 text-xs px-2 py-1.5 bg-white border border-[#DFE1E6] rounded" value={form.bed_type} onChange={(e) => setForm({ ...form, bed_type: e.target.value })}>
-              {["General", "ICU", "ER", "Ventilator", "Isolation", "Pediatric", "Maternity", "OT"].map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </label>
-          <label className="text-[11px] text-[#42526E]">Number
-            <input className="w-full mt-1 text-xs px-2 py-1.5 bg-white border border-[#DFE1E6] rounded" value={form.bed_number} onChange={(e) => setForm({ ...form, bed_number: e.target.value })} placeholder="e.g. 101" />
-          </label>
-          <label className="text-[11px] text-[#42526E]">Ward
-            <input className="w-full mt-1 text-xs px-2 py-1.5 bg-white border border-[#DFE1E6] rounded" value={form.ward} onChange={(e) => setForm({ ...form, ward: e.target.value })} placeholder="Optional" />
-          </label>
-          <label className="text-[11px] text-[#42526E]">Daily rate
-            <input type="number" className="w-full mt-1 text-xs px-2 py-1.5 bg-white border border-[#DFE1E6] rounded" value={form.daily_rate} onChange={(e) => setForm({ ...form, daily_rate: e.target.value })} placeholder="₹" />
-          </label>
-          <button className={T.btnPrimary} disabled={addBusy || !form.bed_number} onClick={async () => {
-            await onAddBed({ ...form, daily_rate: form.daily_rate ? Number(form.daily_rate) : null });
-            setForm({ bed_type: "General", bed_number: "", ward: "", daily_rate: "" });
-            setShowAdd(false);
-          }} data-testid="hcc-add-bed-submit">Create bed</button>
-        </div>
-      )}
-      {beds.length === 0 ? (
-        <div className="p-6 text-center text-sm text-[#5E6C84]" data-testid="hcc-beds-empty">No beds yet. Click Add bed to register one.</div>
-      ) : (
-        <div className="p-4 space-y-4">
-          {types.map((t) => {
-            const list = groups[t];
-            const free = list.filter((b) => b.is_available).length;
-            return (
-              <div key={t} data-testid={`hcc-bedgroup-${t.toLowerCase()}`}>
-                <div className="text-[11px] uppercase tracking-wider text-[#5E6C84] font-semibold mb-2">{t} · {free}/{list.length} free</div>
-                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
-                  {list.map((b) => (
-                    <button key={b.id} onClick={() => onToggle(b)} data-testid={`hcc-bed-${b.id}`}
-                      className={`px-2 py-2 text-xs rounded border font-mono text-center transition-colors ${b.is_available ? "bg-[#E3FCEF] border-[#57D9A3] text-[#006644] hover:bg-[#ABF5D1]" : "bg-[#FFEBE6] border-[#FF8F73] text-[#BF2600] hover:bg-[#FFBDAD]"}`}>
-                      <div className="font-bold">{b.bed_number}</div>
-                      <div className="text-[9px] mt-0.5">{b.is_available ? "FREE" : "OCC"}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-}
+// ── Bed grid moved to /provider/beds (HospitalBeds.jsx). The admit-form on
+//    ActiveCard still uses the `beds` array from the shared command-centre
+//    payload as its dropdown source, so we keep the fetch but not the grid UI.
 
 // ── Admissions table with discharge ─────────────────────────────────────────
 function AdmissionsTable({ admissions, onDischarge, dischargeBusy }) {
@@ -445,19 +386,6 @@ export default function HospitalCommandCenter() {
       await load();
     } catch (e) { toast.error(e?.response?.data?.detail || "Discharge failed"); } finally { setBusy(false); }
   };
-  const doToggleBed = async (bed) => {
-    try {
-      await api.post(`/hospital/beds/${bed.id}/toggle`, { is_available: !bed.is_available, reason: bed.is_available ? "manual_occupy" : "manual_free" });
-      await load();
-    } catch (e) { toast.error(e?.response?.data?.detail || "Toggle failed"); }
-  };
-  const doAddBed = async (body) => {
-    try {
-      await api.post(`/hospital/beds`, body);
-      toast.success("Bed added");
-      await load();
-    } catch (e) { toast.error(e?.response?.data?.detail || "Create failed"); }
-  };
   const doSendChat = async (caseId, content) => {
     setChatSending(true);
     try {
@@ -535,10 +463,27 @@ export default function HospitalCommandCenter() {
         </section>
       </div>
 
-      <BedGrid beds={beds} onToggle={doToggleBed} onAddBed={doAddBed} addBusy={busy} />
+      <BedManagementLink />
       <AdmissionsTable admissions={admissions} onDischarge={doDischarge} dischargeBusy={busy} />
       <KycUploader />
     </div>
+  );
+}
+
+
+// Small in-page CTA pointing at the dedicated Beds tab now that the full
+// bed grid lives on its own page.
+function BedManagementLink() {
+  return (
+    <a href="/provider/beds" className="block bg-white border border-[#DFE1E6] rounded-md p-4 hover:shadow-md transition-shadow" data-testid="hcc-open-beds">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold flex items-center gap-1.5"><BedDouble className="h-3 w-3" /> Bed management</div>
+          <div className="font-heading text-base font-black text-[#091E42] mt-1">Manage the full ward grid →</div>
+          <div className="text-xs text-[#5E6C84] mt-1">Filter by ward or free/occupied, toggle beds, and add new inventory on the dedicated Beds tab.</div>
+        </div>
+      </div>
+    </a>
   );
 }
 

@@ -323,13 +323,20 @@ SUPABASE_ROLE_TO_PROVIDER_TYPE = {
     "ambulance_provider": "ambulance",
     "hospital":           "hospital",
     "doctor":             "doctor",
-    "paramedic":          "paramedic",
     "pathologist":        "pathology",
     "lab":                "pathology",
     "lab_tech":           "pathology",
     "pharmacy":           "pharmacy",
     "pharmacist":         "pharmacy",
+    # NOTE: `paramedic` is intentionally NOT mapped — paramedics only use the
+    # mobile Provider App. Any paramedic phone hitting the CRM login flow is
+    # rejected with a "use the mobile app" message before a crm_user row is
+    # ever created (see _try_supabase_provider_lookup).
 }
+PARAMEDIC_MOBILE_ONLY_MESSAGE = (
+    "Paramedic accounts must sign in on the Trata Provider mobile app, "
+    "not the PC console."
+)
 
 
 async def _try_supabase_provider_lookup(phone: str) -> Optional[dict]:
@@ -357,6 +364,10 @@ async def _try_supabase_provider_lookup(phone: str) -> Optional[dict]:
         if not row:
             return None
         r = dict(row)
+        # Paramedics are locked to the mobile app. Signal that upstream so we
+        # can surface a clean error to the user instead of a bare 403.
+        if r.get("role") == "paramedic":
+            return {"__paramedic_blocked__": True, "phone": r.get("phone"), "name": r.get("name")}
         provider_type = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(r.get("role"))
         if not provider_type:
             return None                             # not a provider vertical → block
@@ -413,12 +424,18 @@ async def verify_otp(data: LoginVerifyOTP):
             # already signed up via the mobile Provider App can sign into the
             # CRM PC dashboard without needing a Master Admin to pre-add them.
             user = await _try_supabase_provider_lookup(phone)
+            if user and user.get("__paramedic_blocked__"):
+                raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
             if not user:
                 raise HTTPException(status_code=403, detail="Phone not authorized. Contact master admin to be added.")
 
+    # Paramedics are mobile-only — block any existing crm_user with that vertical too.
+    if user.get("role") == "provider_owner" and user.get("provider_type") == "paramedic":
+        raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
+
     # Guard: only the healthcare-provider verticals listed in SUPPORTED_PROVIDER_TYPES
-    # (ambulance, hospital, doctor, paramedic, pathology, pharmacy) can sign in as
-    # provider_owner. Anything else is treated as a data error and blocked.
+    # (ambulance, hospital, doctor, pathology, pharmacy — paramedic excluded) can sign
+    # in as provider_owner. Anything else is treated as a data error and blocked.
     if user.get("role") == "provider_owner" and user.get("provider_type") not in SUPPORTED_PROVIDER_TYPES:
         raise HTTPException(
             status_code=403,
@@ -3111,8 +3128,9 @@ async def seed_demo_accounts(current=Depends(get_current_user)):
         ("9000020004", "City Care Hospital",     "provider_owner",   "hospital",    "Bengaluru","Karnataka"),
         ("9000020005", "Zenith Diagnostics",     "provider_owner",   "pathology",   "Pune",     "Maharashtra"),
         ("9000020006", "Dr. Meera Clinic",       "provider_owner",   "doctor",      "Hyderabad","Telangana"),
-        ("9000020007", "Ravi Paramedic Services","provider_owner",   "paramedic",   "Ahmedabad","Gujarat"),
         ("9000020008", "MedPlus Corner Pharmacy","provider_owner",   "pharmacy",    "Chennai",  "Tamil Nadu"),
+        # NOTE: paramedic demo intentionally omitted — paramedics use the
+        # mobile Provider App only, not the CRM PC console.
     ]
     # Supabase-side role that mirrors the CRM provider_type
     PROVIDER_TYPE_TO_SB_ROLE = {

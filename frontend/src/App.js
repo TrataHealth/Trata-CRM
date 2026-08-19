@@ -16,6 +16,7 @@ import Team from "./pages/Team";
 import TeamMemberDetail from "./pages/TeamMemberDetail";
 import ProviderDashboard from "./pages/ProviderDashboard";
 import HospitalCommandCenter from "./pages/HospitalCommandCenter";
+import HospitalBeds from "./pages/HospitalBeds";
 import ProviderActivities from "./pages/ProviderActivities";
 import ProviderProfile from "./pages/ProviderProfile";
 import ProviderEarnings from "./pages/ProviderEarnings";
@@ -99,6 +100,7 @@ function App() {
           {/* Provider routes */}
           <Route path="/provider" element={<RequireAuth providerOnly><ProviderDashboard /></RequireAuth>} />
           <Route path="/provider/command-center" element={<RequireAuth providerOnly><HospitalCommandCenter /></RequireAuth>} />
+          <Route path="/provider/beds" element={<RequireAuth providerOnly><HospitalBeds /></RequireAuth>} />
           <Route path="/provider/activities" element={<RequireAuth providerOnly><ProviderActivities /></RequireAuth>} />
           <Route path="/provider/earnings" element={<RequireAuth providerOnly><ProviderEarnings /></RequireAuth>} />
           <Route path="/provider/profile" element={<RequireAuth providerOnly><ProviderProfile /></RequireAuth>} />

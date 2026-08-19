@@ -15,7 +15,14 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 31 (2026-02, this session) — Dual-Write · KYC Uploader · Push Realtime
+### Iter 32 (2026-02, this session) — Paramedic Removed · Beds Tab Split
+- **Paramedic PC console fully removed**: paramedic accounts (both from Supabase and any legacy CRM row) are now rejected at `/auth/verify-otp` with a clear "use the mobile Provider App" message. `SUPABASE_ROLE_TO_PROVIDER_TYPE` no longer maps `paramedic`, and a runtime guard in `verify_otp` blocks existing paramedic `provider_type` crm_users too.
+- Removed the paramedic demo (9000020007 · Ravi Paramedic Services) from `DEMO_ACCOUNTS` and cleaned out the existing Mongo `crm_users` + `contacts` rows.
+- Login-page demo panel updated: paramedic line removed, footer copy switched to "Paramedics: please use the Trata Provider mobile app".
+- **Bed management moved to its own tab** — new page `HospitalBeds.jsx` at `/provider/beds` with 4 KPI tiles (Total / Free / Occupied / Bed types), free-vs-occupied filter chips, per-type filter dropdown, grouped-by-type grid with ward labels, and inline Add-bed form. Auto-refreshes every 5s.
+- Command Centre keeps the "Beds free X/Y" KPI tile + the admit-form bed picker, but the full grid is gone — replaced by a small "Manage the full ward grid →" CTA. Sidebar gets a new "Beds" nav item (BedDouble icon) shown only to hospital providers.
+
+### Iter 31 (2026-02, previous) — Dual-Write · KYC Uploader · Push Realtime
 - **Phase B.2 · CRM Contacts ↔ Postgres dual-write LIVE**. `supabase_db.upsert_provider_lead()` maps every Mongo `contacts` doc → `crm_provider_leads` schema (JSON-serialising jsonb cols, coercing ISO strings → datetime for asyncpg timestamp binding). `_mirror_contact()` helper in server.py fires post-write on `PATCH /contacts/{id}` and `PATCH /contacts/{id}/assign`. Best-effort — swallow failures so Mongo stays authoritative during cutover. Seed-demo endpoint now also mirrors every seeded contact automatically.
 - **New `POST /api/admin/mirror-contacts-to-postgres`** — master-admin one-shot backfill. 26/26 contacts mirrored on first run.
 - **Phase C · Hospital KYC Uploader shipped**. New endpoints `GET /api/hospital/kyc/documents` + `POST /api/hospital/kyc/upload` — writes to shared `kyc_documents` table with `provider_type='hospital'`, base64 file_data (≤ 4 MB), matches the mobile KYC review pattern (already reads file_data). 10 canonical hospital doc types.
