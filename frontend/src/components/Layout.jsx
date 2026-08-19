@@ -37,7 +37,8 @@ const PROVIDER_NAV = [
   { to: "/provider/beds", label: "Beds", icon: BedDouble, hospitalOnly: true },
   { to: "/provider/activities", label: "My Activities", icon: Activity },
   { to: "/provider/earnings", label: "Earnings & Payouts", icon: Wallet },
-  { to: "/provider/profile", label: "Profile & KYC", icon: IdCard },
+  { to: "/provider/profile", label: "Profile", icon: IdCard },
+  { to: "/provider/kyc", label: "KYC", icon: ShieldCheck },
   { to: "/tasks", label: "Tasks", icon: ListChecks },
 ];
 

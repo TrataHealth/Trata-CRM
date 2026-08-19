@@ -15,7 +15,16 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 32 (2026-02, this session) — Paramedic Removed · Beds Tab Split
+### Iter 33 (2026-02, this session) — Profile / KYC Split · Vertical-Aware Checklist
+- **New `/provider/kyc` page** (ProviderKyc.jsx) — the KYC uploader that used to live inside the Hospital Command Centre now has its own dedicated tab. Full-progress ring + required/optional split + per-row hint copy + submitted/approved/rejected status chips + upload-history table.
+- **Vertical-aware KYC checklist** shipped on the backend (`kyc_checklist_for()` in server.py). Doc keys are byte-identical to the mobile app's `tratax_kyc_documents.doc_key` so PC uploads land in the same admin review queue. Verticals: hospital (9 items), ambulance (10), doctor (8), pathology (9), pharmacy (7) — all share 5 common docs (`pan_card`, `address_proof`, `signatory_photo`, `authorized_signatory_id`, `gst_certificate`).
+- **New endpoints**: `GET /api/provider/kyc/checklist` (returns checklist + upload status per item), `GET /api/provider/kyc/documents`, `POST /api/provider/kyc/upload`. Legacy `/api/hospital/kyc/*` retained via delegation for backward compat.
+- **Command Centre trimmed**: KYC uploader removed, replaced with a small "Complete your KYC checklist →" CTA card linking to `/provider/kyc`.
+- **Profile page (`/provider/profile`) trimmed** to identity + metadata only. KYC badge is now a link that jumps to the new KYC tab. Header renamed "Profile & KYC" → "Profile".
+- **Sidebar**: single "Profile & KYC" item split into two — "Profile" (IdCard icon) and "KYC" (ShieldCheck icon). Available to every provider vertical.
+- **Verified**: hospital checklist 9 items, ambulance checklist 10 items, upload lands in kyc_documents with `status='submitted'` and reflects on the next checklist fetch. Screenshot confirms PAN card = SUBMITTED chip + Re-upload flow.
+
+
 - **Paramedic PC console fully removed**: paramedic accounts (both from Supabase and any legacy CRM row) are now rejected at `/auth/verify-otp` with a clear "use the mobile Provider App" message. `SUPABASE_ROLE_TO_PROVIDER_TYPE` no longer maps `paramedic`, and a runtime guard in `verify_otp` blocks existing paramedic `provider_type` crm_users too.
 - Removed the paramedic demo (9000020007 · Ravi Paramedic Services) from `DEMO_ACCOUNTS` and cleaned out the existing Mongo `crm_users` + `contacts` rows.
 - Login-page demo panel updated: paramedic line removed, footer copy switched to "Paramedics: please use the Trata Provider mobile app".

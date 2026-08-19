@@ -76,7 +76,57 @@ PROVIDER_TYPE_TO_CONTACT_TYPE = {
     "paramedic":   "paramedic",
     "pharmacy":    "pharmacy",
 }
-SUPPORTED_PROVIDER_TYPES = set(PROVIDER_TYPE_TO_CONTACT_TYPE.keys())
+SUPPORTED_PROVIDER_TYPES = set(PROVIDER_TYPE_TO_CONTACT_TYPE.keys()) - {"paramedic"}
+
+# ── Provider KYC checklist ──────────────────────────────────────────────────
+# Doc keys mirror what the Trata Provider mobile app uses in
+# tratax_kyc_documents.doc_key so uploads from the PC console land in the
+# same review queue as mobile uploads. Common set + per-vertical extras.
+_COMMON_KYC_DOCS = (
+    {"key": "pan_card",                "label": "PAN card",                       "required": True,  "hint": "Business or proprietor PAN."},
+    {"key": "address_proof",           "label": "Address proof",                  "required": True,  "hint": "Utility bill, rent agreement or business address certificate."},
+    {"key": "signatory_photo",         "label": "Authorised signatory photo",     "required": True,  "hint": "Passport-size photo of the signatory."},
+    {"key": "authorized_signatory_id", "label": "Signatory ID proof",             "required": True,  "hint": "Aadhaar / Passport / Voter-ID of the signatory."},
+    {"key": "gst_certificate",         "label": "GST certificate",                "required": False, "hint": "Optional but recommended for tax invoicing."},
+)
+_VERTICAL_KYC_EXTRAS = {
+    "hospital": (
+        {"key": "establishment_license", "label": "Clinical establishment licence", "required": True,  "hint": "State CEA / municipal hospital licence."},
+        {"key": "nabh_certificate",      "label": "NABH accreditation",             "required": False, "hint": "If NABH accredited — upload the certificate."},
+        {"key": "fire_safety_noc",       "label": "Fire safety NOC",                "required": True,  "hint": "State fire-department No-Objection Certificate."},
+        {"key": "biomedical_waste_auth", "label": "Biomedical waste authorisation", "required": True,  "hint": "State pollution board BMW authorisation."},
+    ),
+    "ambulance": (
+        {"key": "vehicle_rc",            "label": "Vehicle registration (RC)",      "required": True,  "hint": "Upload for each ambulance in your fleet — start with the primary."},
+        {"key": "vehicle_permit",        "label": "Commercial vehicle permit",      "required": True,  "hint": "State transport department permit."},
+        {"key": "driver_license",        "label": "Driver licence",                 "required": True,  "hint": "Primary driver's licence."},
+        {"key": "puc_certificate",       "label": "PUC certificate",                "required": True,  "hint": "Pollution-under-control certificate (renewed every 6 months)."},
+        {"key": "insurance_certificate", "label": "Vehicle insurance",              "required": True,  "hint": "Comprehensive commercial vehicle insurance."},
+    ),
+    "doctor": (
+        {"key": "medical_council_reg",   "label": "Medical council registration",   "required": True,  "hint": "State Medical Council registration certificate."},
+        {"key": "degree_certificate",    "label": "MBBS / MD degree",               "required": True,  "hint": "Highest medical qualification certificate."},
+        {"key": "establishment_license", "label": "Clinic establishment licence",   "required": False, "hint": "Only if you own the clinic premises."},
+    ),
+    "pathology": (
+        {"key": "lab_license",           "label": "Pathology lab licence",          "required": True,  "hint": "State health department lab licence."},
+        {"key": "nabl_certificate",      "label": "NABL accreditation",             "required": False, "hint": "Upload if NABL accredited."},
+        {"key": "biomedical_waste_auth", "label": "Biomedical waste authorisation", "required": True,  "hint": "State pollution board BMW authorisation."},
+        {"key": "pathologist_reg",       "label": "Pathologist MCI registration",   "required": True,  "hint": "Registration of the certifying pathologist."},
+    ),
+    "pharmacy": (
+        {"key": "drug_license",          "label": "Drug licence (Form 20/21)",      "required": True,  "hint": "State FDA retail drug licence."},
+        {"key": "pharmacy_council_reg",  "label": "Pharmacy council registration",  "required": True,  "hint": "State pharmacy council registration of the pharmacist-in-charge."},
+    ),
+}
+
+
+def kyc_checklist_for(vertical: str) -> List[Dict[str, Any]]:
+    """Return the ordered checklist for a provider vertical. Common docs first
+    (PAN / address / signatory), then vertical-specific requirements."""
+    common = [dict(d, category="common") for d in _COMMON_KYC_DOCS]
+    extras = [dict(d, category=vertical) for d in _VERTICAL_KYC_EXTRAS.get(vertical, ())]
+    return common + extras
 
 # Org hierarchy (top → bottom). Each role can ONLY report to the role immediately above it.
 HIERARCHY = ["national_manager", "regional_manager", "zonal_manager", "area_manager", "sales_rep"]
@@ -4712,6 +4762,10 @@ def _hospital_user_id(current) -> str:
     return current.get("supabase_user_id") or current["id"]
 
 
+# Same lookup; alias for generic provider endpoints so callers read cleanly.
+_provider_user_id = _hospital_user_id
+
+
 @api.get("/hospital/command-center")
 async def hospital_command_center(current=Depends(get_current_user)):
     _require_hospital(current)
@@ -4826,6 +4880,73 @@ async def hospital_discharge(admission_id: str, body: DischargeRequest, current=
     if not res.get("success"):
         raise HTTPException(status_code=400, detail=res.get("reason", "discharge_failed"))
     return res
+
+
+# ── Provider KYC (all verticals) ────────────────────────────────────────────
+def _require_provider(current) -> None:
+    if current.get("role") != "provider_owner":
+        raise HTTPException(status_code=403, detail="Provider account required")
+    if current.get("provider_type") not in SUPPORTED_PROVIDER_TYPES:
+        raise HTTPException(status_code=403, detail="This vertical is not supported")
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+
+
+@api.get("/provider/kyc/checklist")
+async def provider_kyc_checklist(current=Depends(get_current_user)):
+    """Return the ordered KYC checklist for the caller's vertical + the
+    current upload status per item, so the UI can render pending/uploaded/
+    approved/rejected chips."""
+    _require_provider(current)
+    vertical = current.get("provider_type")
+    checklist = kyc_checklist_for(vertical)
+    docs = await sb.list_provider_kyc_documents(_hospital_user_id(current))
+    # Bucket the latest upload per document_type so we can attach status per
+    # checklist row (multiple uploads of the same key → the newest wins).
+    latest_by_key: Dict[str, Dict[str, Any]] = {}
+    for d in docs:
+        k = d.get("document_type") or ""
+        if k not in latest_by_key:
+            latest_by_key[k] = d
+    for item in checklist:
+        item["upload"] = latest_by_key.get(item["key"])
+    return {"vertical": vertical, "checklist": checklist, "all_documents": docs}
+
+
+class ProviderKycUploadBody(BaseModel):
+    document_type: str
+    document_name: str
+    file_base64: str
+    doc_category: Optional[str] = None
+
+
+@api.post("/provider/kyc/upload")
+async def provider_kyc_upload(body: ProviderKycUploadBody, current=Depends(get_current_user)):
+    _require_provider(current)
+    if not body.file_base64 or not body.file_base64.strip():
+        raise HTTPException(status_code=400, detail="Empty file")
+    # Guard against typo doc-keys so admins never see garbage in the review queue.
+    valid_keys = {item["key"] for item in kyc_checklist_for(current["provider_type"])}
+    if body.document_type not in valid_keys:
+        raise HTTPException(status_code=400, detail=f"Unknown document key '{body.document_type}' for {current['provider_type']}")
+    res = await sb.upload_provider_kyc_document(
+        _hospital_user_id(current),
+        current["provider_type"],
+        body.document_type,
+        body.document_name.strip() or body.document_type,
+        body.file_base64,
+        body.doc_category,
+    )
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("reason", "upload_failed"))
+    return res
+
+
+@api.get("/provider/kyc/documents")
+async def provider_kyc_documents(current=Depends(get_current_user)):
+    _require_provider(current)
+    docs = await sb.list_provider_kyc_documents(_hospital_user_id(current))
+    return {"documents": docs}
 
 
 # ── Hospital KYC uploader (Phase C) ─────────────────────────────────────────

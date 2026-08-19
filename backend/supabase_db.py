@@ -922,18 +922,9 @@ async def upsert_provider_lead(contact: Dict[str, Any]) -> Dict[str, Any]:
     if not contact.get("phone"):
         return {"success": False, "reason": "missing_phone"}
 
-# ── Hospital KYC document uploader (Phase C) ────────────────────────────────
-_HOSPITAL_KYC_DOC_TYPES = (
-    "hospital_license", "nabh_certificate", "gst_certificate", "pan_card",
-    "owner_id_proof", "clinical_establishment_reg", "fire_safety_noc",
-    "biomedical_waste_auth", "pharmacy_license", "other",
-)
-
-
-async def list_hospital_kyc_documents(user_id: str) -> List[Dict[str, Any]]:
-    """List every KYC doc this hospital owner has uploaded — no file blobs."""
-    if not await _hospital_owner_user_id(user_id):
-        return []
+# ── Provider KYC document uploader (Phase C — all verticals) ───────────────
+async def list_provider_kyc_documents(user_id: str) -> List[Dict[str, Any]]:
+    """List every KYC doc this provider has uploaded — no file blobs."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rs = await conn.fetch("""
@@ -943,22 +934,20 @@ async def list_hospital_kyc_documents(user_id: str) -> List[Dict[str, Any]]:
               FROM public.kyc_documents
              WHERE user_id = $1
              ORDER BY created_at DESC
-             LIMIT 100
+             LIMIT 200
         """, user_id)
     return _rows(rs)
 
 
-async def upload_hospital_kyc_document(user_id: str, document_type: str,
-                                       document_name: str, file_b64: str,
+async def upload_provider_kyc_document(user_id: str, provider_type: str,
+                                       document_type: str, document_name: str,
+                                       file_b64: str,
                                        doc_category: Optional[str] = None) -> Dict[str, Any]:
     """Persist a KYC doc into the shared `kyc_documents` table as base64 so
-    the mobile KYC review flow (which already reads `file_data`) picks it up
-    immediately. Kept intentionally small — reject files larger than 4 MB."""
-    if not await _hospital_owner_user_id(user_id):
-        return {"success": False, "reason": "hospital_profile_missing"}
-    if document_type not in _HOSPITAL_KYC_DOC_TYPES:
-        return {"success": False, "reason": "invalid_document_type"}
-    # Reject giants — Postgres row limit is 1GB but we want fast admin reviews.
+    the mobile KYC review flow (which reads `file_data`) picks it up
+    immediately. Reject files larger than 4 MB."""
+    if not file_b64:
+        return {"success": False, "reason": "empty_file"}
     approx_bytes = int(len(file_b64) * 3 / 4)
     if approx_bytes > 4 * 1024 * 1024:
         return {"success": False, "reason": "file_too_large"}
@@ -970,11 +959,37 @@ async def upload_hospital_kyc_document(user_id: str, document_type: str,
             INSERT INTO public.kyc_documents
               (id, user_id, provider_type, document_name, document_type,
                doc_category, file_data, status, submitted_at, created_at, updated_at)
-            VALUES ($1::text, $2, 'hospital', $3, $4, $5, $6, 'submitted',
+            VALUES ($1::text, $2, $3, $4, $5, $6, $7, 'submitted',
                     now(), now(), now())
-        """, doc_id, user_id, document_name, document_type,
-            doc_category or "hospital_operations", file_b64)
+        """, doc_id, user_id, provider_type, document_name, document_type,
+            doc_category or provider_type, file_b64)
     return {"success": True, "document_id": doc_id, "status": "submitted"}
+
+
+# ── Legacy hospital-scoped wrappers (kept for backward compat) ──────────────
+_HOSPITAL_KYC_DOC_TYPES = (
+    "hospital_license", "nabh_certificate", "gst_certificate", "pan_card",
+    "owner_id_proof", "clinical_establishment_reg", "fire_safety_noc",
+    "biomedical_waste_auth", "pharmacy_license", "other",
+)
+
+
+async def list_hospital_kyc_documents(user_id: str) -> List[Dict[str, Any]]:
+    if not await _hospital_owner_user_id(user_id):
+        return []
+    return await list_provider_kyc_documents(user_id)
+
+
+async def upload_hospital_kyc_document(user_id: str, document_type: str,
+                                       document_name: str, file_b64: str,
+                                       doc_category: Optional[str] = None) -> Dict[str, Any]:
+    if not await _hospital_owner_user_id(user_id):
+        return {"success": False, "reason": "hospital_profile_missing"}
+    if document_type not in _HOSPITAL_KYC_DOC_TYPES:
+        return {"success": False, "reason": "invalid_document_type"}
+    return await upload_provider_kyc_document(
+        user_id, "hospital", document_type, document_name, file_b64,
+        doc_category or "hospital_operations")
 
 
     row = _lead_row_from_contact(contact)

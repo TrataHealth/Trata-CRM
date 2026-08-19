@@ -465,8 +465,24 @@ export default function HospitalCommandCenter() {
 
       <BedManagementLink />
       <AdmissionsTable admissions={admissions} onDischarge={doDischarge} dischargeBusy={busy} />
-      <KycUploader />
+      <KycQuickLink />
     </div>
+  );
+}
+
+
+// Small CTA linking to the dedicated KYC tab now that the uploader lives there.
+function KycQuickLink() {
+  return (
+    <a href="/provider/kyc" className="block bg-white border border-[#DFE1E6] rounded-md p-4 hover:shadow-md transition-shadow" data-testid="hcc-open-kyc">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold flex items-center gap-1.5"><ShieldCheck className="h-3 w-3" /> Compliance</div>
+          <div className="font-heading text-base font-black text-[#091E42] mt-1">Complete your KYC checklist →</div>
+          <div className="text-xs text-[#5E6C84] mt-1">Upload every licence, certificate and signatory document from the dedicated KYC tab. Same checklist as the mobile Provider App.</div>
+        </div>
+      </div>
+    </a>
   );
 }
 
@@ -488,121 +504,3 @@ function BedManagementLink() {
 }
 
 
-// ── KYC uploader ────────────────────────────────────────────────────────────
-function KycUploader() {
-  const [docs, setDocs] = useState([]);
-  const [docTypes, setDocTypes] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [form, setForm] = useState({ document_type: "hospital_license", document_name: "", file_base64: "", size: 0, filename: "" });
-
-  const refresh = useCallback(async () => {
-    try {
-      const { data } = await api.get("/hospital/kyc/documents");
-      setDocs(data.documents || []);
-      setDocTypes(data.document_types || []);
-    } catch (e) {
-      // KYC endpoints require hospital vertical — ignore for others
-    } finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { refresh(); }, [refresh]);
-
-  const pickFile = (e) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    if (f.size > 4 * 1024 * 1024) { toast.error("File too big (>4 MB)"); return; }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const b64 = String(reader.result || "").split(",")[1] || "";
-      setForm((prev) => ({ ...prev, file_base64: b64, size: f.size, filename: f.name, document_name: prev.document_name || f.name }));
-    };
-    reader.readAsDataURL(f);
-  };
-
-  const submit = async () => {
-    if (!form.file_base64) { toast.error("Choose a file first"); return; }
-    setUploading(true);
-    try {
-      await api.post("/hospital/kyc/upload", {
-        document_type: form.document_type,
-        document_name: form.document_name || form.filename || form.document_type,
-        file_base64: form.file_base64,
-      });
-      toast.success("Document uploaded to Trata KYC queue");
-      setForm({ document_type: "hospital_license", document_name: "", file_base64: "", size: 0, filename: "" });
-      await refresh();
-    } catch (e) { toast.error(e?.response?.data?.detail || "Upload failed"); } finally { setUploading(false); }
-  };
-
-  const statusChip = (s) => {
-    const v = String(s || "submitted").toLowerCase();
-    const tone =
-      v === "approved" || v === "verified" ? "bg-[#E3FCEF] text-[#006644]" :
-      v === "rejected" ? "bg-[#FFEBE6] text-[#BF2600]" :
-      "bg-[#FFFAE6] text-[#974F0C]";
-    return <span className={`${T.chip} ${tone}`}>{v.toUpperCase()}</span>;
-  };
-
-  return (
-    <section className={T.card} data-testid="hcc-kyc">
-      <div className={T.sectionHead}>
-        <span>Provider KYC · {docs.length} document{docs.length === 1 ? "" : "s"}</span>
-      </div>
-
-      <div className="p-4 bg-[#F4F5F7] border-b border-[#DFE1E6]" data-testid="hcc-kyc-form">
-        <div className="text-[11px] uppercase tracking-wider text-[#5E6C84] font-semibold mb-2">Upload a document to Trata KYC</div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
-          <label className="text-xs text-[#42526E]">Type
-            <select className="w-full mt-1 text-xs px-2 py-1.5 bg-white border border-[#DFE1E6] rounded" value={form.document_type} onChange={(e) => setForm({ ...form, document_type: e.target.value })} data-testid="hcc-kyc-doc-type">
-              {docTypes.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
-            </select>
-          </label>
-          <label className="text-xs text-[#42526E]">Display name
-            <input className="w-full mt-1 text-xs px-2 py-1.5 bg-white border border-[#DFE1E6] rounded" placeholder="e.g. Karnataka operating licence 2026" value={form.document_name} onChange={(e) => setForm({ ...form, document_name: e.target.value })} data-testid="hcc-kyc-doc-name" />
-          </label>
-          <label className="text-xs text-[#42526E]">File (image / PDF, ≤ 4 MB)
-            <input type="file" accept="image/*,application/pdf" className="w-full mt-1 text-xs" onChange={pickFile} data-testid="hcc-kyc-file" />
-            {form.filename && <div className="text-[10px] text-[#5E6C84] mt-1">{form.filename} · {(form.size / 1024).toFixed(1)} KB</div>}
-          </label>
-          <button className={T.btnPrimary} disabled={uploading || !form.file_base64} onClick={submit} data-testid="hcc-kyc-upload-submit">
-            {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />} Upload
-          </button>
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="p-6 text-center text-sm text-[#5E6C84]"><Loader2 className="h-4 w-4 animate-spin inline" /> Loading documents…</div>
-      ) : docs.length === 0 ? (
-        <div className="p-6 text-center text-sm text-[#5E6C84]" data-testid="hcc-kyc-empty">No documents uploaded yet.</div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-xs">
-            <thead className="bg-[#F8F9FA] text-[#5E6C84] uppercase text-[10px]">
-              <tr>
-                <th className="px-3 py-2 text-left">Document</th>
-                <th className="px-3 py-2 text-left">Type</th>
-                <th className="px-3 py-2 text-left">Status</th>
-                <th className="px-3 py-2 text-left">Submitted</th>
-                <th className="px-3 py-2 text-left">Reviewed</th>
-                <th className="px-3 py-2 text-left">Comment</th>
-              </tr>
-            </thead>
-            <tbody>
-              {docs.map((d) => (
-                <tr key={d.id} className="border-t border-[#DFE1E6]" data-testid={`hcc-kyc-doc-${d.id}`}>
-                  <td className="px-3 py-2 text-[#091E42] max-w-[280px] truncate">{d.document_name || "—"}</td>
-                  <td className="px-3 py-2">{(d.document_type || "").replace(/_/g, " ")}</td>
-                  <td className="px-3 py-2">{statusChip(d.status)}</td>
-                  <td className="px-3 py-2">{d.submitted_at ? relativeTime(d.submitted_at) : "—"}</td>
-                  <td className="px-3 py-2">{d.reviewed_at ? relativeTime(d.reviewed_at) : "—"}</td>
-                  <td className="px-3 py-2 max-w-[300px] truncate">{d.rejection_reason ? `${d.rejection_reason} · ${d.rejection_comment || ""}` : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
