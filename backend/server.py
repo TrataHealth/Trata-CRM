@@ -3052,10 +3052,16 @@ async def seed_data(force: bool = False, current=Depends(require_internal)):
 
 @api.post("/admin/seed-demo-accounts")
 async def seed_demo_accounts(current=Depends(get_current_user)):
-    """Idempotently create the 4 canonical demo accounts users expect to be
-    able to sign in with: Priya (Sales Manager — usually already exists) plus
-    3 provider_owner accounts (ambulance, hospital, pathology lab). Every phone
-    also uses OTP 123456 + password Trata@123."""
+    """Idempotently create the canonical demo accounts users expect to be able
+    to sign in with: Priya (Sales Manager) + Rohan (Sales Rep) + 6 provider_owner
+    demo accounts covering every supported vertical (ambulance, hospital,
+    pathology, doctor, paramedic, pharmacy). Every phone uses OTP 123456 +
+    password Trata@123.
+
+    Provider demos also get a matching row in the shared Supabase `users` table
+    + vertical profile table (hospital_profiles / doctors / …) so that the
+    `/api/provider/pc-dashboard` endpoint works end-to-end for every demo phone.
+    Deterministic UUIDs (uuid5 from phone) keep the seed re-runnable."""
     if not (current.get("is_master_admin") or current.get("role") == "admin"):
         raise HTTPException(status_code=403, detail="Master admin only")
 
@@ -3066,24 +3072,135 @@ async def seed_demo_accounts(current=Depends(get_current_user)):
         ("9000020003", "Sanjay Ambulance Fleet", "provider_owner",   "ambulance",   "Mumbai",   "Maharashtra"),
         ("9000020004", "City Care Hospital",     "provider_owner",   "hospital",    "Bengaluru","Karnataka"),
         ("9000020005", "Zenith Diagnostics",     "provider_owner",   "pathology",   "Pune",     "Maharashtra"),
+        ("9000020006", "Dr. Meera Clinic",       "provider_owner",   "doctor",      "Hyderabad","Telangana"),
+        ("9000020007", "Ravi Paramedic Services","provider_owner",   "paramedic",   "Ahmedabad","Gujarat"),
+        ("9000020008", "MedPlus Corner Pharmacy","provider_owner",   "pharmacy",    "Chennai",  "Tamil Nadu"),
     ]
+    # Supabase-side role that mirrors the CRM provider_type
+    PROVIDER_TYPE_TO_SB_ROLE = {
+        "ambulance": "ambulance_provider", "hospital": "hospital",
+        "doctor": "doctor", "paramedic": "paramedic",
+        "pathology": "pathologist", "pharmacy": "pharmacist",
+    }
     default_pwd_hash = hash_password("Trata@123")
+    _DEMO_NS = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
-    created_users, created_contacts, updated = 0, 0, 0
+    async def _ensure_supabase_demo(phone: str, name: str, ptype: str, city: str, state: str) -> Optional[str]:
+        """Best-effort: mirror this demo provider into shared Supabase so the
+        PC dashboard endpoint has real data to read. Returns supabase user_id
+        or None if Supabase isn't reachable (seed still succeeds)."""
+        if not sb.is_configured():
+            return None
+        try:
+            pool = await sb.get_pool()
+        except Exception as e:
+            logger.warning(f"demo-seed supabase pool init failed: {e}")
+            return None
+        sb_user_id = str(uuid.uuid5(_DEMO_NS, f"user:{phone}"))
+        sb_profile_id = str(uuid.uuid5(_DEMO_NS, f"profile:{ptype}:{phone}"))
+        sb_role = PROVIDER_TYPE_TO_SB_ROLE[ptype]
+        try:
+            async with pool.acquire() as conn:
+                # 1) users row
+                await conn.execute(
+                    """INSERT INTO public.users (id, phone, name, role, is_active, created_at)
+                       VALUES ($1, $2, $3, $4, TRUE, now())
+                       ON CONFLICT (phone) DO UPDATE SET
+                         name = COALESCE(public.users.name, EXCLUDED.name),
+                         role = COALESCE(public.users.role, EXCLUDED.role)""",
+                    sb_user_id, phone, name, sb_role)
+                # Some DBs may already have a `+91<phone>` variant; the upsert above targets the
+                # 10-digit phone we normalise on. If a `+91` variant exists, prefer it so the
+                # profile FK below uses a real user_id.
+                row = await conn.fetchrow(
+                    "SELECT id FROM public.users WHERE phone IN ($1, $2) LIMIT 1",
+                    phone, f"+91{phone}")
+                if row:
+                    sb_user_id = str(row["id"])
+
+                # 2) vertical profile row (idempotent: only insert if no row exists for this user_id).
+                # NOTE: profile tables in this shared DB store user_id as varchar(character varying),
+                # not uuid — the ::text casts below are what asyncpg needs to disambiguate $2.
+                if ptype == "ambulance":
+                    await conn.execute("""
+                        INSERT INTO public.ambulance_providers
+                          (id, user_id, business_name, owner_name, phone, city, state, status, created_at)
+                        SELECT $1::text, $2::text, $3, $3, $4, $5, $6, 'pending', now()
+                         WHERE NOT EXISTS (SELECT 1 FROM public.ambulance_providers WHERE user_id = $2::text)""",
+                        sb_profile_id, sb_user_id, name, phone, city, state)
+                elif ptype == "hospital":
+                    await conn.execute("""
+                        INSERT INTO public.hospital_profiles
+                          (id, user_id, name, phone, city, state, verification_status, created_at)
+                        SELECT $1::text, $2::text, $3, $4, $5, $6, 'pending', now()
+                         WHERE NOT EXISTS (SELECT 1 FROM public.hospital_profiles WHERE user_id = $2::text)""",
+                        sb_profile_id, sb_user_id, name, phone, city, state)
+                elif ptype == "doctor":
+                    await conn.execute("""
+                        INSERT INTO public.doctors
+                          (id, user_id, full_name, phone, city, state, is_verified, is_active, created_at)
+                        SELECT $1::text, $2::text, $3, $4, $5, $6, FALSE, TRUE, now()
+                         WHERE NOT EXISTS (SELECT 1 FROM public.doctors WHERE user_id = $2::text)""",
+                        sb_profile_id, sb_user_id, name, phone, city, state)
+                elif ptype == "paramedic":
+                    await conn.execute("""
+                        INSERT INTO public.paramedic_profiles
+                          (id, user_id, name, full_name, phone, verification_status, is_verified, created_at)
+                        SELECT $1::text, $2::text, $3, $3, $4, 'pending', FALSE, now()
+                         WHERE NOT EXISTS (SELECT 1 FROM public.paramedic_profiles WHERE user_id = $2::text)""",
+                        sb_profile_id, sb_user_id, name, phone)
+                elif ptype == "pathology":
+                    await conn.execute("""
+                        INSERT INTO public.pathologists
+                          (id, user_id, name, lab_name, phone, city, state, status, is_active, created_at)
+                        SELECT $1::text, $2::text, $3, $3, $4, $5, $6, 'pending', TRUE, now()
+                         WHERE NOT EXISTS (SELECT 1 FROM public.pathologists WHERE user_id = $2::text)""",
+                        sb_profile_id, sb_user_id, name, phone, city, state)
+                elif ptype == "pharmacy":
+                    await conn.execute("""
+                        INSERT INTO public.pharmacy_profiles
+                          (id, user_id, pharmacy_name, owner_name, phone, city, state, verification_status, is_active, created_at)
+                        VALUES ($1, $2, $3, $3, $4, $5, $6, 'pending', TRUE, now())
+                        ON CONFLICT (user_id) DO NOTHING""",
+                        sb_profile_id, sb_user_id, name, phone, city, state)
+            return sb_user_id
+        except Exception as e:
+            logger.warning(f"demo-seed Supabase mirror for {phone}/{ptype} failed: {e}")
+            return None
+
+    created_users, created_contacts, updated, mirrored = 0, 0, 0, 0
     for phone, name, role, ptype, city, state in DEMO_ACCOUNTS:
+        # Ensure a Supabase mirror first so the CRM row can link its supabase_user_id
+        sb_user_id = None
+        if ptype:
+            sb_user_id = await _ensure_supabase_demo(phone, name, ptype, city, state)
+            if sb_user_id:
+                mirrored += 1
+
         existing = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
         if existing:
             updated += 1
+            # Backfill supabase link on existing demo rows if we now have one and they didn't
+            if sb_user_id and not existing.get("supabase_user_id"):
+                await db.crm_users.update_one(
+                    {"id": existing["id"]},
+                    {"$set": {"supabase_user_id": sb_user_id, "updated_at": now_iso()}})
         else:
-            uid = str(uuid.uuid4())
+            uid = sb_user_id or str(uuid.uuid4())
             user_doc = {
                 "id": uid, "phone": phone, "name": name, "role": role,
                 "is_master_admin": False,
                 "provider_type": ptype,
                 "city": city, "state": state,
                 "password_hash": default_pwd_hash,
-                "security_setup_required": False,
+                # Pre-fill recovery details so demo accounts don't get bounced to /security-setup
+                "recovery_email": "demo@trata.local",
+                "security_questions": [
+                    {"question_id": "q1", "answer_hash": hash_password("trata")},
+                    {"question_id": "q4", "answer_hash": hash_password("trata")},
+                ],
                 "is_active": True,
+                "supabase_user_id": sb_user_id,
                 "created_at": now_iso(), "updated_at": now_iso(),
             }
             await db.crm_users.insert_one(user_doc)
@@ -3114,6 +3231,7 @@ async def seed_demo_accounts(current=Depends(get_current_user)):
         "created_users": created_users,
         "created_contacts": created_contacts,
         "already_existed": updated,
+        "supabase_mirrored": mirrored,
         "credentials_hint": "OTP 123456 · password Trata@123 for every demo account",
     }
 

@@ -277,6 +277,11 @@ function DemoCreds() {
         <li>9000000002 · Sales Agent (Rohan) · <span className="text-[#091E42]">Trata@123</span></li>
         <li>9000000001 · Sales Manager (Priya) · <span className="text-[#091E42]">Trata@123</span></li>
         <li>9000020003 · Ambulance owner · <span className="text-[#091E42]">Trata@123</span></li>
+        <li>9000020004 · Hospital owner · <span className="text-[#091E42]">Trata@123</span></li>
+        <li>9000020005 · Pathology lab · <span className="text-[#091E42]">Trata@123</span></li>
+        <li>9000020006 · Doctor · <span className="text-[#091E42]">Trata@123</span></li>
+        <li>9000020007 · Paramedic · <span className="text-[#091E42]">Trata@123</span></li>
+        <li>9000020008 · Pharmacy · <span className="text-[#091E42]">Trata@123</span></li>
       </ul>
       <div className="mt-2 text-[10px] text-[#5E6C84] font-sans">
         Real Provider App accounts (any vertical) sign in the same way — first login sets your PC password.

@@ -15,13 +15,14 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 29 (2026-02, this session) — Provider PC Console Phase 2b (all verticals live)
-- **Extended `/api/provider/pc-dashboard` from ambulance-only → all 6 verticals** (hospital, paramedic, doctor, pathology, pharmacy) via `fetch_generic_provider_dashboard` in `supabase_db.py`. Uses table introspection so it stays schema-agnostic across `hospital_profiles`, `paramedic_profiles`, `doctors`, `pathologists`, `pharmacy_profiles`.
-- **Added `pharmacist` + `lab_tech` role mappings** to `SUPABASE_ROLE_TO_PROVIDER_TYPE` (server.py:306) and generalised profile_id lookup in `_try_supabase_provider_lookup` (server.py:342) to fetch from the correct vertical table on materialisation.
-- **Case-count KPIs now work for paramedic too** (via `paramedic_id` on `emergency_cases`) — hospital already had them via `hospital_id`.
-- **`ProviderDashboard.jsx` conditional rendering finalised** — KPI tile set, lifetime-earnings strip, AND Fleet section all gated on `vertical === 'ambulance'`. Non-ambulance verticals show a clean 4-tile row (Active cases · Today · Status · KYC docs) + single Recent-cases column.
-- **`Login.jsx` copy** updated to reflect the CRM now serves every healthcare provider vertical (was still saying "Hospitals/clinics/path labs → use HMS instead"). Demo-accounts panel unchanged.
-- **Verified**: 12/12 pytest green (`test_provider_pc_dashboard.py`), curl E2E for hospital 9310018056 · paramedic 9939971813 · ambulance 7678218261 all return correct vertical + payload. UI screenshot confirms hospital dashboard hides Fleet section.
+### Iter 29 (2026-02, this session) — Provider PC Console Phase 2b + Full-vertical demo seeding
+- **Extended `/api/provider/pc-dashboard` from ambulance-only → all 6 verticals** (hospital, paramedic, doctor, pathology, pharmacy) via `fetch_generic_provider_dashboard` in `supabase_db.py`.
+- **Added `pharmacist` + `lab_tech` role mappings** to `SUPABASE_ROLE_TO_PROVIDER_TYPE` (server.py:306) and generalised profile_id lookup across all 6 vertical tables in `_try_supabase_provider_lookup`.
+- **Paramedic case-count KPIs** now wired through `paramedic_id` on `emergency_cases`.
+- **`ProviderDashboard.jsx`** — Fleet section, lifetime-earnings strip and ambulance-specific KPIs all gated on `vertical === 'ambulance'`.
+- **Demo accounts extended from 3 → 6 provider verticals** (added Doctor 9000020006, Paramedic 9000020007, Pharmacy 9000020008). `POST /api/admin/seed-demo-accounts` now also mirrors each demo into shared Supabase (`users` + vertical profile table) using deterministic uuid5 IDs so `/pc-dashboard` shows real data end-to-end. Pre-fills `recovery_email` + `security_questions` so demo users skip the /security-setup detour and land straight on their PC console.
+- **`Login.jsx` copy** updated (all verticals welcome) + demo-accounts panel now lists all 6 provider phones with `Trata@123`.
+- **Verified**: 12/12 pytest green, curl E2E for demo hospital 9000020004 + demo doctor 9000020006 + demo pharmacy 9000020008 + real hospital 9310018056 + real paramedic 9939971813 + real ambulance 7678218261 all return correct vertical + payload. UI screenshot confirms Dr. Meera Clinic demo lands directly on doctor PC console without error.
 
 
 
