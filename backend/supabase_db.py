@@ -837,6 +837,37 @@ async def discharge_patient(user_id: str, admission_id: str,
     return {"success": True, "outcome": outcome or "discharged"}
 
 
+# ── Full vertical profile fetch (Iter 36 · Profile parity with mobile app) ──
+_PROFILE_TABLE_BY_VERTICAL = {
+    "hospital":  "hospital_profiles",
+    "ambulance": "ambulance_providers",
+    "doctor":    "doctors",
+    "pathology": "pathologists",
+}
+
+
+async def fetch_full_provider_profile(user_id: str, vertical: str) -> Optional[Dict[str, Any]]:
+    """Return the full vertical-specific profile row from Supabase (same one the
+    mobile Provider App reads). JSON columns are already returned as jsonb by
+    asyncpg. Returns None if the vertical is unsupported OR no profile row
+    exists yet."""
+    table = _PROFILE_TABLE_BY_VERTICAL.get(vertical)
+    if not table:
+        return None
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(f"SELECT * FROM public.{table} WHERE user_id = $1 LIMIT 1", user_id)
+    if not row:
+        return None
+    out = dict(row)
+    # Cast known jsonb text columns to python objects where asyncpg returned strings
+    for k, v in list(out.items()):
+        if isinstance(v, str) and v and v[0] in "{[":
+            try: out[k] = json.loads(v)
+            except Exception: pass
+    return out
+
+
 # ── Phase B.2 — CRM Contacts ↔ Postgres dual-write ──────────────────────────
 _LEAD_COLUMNS = (
     "id", "upstream_user_id", "name", "type", "phone", "email",

@@ -2954,7 +2954,19 @@ async def provider_me(current=Depends(get_current_user)):
             "kyc_status": "pending",
             "pipeline_stage": "lead",
         }
-    return {"contact": contact, "user": current}
+    # Enrich with the shared-Supabase vertical profile (same data the mobile
+    # Provider App shows on its Profile screen). Best-effort — missing profile
+    # or Supabase unreachable simply returns null.
+    profile = None
+    if _supabase_ready() and current.get("provider_type"):
+        try:
+            profile = await sb.fetch_full_provider_profile(
+                current.get("supabase_user_id") or current["id"],
+                current["provider_type"],
+            )
+        except Exception as e:
+            logger.warning(f"provider/me profile fetch failed: {e}")
+    return {"contact": contact, "user": current, "profile": profile}
 
 
 @api.get("/provider/dashboard")
