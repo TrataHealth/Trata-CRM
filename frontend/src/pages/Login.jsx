@@ -102,18 +102,18 @@ export default function Login() {
           <div className="mt-auto space-y-6">
             <h1 className="font-heading text-5xl font-black tracking-tight leading-[1.05]">
               One console.<br />
-              <span className="text-[#79E2F2]">Every fleet.</span><br />
-              Every trip.
+              <span className="text-[#79E2F2]">Every provider.</span><br />
+              Every case.
             </h1>
             <p className="text-base text-white/70 max-w-md leading-relaxed">
-              For TrataHealth HQ, ambulance fleets, hospitals, clinics, path labs, paramedics and pharmacies. Run live SOS dispatch, KYC, fleet utilisation, earnings and AI insights from one place.
-              <span className="block mt-2 text-white/50 text-sm">Same phone + OTP as your Trata Provider App — sign in and your PC dashboard mirrors your mobile.</span>
+              Hospitals, ambulances, doctors, labs and pharmacies — the desktop mirror of the Trata Provider App.
+              <span className="block mt-2 text-white/50 text-sm">Same phone. Same OTP. Live data from the shared Trata backend.</span>
             </p>
             <div className="grid grid-cols-3 gap-4 pt-4">
               {[
-                { k: "Phone", v: "OTP delivered" },
-                { k: "Pass", v: "Secure 2nd factor" },
-                { k: "Role", v: "Scoped data" },
+                { k: "SOS", v: "Live queue" },
+                { k: "KYC", v: "Same checklist" },
+                { k: "Ops", v: "Beds · chats · payouts" },
               ].map((s) => (
                 <div key={s.k} className="border-l border-white/20 pl-3">
                   <div className="font-heading text-xl font-bold text-[#79E2F2]">{s.k}</div>
