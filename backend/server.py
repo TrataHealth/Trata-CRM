@@ -254,11 +254,13 @@ async def require_internal(user: dict = Depends(get_current_user)) -> dict:
 # ---------- Models ----------
 class LoginSendOTP(BaseModel):
     phone: str
+    login_as: Optional[str] = None   # "provider" | "staff" — hint from role selector
 
 
 class LoginVerifyOTP(BaseModel):
     phone: str
     otp: str
+    login_as: Optional[str] = None   # "provider" | "staff"
 
 
 class PasswordSet(BaseModel):
@@ -387,6 +389,71 @@ PARAMEDIC_MOBILE_ONLY_MESSAGE = (
     "Paramedic accounts must sign in on the Trata Provider mobile app, "
     "not the PC console."
 )
+STAFF_ROLES = {"master_admin", "admin", "regional_manager", "sales_rep"}
+PROVIDER_ONBOARD_MISSING_MESSAGE = (
+    "This phone isn't registered on the Trata Provider App yet. "
+    "Please sign up on the mobile app first, complete provider onboarding, then come back here."
+)
+PROVIDER_WRONG_ROLE_MESSAGE = (
+    "This phone is registered on the Provider App but not as a healthcare-provider owner "
+    "(hospital / ambulance / doctor / pathology / pharmacy). Contact Trata support."
+)
+STAFF_NOT_AUTHORIZED_MESSAGE = "This phone is not registered as Trata staff. Contact your Master Admin."
+STAFF_IS_PROVIDER_MESSAGE = "This phone is a Healthcare Provider account — pick 'Healthcare Provider' on the sign-in screen."
+
+
+async def _refresh_provider_user_from_supabase(existing: Dict[str, Any], phone: str) -> Dict[str, Any]:
+    """When an existing crm_user hits verify-otp as a provider, cross-check the
+    shared Supabase `users` row and refresh vertical / name / supabase link if
+    they drifted. Never blows away the password. Returns the (possibly updated)
+    crm_user doc."""
+    if not sb.is_configured():
+        return existing
+    try:
+        pool = await sb.get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT id, phone, name, role
+                     FROM public.users
+                    WHERE phone IN ($1, $2)
+                    ORDER BY
+                       -- Prefer a row whose role is one of our supported provider verticals,
+                       -- so a stale duplicate (e.g. same phone kept with role='admin') never
+                       -- shadows the real provider record.
+                       CASE WHEN role IN ('ambulance_provider','hospital','doctor','pathologist','lab','lab_tech','pharmacy','pharmacist')
+                            THEN 0 ELSE 1 END,
+                       -- Then prefer the exact 10-digit variant we normalise on
+                       CASE WHEN phone = $1 THEN 0 ELSE 1 END,
+                       created_at DESC NULLS LAST
+                    LIMIT 1""",
+                phone, f"+91{phone}",
+            )
+        if not row:
+            return existing
+        r = dict(row)
+        if r.get("role") == "paramedic":
+            existing["__paramedic_blocked__"] = True
+            return existing
+        new_provider_type = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(r.get("role"))
+        if not new_provider_type:
+            existing["__wrong_provider_role__"] = r.get("role")
+            return existing
+        drift = {}
+        if existing.get("provider_type") != new_provider_type:
+            drift["provider_type"] = new_provider_type
+        if r.get("name") and existing.get("name") != r["name"] and existing.get("name") in (None, "", "Hospital Admin", "Provider"):
+            drift["name"] = r["name"]
+        if existing.get("supabase_user_id") != str(r["id"]):
+            drift["supabase_user_id"] = str(r["id"])
+        drift["supabase_role"] = r.get("role")
+        if drift:
+            drift["updated_at"] = now_iso()
+            await db.crm_users.update_one({"id": existing["id"]}, {"$set": drift})
+            existing.update(drift)
+            logger.info(f"refreshed crm_users({phone}) from Supabase: {list(drift)}")
+    except Exception as e:
+        logger.warning(f"refresh_provider_user_from_supabase({phone}) failed: {e}")
+    return existing
 
 
 async def _try_supabase_provider_lookup(phone: str) -> Optional[dict]:
@@ -407,7 +474,16 @@ async def _try_supabase_provider_lookup(phone: str) -> Optional[dict]:
         row = await conn.fetchrow(
             """SELECT id, phone, name, email, role
                  FROM public.users
-                WHERE phone = $1 OR phone = $2
+                WHERE phone IN ($1, $2)
+                ORDER BY
+                   -- Prefer any row whose role is a supported provider vertical
+                   CASE WHEN role IN ('ambulance_provider','hospital','doctor','pathologist','lab','lab_tech','pharmacy','pharmacist')
+                        THEN 0 ELSE 1 END,
+                   -- Then prefer paramedic (blocked, but we still want a clean message)
+                   CASE WHEN role = 'paramedic' THEN 0 ELSE 1 END,
+                   -- Then prefer the exact 10-digit variant we normalise on
+                   CASE WHEN phone = $1 THEN 0 ELSE 1 END,
+                   created_at DESC NULLS LAST
                 LIMIT 1""",
             phone, f"+91{phone}",
         )
@@ -453,6 +529,11 @@ async def _try_supabase_provider_lookup(phone: str) -> Optional[dict]:
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
+    # Idempotent insert — if another concurrent call raced ahead and created
+    # this row, prefer the existing one so we never fail with a duplicate-key.
+    already = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
+    if already:
+        return already
     await db.crm_users.insert_one(doc.copy())
     logger.info(f"materialised Supabase provider into crm_users: {phone} · {r.get('role')}")
     return doc
@@ -463,29 +544,70 @@ async def verify_otp(data: LoginVerifyOTP):
     phone = normalize_phone(data.phone)
     if data.otp != MASTER_ADMIN_OTP:
         raise HTTPException(status_code=400, detail="Invalid OTP")
+    login_as = (data.login_as or "").strip().lower()  # "provider" | "staff" | ""
 
-    user = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
-    if not user:
-        if phone == MASTER_ADMIN_PHONE:
-            user = await _ensure_master_admin_user(phone)
-            await db.crm_users.insert_one(user.copy())
-        else:
-            # Try the shared Supabase `users` table — a real provider that
-            # already signed up via the mobile Provider App can sign into the
-            # CRM PC dashboard without needing a Master Admin to pre-add them.
-            user = await _try_supabase_provider_lookup(phone)
-            if user and user.get("__paramedic_blocked__"):
+    existing = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
+
+    # ── Branch 1: explicit "sign in as staff" ────────────────────────────
+    if login_as == "staff":
+        # Master admin auto-bootstrap on first login.
+        if not existing and phone == MASTER_ADMIN_PHONE:
+            existing = await _ensure_master_admin_user(phone)
+            await db.crm_users.insert_one(existing.copy())
+        if not existing:
+            raise HTTPException(status_code=403, detail=STAFF_NOT_AUTHORIZED_MESSAGE)
+        if existing.get("role") == "provider_owner":
+            raise HTTPException(status_code=400, detail=STAFF_IS_PROVIDER_MESSAGE)
+        if existing.get("role") not in STAFF_ROLES:
+            raise HTTPException(status_code=403, detail=STAFF_NOT_AUTHORIZED_MESSAGE)
+        user = existing
+
+    # ── Branch 2: explicit "sign in as provider" ─────────────────────────
+    elif login_as == "provider":
+        if existing and existing.get("role") in STAFF_ROLES:
+            raise HTTPException(status_code=400, detail="This phone is a Trata Staff account — pick 'Trata Staff' on the sign-in screen.")
+        if existing:
+            existing = await _refresh_provider_user_from_supabase(existing, phone)
+            if existing.get("__paramedic_blocked__"):
                 raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
-            if not user:
-                raise HTTPException(status_code=403, detail="Phone not authorized. Contact master admin to be added.")
+            if existing.get("__wrong_provider_role__"):
+                raise HTTPException(status_code=403, detail=PROVIDER_WRONG_ROLE_MESSAGE)
+            user = existing
+        else:
+            # First-time PC login for a mobile-app-registered provider.
+            fresh = await _try_supabase_provider_lookup(phone)
+            if fresh and fresh.get("__paramedic_blocked__"):
+                raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
+            if not fresh:
+                raise HTTPException(status_code=404, detail=PROVIDER_ONBOARD_MISSING_MESSAGE)
+            user = fresh
+
+    # ── Branch 3: legacy no-hint call (keep working for existing clients) ─
+    else:
+        user = existing
+        if not user:
+            if phone == MASTER_ADMIN_PHONE:
+                user = await _ensure_master_admin_user(phone)
+                await db.crm_users.insert_one(user.copy())
+            else:
+                fresh = await _try_supabase_provider_lookup(phone)
+                if fresh and fresh.get("__paramedic_blocked__"):
+                    raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
+                if not fresh:
+                    raise HTTPException(status_code=403, detail="Phone not authorized. Contact master admin to be added.")
+                user = fresh
+        elif user.get("role") == "provider_owner":
+            # Even without an explicit hint, refresh stale provider rows so we
+            # can't accidentally accept a password set against an obsolete vertical.
+            user = await _refresh_provider_user_from_supabase(user, phone)
+            if user.get("__paramedic_blocked__"):
+                raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
 
     # Paramedics are mobile-only — block any existing crm_user with that vertical too.
     if user.get("role") == "provider_owner" and user.get("provider_type") == "paramedic":
         raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
 
     # Guard: only the healthcare-provider verticals listed in SUPPORTED_PROVIDER_TYPES
-    # (ambulance, hospital, doctor, pathology, pharmacy — paramedic excluded) can sign
-    # in as provider_owner. Anything else is treated as a data error and blocked.
     if user.get("role") == "provider_owner" and user.get("provider_type") not in SUPPORTED_PROVIDER_TYPES:
         raise HTTPException(
             status_code=403,

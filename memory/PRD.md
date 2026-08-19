@@ -15,7 +15,18 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 33 (2026-02, this session) — Profile / KYC Split · Vertical-Aware Checklist
+### Iter 34 (2026-02, this session) — Role-Aware Login · Provider-Presence Check · Stale-Row Refresh
+- **New role selector on the login screen** — two-card toggle "Healthcare Provider" vs "Trata Staff" with icon, description and localStorage persistence (`trata_login_as`). Phone placeholder + helper text swap based on selection. Choice is passed to `/auth/send-otp` + `/auth/verify-otp` as `login_as`.
+- **`/auth/verify-otp` completely rewritten** into 3 branches:
+   - `login_as=provider` — Supabase `users` table is the source of truth. Not found → `404 PROVIDER_ONBOARD_MISSING_MESSAGE` ("sign up on the mobile app first"). Found + paramedic → 403 mobile-only. Found + unsupported role (admin/patient/etc.) → 403 with wrong-role message. Found + supported vertical → materialise **and refresh** the crm_users row (name / provider_type / supabase_user_id / supabase_role drift is corrected in-place before any password check).
+   - `login_as=staff` — crm_users only; block provider_owner rows with a "pick Healthcare Provider" message.
+   - No hint (legacy path) — preserves backward compat but now also auto-refreshes provider rows from Supabase so stale vertical/name never shadows the real record.
+- **Duplicate-Supabase-row hygiene**: `_try_supabase_provider_lookup` + refresh queries now `ORDER BY` (supported role first, then exact 10-digit phone) so a `+91…` duplicate can't leak a stale vertical.
+- **Idempotency on materialisation**: `_try_supabase_provider_lookup` re-reads crm_users before inserting, so parallel calls never duplicate.
+- **Bug fix for `7678218261`**: cleaned up the stale ambulance-era crm_user; verify-otp on provider branch now returns `needs_password_setup: True` with `provider_type: hospital`, feeding directly into set-password + security-questions flow. Same phone on staff branch is properly rejected.
+- **auth.jsx** & Login.jsx pass `login_as` through both `sendOtp` + `verifyOtp` helpers.
+
+
 - **New `/provider/kyc` page** (ProviderKyc.jsx) — the KYC uploader that used to live inside the Hospital Command Centre now has its own dedicated tab. Full-progress ring + required/optional split + per-row hint copy + submitted/approved/rejected status chips + upload-history table.
 - **Vertical-aware KYC checklist** shipped on the backend (`kyc_checklist_for()` in server.py). Doc keys are byte-identical to the mobile app's `tratax_kyc_documents.doc_key` so PC uploads land in the same admin review queue. Verticals: hospital (9 items), ambulance (10), doctor (8), pathology (9), pharmacy (7) — all share 5 common docs (`pan_card`, `address_proof`, `signatory_photo`, `authorized_signatory_id`, `gst_certificate`).
 - **New endpoints**: `GET /api/provider/kyc/checklist` (returns checklist + upload status per item), `GET /api/provider/kyc/documents`, `POST /api/provider/kyc/upload`. Legacy `/api/hospital/kyc/*` retained via delegation for backward compat.

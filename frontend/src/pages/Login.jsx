@@ -7,8 +7,9 @@ export default function Login() {
   const { sendOtp, verifyOtp, setPassword, loginPassword, user } = useAuth();
   const navigate = useNavigate();
   const [step, setStep] = useState("phone");
-  const [phone, setPhoneN] = useState("9873117605");
-  const [otp, setOtp] = useState("123456");
+  const [loginAs, setLoginAs] = useState(() => localStorage.getItem("trata_login_as") || "provider");
+  const [phone, setPhoneN] = useState("");
+  const [otp, setOtp] = useState("");
   const [password, setPasswordN] = useState("");
   const [showPwd, setShowPwd] = useState(false);
   const [tempToken, setTempToken] = useState(null);
@@ -16,6 +17,8 @@ export default function Login() {
   const [previewUser, setPreviewUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+
+  React.useEffect(() => { localStorage.setItem("trata_login_as", loginAs); }, [loginAs]);
 
   React.useEffect(() => {
     if (user) {
@@ -29,7 +32,7 @@ export default function Login() {
     setErr("");
     if (phone.length < 10) return setErr("Enter a valid 10-digit phone");
     setLoading(true);
-    try { await sendOtp(phone); setStep("otp"); }
+    try { await sendOtp(phone, loginAs); setStep("otp"); }
     catch (e) { setErr(e?.response?.data?.detail || "Failed"); }
     setLoading(false);
   };
@@ -40,7 +43,7 @@ export default function Login() {
     if (otp.length !== 6) return setErr("Enter 6-digit OTP");
     setLoading(true);
     try {
-      const r = await verifyOtp(phone, otp);
+      const r = await verifyOtp(phone, otp, loginAs);
       setTempToken(r.temp_token);
       setNeedsSetup(r.needs_password_setup);
       setPreviewUser(r.user);
@@ -142,6 +145,22 @@ export default function Login() {
 
           {step === "phone" && (
             <form onSubmit={onSendOtp} className="space-y-4">
+              <div>
+                <span className="overline">I&apos;m signing in as</span>
+                <div className="mt-2 grid grid-cols-2 gap-2" data-testid="login-role-selector">
+                  {[
+                    { k: "provider", label: "Healthcare Provider", sub: "Hospital · Ambulance · Doctor · Lab · Pharmacy" },
+                    { k: "staff",    label: "Trata Staff",         sub: "Master admin · Sales manager · Rep" },
+                  ].map((o) => (
+                    <button key={o.k} type="button" onClick={() => setLoginAs(o.k)}
+                      className={`text-left px-3 py-2.5 rounded-md border transition-colors ${loginAs === o.k ? "border-[#0052CC] bg-[#DEEBFF]" : "border-[#DFE1E6] bg-white hover:bg-[#F4F5F7]"}`}
+                      data-testid={`login-as-${o.k}`}>
+                      <div className="text-sm font-bold text-[#091E42]">{o.label}</div>
+                      <div className="text-[10px] text-[#5E6C84] leading-tight mt-0.5">{o.sub}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
               <label className="block">
                 <span className="overline">Phone Number</span>
                 <div className="mt-2 flex">
@@ -151,10 +170,15 @@ export default function Login() {
                     value={phone}
                     onChange={(e) => setPhoneN(e.target.value.replace(/[^0-9]/g, ""))}
                     maxLength={10}
-                    placeholder="9873117605"
+                    placeholder={loginAs === "staff" ? "9873117605" : "9000020004"}
                     className="flex-1 px-3 py-2.5 text-sm bg-white border border-[#DFE1E6] rounded-r-md focus:border-[#4C9AFF] focus:ring-2 focus:ring-[#4C9AFF]/30 outline-none"
                   />
                 </div>
+                {loginAs === "provider" && (
+                  <div className="mt-2 text-[11px] text-[#5E6C84]">
+                    Use the same phone as your <b>Trata Provider mobile app</b>. New here? Sign up on the mobile app first.
+                  </div>
+                )}
               </label>
               {err && <div className="text-sm text-[#FF5630]" data-testid="login-error">{err}</div>}
               <SubmitBtn loading={loading} testid="login-send-otp-btn">

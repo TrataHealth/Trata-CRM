@@ -16,13 +16,13 @@ export function AuthProvider({ children }) {
     setLoading(false);
   }, []);
 
-  const sendOtp = async (phone) => {
-    const { data } = await api.post("/auth/send-otp", { phone });
+  const sendOtp = async (phone, loginAs = null) => {
+    const { data } = await api.post("/auth/send-otp", { phone, login_as: loginAs });
     return data;
   };
 
-  const verifyOtp = async (phone, otp) => {
-    const { data } = await api.post("/auth/verify-otp", { phone, otp });
+  const verifyOtp = async (phone, otp, loginAs = null) => {
+    const { data } = await api.post("/auth/verify-otp", { phone, otp, login_as: loginAs });
     // returns { needs_password_setup, temp_token, user }
     return data;
   };
