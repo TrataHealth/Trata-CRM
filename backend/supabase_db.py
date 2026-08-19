@@ -1014,6 +1014,30 @@ async def upsert_provider_lead(contact: Dict[str, Any]) -> Dict[str, Any]:
     if not contact.get("phone"):
         return {"success": False, "reason": "missing_phone"}
 
+    row = _lead_row_from_contact(contact)
+    cols = list(row.keys())
+    values = [row[c] for c in cols]
+    placeholders = ", ".join(f"${i+1}" for i in range(len(cols)))
+    updates = ", ".join(
+        f"{c} = EXCLUDED.{c}"
+        for c in cols
+        if c not in ("id", "created_at", "updated_at")
+    )
+    sql = f"""
+        INSERT INTO public.crm_provider_leads ({', '.join(cols)})
+        VALUES ({placeholders})
+        ON CONFLICT (id) DO UPDATE SET {updates}, updated_at = now()
+    """
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(sql, *values)
+        return {"success": True, "id": row["id"]}
+    except Exception as e:
+        logger.warning(f"upsert_provider_lead({row.get('id')}) failed: {e}")
+        return {"success": False, "reason": str(e)}
+
+
 # ── Provider KYC document uploader (Phase C — all verticals) ───────────────
 async def list_provider_kyc_documents(user_id: str) -> List[Dict[str, Any]]:
     """List every KYC doc this provider has uploaded — no file blobs."""
@@ -1084,25 +1108,174 @@ async def upload_hospital_kyc_document(user_id: str, document_type: str,
         doc_category or "hospital_operations")
 
 
-    row = _lead_row_from_contact(contact)
-    cols = list(row.keys())
-    values = [row[c] for c in cols]
-    placeholders = ", ".join(f"${i+1}" for i in range(len(cols)))
-    updates = ", ".join(
-        f"{c} = EXCLUDED.{c}"
-        for c in cols
-        if c not in ("id", "created_at", "updated_at")
-    )
-    sql = f"""
-        INSERT INTO public.crm_provider_leads ({', '.join(cols)})
-        VALUES ({placeholders})
-        ON CONFLICT (id) DO UPDATE SET {updates}, updated_at = now()
-    """
-    try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(sql, *values)
-        return {"success": True, "id": row["id"]}
-    except Exception as e:
-        logger.warning(f"upsert_provider_lead({row.get('id')}) failed: {e}")
-        return {"success": False, "reason": str(e)}
+# ── Admin-driven provider onboarding + one-click KYC approval (Iter 37) ─────
+_SB_ROLE_BY_VERTICAL = {
+    "hospital": "hospital",
+    "ambulance": "ambulance_provider",
+    "doctor": "doctor",
+    "pathology": "pathologist",
+}
+
+
+async def create_provider_from_admin(phone: str, name: str, vertical: str,
+                                     city: Optional[str], state: Optional[str],
+                                     email: Optional[str], address: Optional[str],
+                                     onboarded_by: Optional[str]) -> Dict[str, Any]:
+    """Create a provider directly in shared Supabase: `users` row + vertical
+    profile row. Idempotent on phone — returns the existing user_id if the
+    phone already has a row. Runs one transaction so a mid-flight failure
+    doesn't leave orphaned users."""
+    sb_role = _SB_ROLE_BY_VERTICAL.get(vertical)
+    if not sb_role:
+        return {"success": False, "reason": f"unsupported_vertical:{vertical}"}
+    import uuid as _uuid
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # 1) users row — reuse if the phone is already registered.
+            existing = await conn.fetchrow(
+                "SELECT id, role, verification_status FROM public.users WHERE phone IN ($1, $2) LIMIT 1",
+                phone, f"+91{phone}")
+            if existing:
+                user_id = str(existing["id"])
+                # If the existing account is a wildly different role, don't clobber.
+                if existing["role"] and existing["role"] not in {sb_role, "patient", None}:
+                    return {"success": False, "reason": f"phone_already_registered_as:{existing['role']}", "user_id": user_id}
+            else:
+                user_id = str(_uuid.uuid4())
+                await conn.execute(
+                    """INSERT INTO public.users
+                         (id, phone, name, role, is_active, verification_status, email, created_at)
+                       VALUES ($1, $2, $3, $4, TRUE, 'pending', $5, now())""",
+                    user_id, phone, name, sb_role, email)
+            # 2) vertical profile — only create if absent.
+            prof_id = str(_uuid.uuid4())
+            if vertical == "hospital":
+                await conn.execute("""
+                    INSERT INTO public.hospital_profiles
+                      (id, user_id, name, phone, city, state, address, verification_status, created_at)
+                    SELECT $1::text, $2::text, $3, $4, $5, $6, $7, 'pending', now()
+                     WHERE NOT EXISTS (SELECT 1 FROM public.hospital_profiles WHERE user_id = $2::text)
+                """, prof_id, user_id, name, phone, city, state, address)
+            elif vertical == "ambulance":
+                await conn.execute("""
+                    INSERT INTO public.ambulance_providers
+                      (id, user_id, business_name, owner_name, phone, city, state, address, email, status, created_at)
+                    SELECT $1::text, $2::text, $3, $3, $4, $5, $6, $7, $8, 'pending', now()
+                     WHERE NOT EXISTS (SELECT 1 FROM public.ambulance_providers WHERE user_id = $2::text)
+                """, prof_id, user_id, name, phone, city, state, address, email)
+            elif vertical == "doctor":
+                await conn.execute("""
+                    INSERT INTO public.doctors
+                      (id, user_id, full_name, phone, email, city, state, is_verified, is_active, created_at)
+                    SELECT $1::text, $2::text, $3, $4, $5, $6, $7, FALSE, TRUE, now()
+                     WHERE NOT EXISTS (SELECT 1 FROM public.doctors WHERE user_id = $2::text)
+                """, prof_id, user_id, name, phone, email, city, state)
+            elif vertical == "pathology":
+                await conn.execute("""
+                    INSERT INTO public.pathologists
+                      (id, user_id, name, lab_name, phone, city, state, address, email, status, is_active, created_at)
+                    SELECT $1::text, $2::text, $3, $3, $4, $5, $6, $7, $8, 'pending', TRUE, now()
+                     WHERE NOT EXISTS (SELECT 1 FROM public.pathologists WHERE user_id = $2::text)
+                """, prof_id, user_id, name, phone, city, state, address, email)
+    return {"success": True, "user_id": user_id, "role": sb_role,
+            "already_existed": bool(existing) if 'existing' in locals() else False}
+
+
+async def admin_upload_kyc_document(user_id: str, vertical: str,
+                                    document_type: str, document_name: str,
+                                    file_b64: str, admin_name: Optional[str]) -> Dict[str, Any]:
+    """Admin proxy-uploads a KYC doc on behalf of the provider. Same target
+    table (`kyc_documents`) so the mobile Provider App + Trata Admin App see
+    it live. We tag the doc name with `[Admin] …` so reviewers instantly
+    know the origin (schema stays untouched)."""
+    if not file_b64:
+        return {"success": False, "reason": "empty_file"}
+    approx_bytes = int(len(file_b64) * 3 / 4)
+    if approx_bytes > 4 * 1024 * 1024:
+        return {"success": False, "reason": "file_too_large"}
+    tagged_name = f"[Admin] {document_name.strip() or document_type}"
+    import uuid as _uuid
+    doc_id = str(_uuid.uuid4())
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO public.kyc_documents
+              (id, user_id, provider_type, document_name, document_type,
+               doc_category, file_data, status, submitted_at,
+               reviewed_by, created_at, updated_at)
+            VALUES ($1::text, $2, $3, $4, $5, $6, $7, 'submitted', now(),
+                    $8, now(), now())
+        """, doc_id, user_id, vertical, tagged_name, document_type,
+             vertical, file_b64, admin_name or "master_admin")
+    return {"success": True, "document_id": doc_id, "status": "submitted", "uploaded_by": "admin"}
+
+
+_PROFILE_APPROVE_SQL = {
+    "hospital":  "UPDATE public.hospital_profiles SET verification_status='approved', updated_at=now() WHERE user_id=$1::text",
+    "ambulance": "UPDATE public.ambulance_providers SET status='approved', approved_at=now(), updated_at=now() WHERE user_id=$1::text",
+    "doctor":    "UPDATE public.doctors SET is_verified=TRUE, updated_at=now() WHERE user_id=$1::text",
+    "pathology": "UPDATE public.pathologists SET status='approved', is_verified=TRUE, approved_at=now(), updated_at=now() WHERE user_id=$1::text",
+}
+
+
+async def approve_all_provider_kyc(user_id: str, vertical: str,
+                                   admin_name: Optional[str]) -> Dict[str, Any]:
+    """One-click bulk approval:
+      • Every `kyc_documents` row for this user with status in
+        (submitted | pending | uploaded | '' ) → approved
+      • The vertical profile → verified/approved
+      • `users.verification_status` → approved
+    Returns per-vertical counts so the UI can render a receipt."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            r = await conn.execute("""
+                UPDATE public.kyc_documents
+                   SET status='approved', reviewed_at=now(),
+                       reviewed_by=$2, updated_at=now()
+                 WHERE user_id=$1
+                   AND lower(coalesce(status,'')) IN ('','pending','submitted','uploaded')
+            """, user_id, admin_name or "master_admin")
+            approved_docs = int(r.rsplit(" ", 1)[-1] or 0)
+            await conn.execute(
+                "UPDATE public.users SET verification_status='approved', updated_at=now() WHERE id=$1",
+                user_id)
+            prof_sql = _PROFILE_APPROVE_SQL.get(vertical)
+            if prof_sql:
+                await conn.execute(prof_sql, user_id)
+    return {"success": True, "docs_approved": approved_docs, "vertical": vertical}
+
+
+async def fetch_provider_summary(user_id: str) -> Optional[Dict[str, Any]]:
+    """Small identity blob (name, phone, role, verification_status) used by
+    the admin onboarding uploader header."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT id, name, phone, role, verification_status, email, is_active, created_at
+              FROM public.users WHERE id = $1
+        """, user_id)
+    return _row(row)
+
+
+async def list_admin_onboarded_providers(limit: int = 100) -> List[Dict[str, Any]]:
+    """List every provider (hospital / ambulance / doctor / pathology) with a
+    quick KYC progress snapshot so the admin onboarding page can render a
+    roster. Newest first."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rs = await conn.fetch("""
+            SELECT u.id, u.name, u.phone, u.role, u.verification_status, u.created_at,
+                   (SELECT count(*) FROM public.kyc_documents k
+                      WHERE k.user_id = u.id) AS docs_total,
+                   (SELECT count(*) FROM public.kyc_documents k
+                      WHERE k.user_id = u.id AND lower(coalesce(k.status,''))='approved') AS docs_approved,
+                   (SELECT count(*) FROM public.kyc_documents k
+                      WHERE k.user_id = u.id AND lower(coalesce(k.status,'')) IN ('','pending','submitted','uploaded')) AS docs_pending
+              FROM public.users u
+             WHERE u.role IN ('hospital','ambulance_provider','doctor','pathologist')
+             ORDER BY u.created_at DESC NULLS LAST
+             LIMIT $1
+        """, limit)
+    return _rows(rs)

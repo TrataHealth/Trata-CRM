@@ -1293,6 +1293,261 @@ def _user_type_for_role(role: str) -> str:
     return mapping.get(role, role)
 
 
+# ── Master Admin · Direct Supabase Onboarding + One-click KYC Approval ──────
+# (Iter 37) Writes go straight to the shared Supabase `users` + vertical
+# profile + `kyc_documents` tables so the mobile Provider App and Trata
+# Admin App see the new provider (and later, KYC docs + approval) in
+# realtime — no separate webhook fan-out needed.
+ADMIN_ONBOARDING_VERTICALS = {"hospital", "ambulance", "doctor", "pathology"}
+
+
+def _require_admin(current) -> None:
+    if not (current.get("is_master_admin") or current.get("role") == "admin"):
+        raise HTTPException(status_code=403, detail="Master admin access only")
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+
+
+class AdminOnboardProviderBody(BaseModel):
+    phone: str
+    name: str
+    vertical: str  # hospital | ambulance | doctor | pathology
+    city: Optional[str] = None
+    state: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+
+
+@api.post("/admin/onboarding/providers")
+async def admin_onboarding_create_provider(body: AdminOnboardProviderBody, current=Depends(get_current_user)):
+    """Create a new provider directly in shared Supabase (users + vertical
+    profile). Also mirrors into CRM contacts + crm_users so the provider
+    can OTP-login on the PC console immediately. Password is left blank —
+    the provider sets it on first sign-in."""
+    _require_admin(current)
+    if body.vertical not in ADMIN_ONBOARDING_VERTICALS:
+        raise HTTPException(status_code=400, detail=f"vertical must be one of {sorted(ADMIN_ONBOARDING_VERTICALS)}")
+    phone = _normalize_phone(body.phone or "")
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    if not phone or len(phone) != 10:
+        raise HTTPException(status_code=400, detail="A valid 10-digit phone is required")
+
+    # 1) Supabase user + vertical profile (source of truth · Provider App reads this)
+    sb_res = await sb.create_provider_from_admin(
+        phone=phone, name=name, vertical=body.vertical,
+        city=body.city, state=body.state, email=body.email, address=body.address,
+        onboarded_by=current.get("name") or current.get("phone"),
+    )
+    if not sb_res.get("success"):
+        raise HTTPException(status_code=400, detail=sb_res.get("reason", "onboard_failed"))
+    sb_user_id = sb_res["user_id"]
+
+    # 2) CRM crm_users row so this phone can log in on the PC console.
+    contact_type = PROVIDER_TYPE_TO_CONTACT_TYPE.get(body.vertical, body.vertical)
+    existing_cu = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
+    if existing_cu:
+        await db.crm_users.update_one({"phone": phone}, {"$set": {
+            "name": name, "provider_type": body.vertical,
+            "supabase_user_id": sb_user_id, "supabase_role": sb_res.get("role"),
+            "updated_at": now_iso(),
+        }})
+        crm_user_id = existing_cu["id"]
+    else:
+        crm_user_id = str(uuid.uuid4())
+        await db.crm_users.insert_one({
+            "id": crm_user_id, "phone": phone, "name": name,
+            "role": "provider_owner", "provider_type": body.vertical,
+            "provider_id": None,
+            "is_master_admin": False, "password_hash": None,
+            "supabase_user_id": sb_user_id, "supabase_role": sb_res.get("role"),
+            "created_at": now_iso(), "updated_at": now_iso(),
+            "onboarded_by_admin": current.get("name") or current.get("phone"),
+        })
+
+    # 3) CRM contacts row so the pipeline / KYC queue see this provider too.
+    existing_contact = await db.contacts.find_one({"phone": phone}, {"_id": 0})
+    if existing_contact:
+        contact_id = existing_contact["id"]
+    else:
+        contact_id = str(uuid.uuid4())
+        new_contact = {
+            "id": contact_id, "name": name, "type": contact_type,
+            "phone": phone, "email": body.email, "city": body.city, "state": body.state,
+            "address": body.address, "is_verified": False, "is_active": True,
+            "pipeline_stage": "contacted", "kyc_status": "pending",
+            "deal_value": 0, "source": "admin_direct_onboard",
+            "onboarded_by": current.get("name") or current.get("phone"),
+            "onboarded_at": now_iso(),
+            "created_at": now_iso(), "updated_at": now_iso(),
+            "supabase_user_id": sb_user_id,
+        }
+        await db.contacts.insert_one(new_contact.copy())
+        # Best-effort dual-write mirror
+        try:
+            await sb.upsert_provider_lead(new_contact)
+        except Exception as e:
+            logger.warning(f"admin onboarding · mirror to crm_provider_leads failed: {e}")
+
+    await db.activities.insert_one({
+        "id": str(uuid.uuid4()), "type": "note", "category": "kyc",
+        "subtype": "provider_admin_onboarded",
+        "title": f"Onboarded {body.vertical} — {name}",
+        "description": f"Direct Supabase onboarding by {current.get('name')}. Provider will set password on first login.",
+        "contact_id": contact_id, "contact_name": name,
+        "agent_id": current.get("id"), "agent_name": current.get("name"),
+        "status": "completed", "created_at": now_iso(),
+    })
+    return {
+        "success": True,
+        "user_id": sb_user_id,
+        "supabase_user_id": sb_user_id,
+        "crm_user_id": crm_user_id,
+        "contact_id": contact_id,
+        "already_existed": bool(sb_res.get("already_existed")),
+        "next": f"/admin/onboarding/{sb_user_id}",
+    }
+
+
+@api.get("/admin/onboarding/providers")
+async def admin_onboarding_list_providers(current=Depends(get_current_user)):
+    """List every provider (any vertical) with KYC progress so the admin
+    onboarding page can render a roster."""
+    _require_admin(current)
+    rows = await sb.list_admin_onboarded_providers(limit=200)
+    # Attach vertical string (hospital/ambulance/…) alongside SB role
+    for r in rows:
+        r["vertical"] = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(r.get("role") or "", r.get("role"))
+    return {"providers": rows}
+
+
+@api.get("/admin/onboarding/providers/{user_id}/kyc")
+async def admin_onboarding_provider_kyc(user_id: str, current=Depends(get_current_user)):
+    """Return the vertical-aware KYC checklist + upload status for this
+    provider so the admin uploader can render it."""
+    _require_admin(current)
+    summary = await sb.fetch_provider_summary(user_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    vertical = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(summary.get("role") or "")
+    if not vertical:
+        raise HTTPException(status_code=400, detail=f"Provider role '{summary.get('role')}' is not KYC-enabled from the CRM")
+    checklist = kyc_checklist_for(vertical)
+    docs = await sb.list_provider_kyc_documents(user_id)
+    latest_by_key: Dict[str, Dict[str, Any]] = {}
+    for d in docs:
+        k = d.get("document_type") or ""
+        if k not in latest_by_key:
+            latest_by_key[k] = d
+    for item in checklist:
+        item["upload"] = latest_by_key.get(item["key"])
+    required_keys = [i["key"] for i in checklist if i.get("required")]
+    required_submitted = all(
+        (latest_by_key.get(k) or {}).get("status") in {"submitted", "approved", "uploaded", "pending"}
+        for k in required_keys
+    )
+    all_approved = all(
+        (latest_by_key.get(k) or {}).get("status") == "approved" for k in required_keys
+    )
+    return {
+        "provider": summary,
+        "vertical": vertical,
+        "checklist": checklist,
+        "all_documents": docs,
+        "required_submitted": required_submitted,
+        "all_required_approved": all_approved,
+    }
+
+
+class AdminKycUploadBody(BaseModel):
+    document_type: str
+    document_name: str
+    file_base64: str
+
+
+@api.post("/admin/onboarding/providers/{user_id}/kyc/upload")
+async def admin_onboarding_kyc_upload(user_id: str, body: AdminKycUploadBody, current=Depends(get_current_user)):
+    """Admin uploads a KYC doc *on behalf of* the provider. Writes to the
+    shared `kyc_documents` table so the mobile Provider App shows it as
+    'Submitted' too."""
+    _require_admin(current)
+    summary = await sb.fetch_provider_summary(user_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    vertical = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(summary.get("role") or "")
+    if not vertical:
+        raise HTTPException(status_code=400, detail="Provider role not KYC-enabled")
+    valid_keys = {i["key"] for i in kyc_checklist_for(vertical)}
+    if body.document_type not in valid_keys:
+        raise HTTPException(status_code=400, detail=f"Unknown document key '{body.document_type}' for {vertical}")
+    if not (body.file_base64 or "").strip():
+        raise HTTPException(status_code=400, detail="Empty file")
+    res = await sb.admin_upload_kyc_document(
+        user_id=user_id, vertical=vertical,
+        document_type=body.document_type,
+        document_name=body.document_name or body.document_type,
+        file_b64=body.file_base64,
+        admin_name=current.get("name") or current.get("phone"),
+    )
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("reason", "upload_failed"))
+    return res
+
+
+@api.post("/admin/onboarding/providers/{user_id}/approve-all")
+async def admin_onboarding_approve_all(user_id: str, current=Depends(get_current_user)):
+    """One-click bulk KYC approval. Every submitted/pending doc → approved,
+    vertical profile → verified, `users.verification_status` → approved.
+    Refuses to run if a *required* doc is still missing."""
+    _require_admin(current)
+    summary = await sb.fetch_provider_summary(user_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    vertical = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(summary.get("role") or "")
+    if not vertical:
+        raise HTTPException(status_code=400, detail="Provider role not KYC-enabled")
+    # Gate: every required doc must have at least one upload.
+    docs = await sb.list_provider_kyc_documents(user_id)
+    latest_by_key: Dict[str, Dict[str, Any]] = {}
+    for d in docs:
+        k = d.get("document_type") or ""
+        if k not in latest_by_key:
+            latest_by_key[k] = d
+    missing = [
+        i["key"] for i in kyc_checklist_for(vertical)
+        if i.get("required") and not latest_by_key.get(i["key"])
+    ]
+    if missing:
+        raise HTTPException(status_code=400, detail={
+            "error": "required_docs_missing",
+            "missing": missing,
+            "message": f"Upload {len(missing)} more required doc(s) before approving.",
+        })
+    res = await sb.approve_all_provider_kyc(
+        user_id=user_id, vertical=vertical,
+        admin_name=current.get("name") or current.get("phone"),
+    )
+    # Mirror the approval into CRM contacts so KYC queue reflects it too.
+    try:
+        await db.contacts.update_many(
+            {"$or": [{"supabase_user_id": user_id}, {"phone": summary.get("phone")}]},
+            {"$set": {"kyc_status": "approved", "is_verified": True, "updated_at": now_iso()}},
+        )
+    except Exception as e:
+        logger.warning(f"admin approve-all · CRM contacts mirror failed: {e}")
+    await db.activities.insert_one({
+        "id": str(uuid.uuid4()), "type": "note", "category": "kyc",
+        "subtype": "admin_approved_all",
+        "title": f"One-click KYC approved · {summary.get('name')}",
+        "description": f"{res.get('docs_approved', 0)} documents approved by {current.get('name')}.",
+        "agent_id": current.get("id"), "agent_name": current.get("name"),
+        "status": "completed", "created_at": now_iso(),
+    })
+    return res
+
+
+
 
 
 @api.get("/contacts/{contact_id}")
