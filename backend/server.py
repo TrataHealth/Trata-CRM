@@ -281,6 +281,13 @@ class ContactStatusUpdate(BaseModel):
     is_verified: Optional[bool] = None
     pipeline_stage: Optional[str] = None
     notes: Optional[str] = None
+    # Iter 43 — editable identity fields (kept optional; mirrored to shared
+    # Supabase `users` + vertical profile so the mobile apps see the change).
+    name: Optional[str] = None
+    email: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    address: Optional[str] = None
 
 
 class TaskCreate(BaseModel):
@@ -1720,6 +1727,18 @@ async def update_contact(contact_id: str, data: ContactStatusUpdate, current=Dep
     c2 = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
     # Phase B.2 — dual-write mirror to Supabase crm_provider_leads
     await _mirror_contact(c2)
+    # Iter 43 — mirror edits back to shared Supabase `users` + vertical
+    # profile so the mobile Patient / Provider App sees them live.
+    try:
+        mirror_patch = {k: v for k, v in update.items() if k in {"name", "email", "city", "state", "address"}}
+        if mirror_patch:
+            await sb.upsert_user_from_crm(
+                user_id=c2.get("supabase_user_id"),
+                phone=c2.get("phone"),
+                patch=mirror_patch,
+            )
+    except Exception as e:
+        logger.warning(f"contact PATCH · Supabase user mirror suppressed: {e}")
     # Emit crm.deal.closed if the lead just reached verified/active from another stage (CRM side, not via inbound)
     if (
         update.get("pipeline_stage") in {"verified", "active"}

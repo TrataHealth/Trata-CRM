@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import api from "../lib/api";
 import { relativeTime } from "../lib/constants";
@@ -243,6 +243,15 @@ function fmtDate(iso) {
 }
 
 function TimelineFeed({ admissions = [], appointments = [], emergencyCases = [], ambulanceRides = [] }) {
+  const [activeFilter, setActiveFilter] = React.useState(() => {
+    try { return sessionStorage.getItem("patient-timeline-filter") || "all"; }
+    catch { return "all"; }
+  });
+  const setFilter = (k) => {
+    setActiveFilter(k);
+    try { sessionStorage.setItem("patient-timeline-filter", k); } catch {}
+  };
+
   // Flatten all events into one array with a normalised { at, kind, title, subtitle, status }
   const events = [];
   admissions.forEach((a) => {
@@ -304,21 +313,64 @@ function TimelineFeed({ admissions = [], appointments = [], emergencyCases = [],
     return tb - ta;
   });
 
+  // Per-kind counts drive the pill filter labels
+  const counts = { all: events.length, admission: 0, discharge: 0, appointment: 0, emergency: 0, ride: 0 };
+  events.forEach((e) => { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+
+  const FILTER_PILLS = [
+    { key: "all",         label: "All",           tone: "bg-[#F4F5F7] text-[#42526E]" },
+    { key: "admission",   label: "Admissions",    tone: "bg-[#DEEBFF] text-[#0747A6]" },
+    { key: "appointment", label: "Appointments",  tone: "bg-[#EAE6FF] text-[#403294]" },
+    { key: "emergency",   label: "SOS",           tone: "bg-[#FFEBE6] text-[#BF2600]" },
+    { key: "ride",        label: "Rides",         tone: "bg-[#FFFAE6] text-[#974F0C]" },
+  ];
+
+  const filtered = activeFilter === "all"
+    ? events
+    : events.filter((e) => e.kind === activeFilter || (activeFilter === "admission" && e.kind === "discharge"));
+
   return (
     <section className={T.card} data-testid="patient-timeline">
       <div className={T.head}>
         <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> Timeline · {events.length}</span>
         <span className="normal-case text-[10px] text-[#5E6C84] font-normal">Everything, newest first</span>
       </div>
-      {events.length === 0 ? (
+      {/* Filter pills */}
+      <div className="px-4 py-3 border-b border-[#DFE1E6] flex flex-wrap items-center gap-2 bg-[#FAFBFC]" data-testid="patient-timeline-filters">
+        {FILTER_PILLS.map((p) => {
+          const isActive = activeFilter === p.key;
+          const n = counts[p.key] ?? 0;
+          const disabled = p.key !== "all" && n === 0;
+          return (
+            <button
+              key={p.key}
+              type="button"
+              disabled={disabled}
+              onClick={() => setFilter(p.key)}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold transition
+                ${isActive ? `${p.tone} ring-1 ring-inset ring-[#0747A6]/20 shadow-sm` : "bg-white text-[#42526E] border border-[#DFE1E6] hover:bg-[#F4F5F7]"}
+                ${disabled ? "opacity-40 cursor-not-allowed" : ""}`}
+              data-testid={`patient-timeline-filter-${p.key}`}>
+              {p.label}
+              <span className={`ml-0.5 inline-flex items-center justify-center min-w-[18px] px-1 h-[16px] rounded-full text-[10px] font-black
+                ${isActive ? "bg-white/70" : "bg-[#F4F5F7] text-[#5E6C84]"}`}>
+                {n}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {filtered.length === 0 ? (
         <div className="p-8 text-center text-xs text-[#5E6C84]" data-testid="patient-timeline-empty">
-          No activity yet. Admissions, appointments, SOS, and ambulance rides will appear here as they happen.
+          {events.length === 0
+            ? "No activity yet. Admissions, appointments, SOS, and ambulance rides will appear here as they happen."
+            : "No events match this filter — try another pill above."}
         </div>
       ) : (
         <ol className="relative py-3">
           {/* vertical rail */}
           <div className="absolute left-[26px] top-3 bottom-3 w-px bg-[#DFE1E6]" aria-hidden />
-          {events.map((e, idx) => {
+          {filtered.map((e) => {
             const meta = TL_KIND[e.kind] || TL_KIND.appointment;
             const Icon = meta.icon;
             return (

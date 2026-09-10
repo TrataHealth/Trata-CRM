@@ -15,7 +15,14 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 42 (2026-02, this session) — Patient Timeline (unified chronological feed)
+### Iter 43 (2026-02, this session) — Timeline Filters + CRM ↔ Trataxone Bidirectional Sync
+- **Timeline Filters**: pill filter on the patient detail timeline — `All / Admissions / Appointments / SOS / Rides`. Each pill shows a live per-kind count, greys out to disabled at count=0, and the active pill is tinted with its kind's colour (blue admission / purple appointment / red SOS / amber ride). Choice is remembered in `sessionStorage` (`patient-timeline-filter`) so tab-switches don't reset the view. "All" filter includes discharge sub-events under Admissions so hospital reviewers see the full arc.
+- **CRM → Supabase bidirectional sync** (Trataxone DB): new `upsert_user_from_crm()` helper mirrors CRM contact edits back into shared Supabase — `name` + `email` go to `users`, `city` + `state` + `address` go to the vertical profile (`hospital_profiles` / `ambulance_providers` / `doctors` / `pathologists`). Runs on every `PATCH /api/contacts/:id`. Matches by `supabase_user_id` first, falls back to phone (10-digit and `+91` variants). Never touches phone/role — those are identity.
+- **`ContactStatusUpdate` model extended** to accept `name`, `email`, `city`, `state`, `address` — the CRM edit UI can now push identity + location fields, and every edit auto-mirrors upstream.
+- **Verified end-to-end**: patched Xenon Multispeciality Hospital via CRM `PATCH /contacts/{id}` with `{"city": "MUMBAI-MIRROR", "email": "crm-sync@xenon.in", "state": "MH-MIRROR"}` → Supabase `users.email` and `hospital_profiles.city/state` updated instantly. The mobile Provider App reading Xenon's profile now sees the change without any manual push.
+- Timeline filter verified: clicking `Rides 2` on Rahul Sharma's timeline shows only the 2 ambulance rides and hides everything else; disabled pills (`Admissions 0`, `SOS 0`) can't be clicked.
+
+### Iter 42 (2026-02) — Patient Timeline (unified chronological feed)
 - **New `TimelineFeed` component** on the patient detail page (`/admin/patients/:userId` and `/provider/patients/:userId`) merging Admissions, Appointments, SOS emergencies, and Ambulance rides into one chronological feed (newest first).
 - **Visual design**: color-coded pill per event kind (blue admission / purple appointment / red SOS / amber ride / green discharge), timeline rail with iconised nodes, priority chips (RED / CRITICAL) for triage-priority events, SOS badge for emergency rides, fare shown for completed rides, absolute + relative timestamps ("10 Sept 2026, 10:34 am · 5h ago"), status chip on the right.
 - **Data source**: already came from `fetch_patient_detail` — pure frontend flatten & sort by `at` timestamp (`triage_time`, `appointment_date`, `created_at`, `scheduled_time`) → renders in one `<ol>` with a vertical rail.

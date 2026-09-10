@@ -1525,3 +1525,79 @@ async def list_all_users_for_crm_sync(limit: int = 2000) -> List[Dict[str, Any]]
         })
     return out
 
+
+
+# ── CRM → Supabase user upsert (Iter 43) ───────────────────────────────────
+# Trata CRM edits (name / email / city / state / address) mirror back into
+# the shared `users` row + the vertical profile so the mobile Patient App and
+# Provider App instantly see whatever the sales team just fixed.
+_PROFILE_TABLE_BY_ROLE = {
+    "hospital":           "hospital_profiles",
+    "ambulance_provider": "ambulance_providers",
+    "doctor":             "doctors",
+    "pathologist":        "pathologists",
+}
+
+
+async def upsert_user_from_crm(user_id: Optional[str], phone: Optional[str], patch: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirror CRM contact edits into the shared Supabase `users` table.
+    Uses `user_id` when available, falls back to phone. Only touches
+    upstream-owned fields (name, email); location fields (city/state/address)
+    are written to the vertical profile row where the mobile apps read them
+    from. Best-effort — never raises."""
+    if not is_configured():
+        return {"success": False, "reason": "supabase_offline"}
+    user_fields = {}
+    if patch.get("name"):  user_fields["name"] = patch["name"]
+    if patch.get("email"): user_fields["email"] = patch["email"]
+    profile_fields = {}
+    for k in ("city", "state", "address"):
+        if patch.get(k) is not None:
+            profile_fields[k] = patch[k]
+    if not user_fields and not profile_fields:
+        return {"success": True, "skipped": "nothing_to_mirror"}
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Locate the user
+            row = None
+            if user_id:
+                row = await conn.fetchrow("SELECT id, role, phone FROM public.users WHERE id = $1", user_id)
+            if not row and phone:
+                p10 = (phone or "").strip()[-10:]
+                row = await conn.fetchrow(
+                    "SELECT id, role, phone FROM public.users WHERE phone = $1 OR phone = $2 LIMIT 1",
+                    p10, f"+91{p10}",
+                )
+            if not row:
+                return {"success": False, "reason": "user_not_found"}
+            uid, role = str(row["id"]), (row["role"] or "").lower()
+            # Patch users table (never touches phone / role — those are identity)
+            if user_fields:
+                sets, args = [], []
+                for i, (k, v) in enumerate(user_fields.items(), start=1):
+                    sets.append(f"{k} = ${i}")
+                    args.append(v)
+                args.append(uid)
+                await conn.execute(
+                    f"UPDATE public.users SET {', '.join(sets)}, updated_at = now() WHERE id = ${len(args)}",
+                    *args,
+                )
+            # Patch vertical profile
+            table = _PROFILE_TABLE_BY_ROLE.get(role)
+            if table and profile_fields:
+                sets, args = [], []
+                for i, (k, v) in enumerate(profile_fields.items(), start=1):
+                    sets.append(f"{k} = ${i}")
+                    args.append(v)
+                args.append(uid)
+                await conn.execute(
+                    f"UPDATE public.{table} SET {', '.join(sets)}, updated_at = now() WHERE user_id = ${len(args)}",
+                    *args,
+                )
+        return {"success": True, "user_id": uid, "role": role,
+                "users_patched": bool(user_fields), "profile_patched": bool(profile_fields and table)}
+    except Exception as e:
+        logger.warning(f"upsert_user_from_crm({user_id}/{phone}) failed: {e}")
+        return {"success": False, "reason": str(e)}
+
