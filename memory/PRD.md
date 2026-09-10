@@ -15,7 +15,14 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 41 (2026-02, this session) — Test User Purge · Trata Users cleaned
+### Iter 42 (2026-02, this session) — Patient Timeline (unified chronological feed)
+- **New `TimelineFeed` component** on the patient detail page (`/admin/patients/:userId` and `/provider/patients/:userId`) merging Admissions, Appointments, SOS emergencies, and Ambulance rides into one chronological feed (newest first).
+- **Visual design**: color-coded pill per event kind (blue admission / purple appointment / red SOS / amber ride / green discharge), timeline rail with iconised nodes, priority chips (RED / CRITICAL) for triage-priority events, SOS badge for emergency rides, fare shown for completed rides, absolute + relative timestamps ("10 Sept 2026, 10:34 am · 5h ago"), status chip on the right.
+- **Data source**: already came from `fetch_patient_detail` — pure frontend flatten & sort by `at` timestamp (`triage_time`, `appointment_date`, `created_at`, `scheduled_time`) → renders in one `<ol>` with a vertical rail.
+- **Also fixed**: `list_all_patients_admin` now filters `is_archived=FALSE` so archived test patients don't show in the Patients tab any more.
+- Verified with 6 seeded events on Rahul Sharma (1 admission · 1 appointment · 2 SOS · 2 rides) — all render correctly, sorted newest first, with proper priority + SOS + status chips.
+
+### Iter 41 (2026-02) — Test User Purge · Trata Users cleaned
 - **Bulk cleanup of 71 test users** from both shared Supabase and CRM Mongo. Trata Users went from 66 → 26 real users; Patients tab now shows the single real patient (Rahul Sharma) instead of 7 test rows.
 - Matches names against `test`, `probe`, `it84`, `demo hospital`, `dr test` (case-insensitive) plus exact matches for `Sunrise Care Hospital`, `Metro Ambulance Ltd`, `UI Tester`. Master admin phones (`9873117605`, `9161108882`) are always protected.
 - **Strategy**: soft-archive in Supabase (`is_archived=TRUE, is_active=FALSE, archived_reason='test_user_cleanup'`) because 100+ FK tables reference `users`. Existing sync filter already excludes archived users so they vanish from CRM and any mobile view that honours the flag.

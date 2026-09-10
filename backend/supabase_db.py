@@ -1286,7 +1286,7 @@ async def list_all_patients_admin(q: Optional[str], limit: int = 200) -> List[Di
     """Master-admin roster: every user with role='patient', with a rollup of
     total emergency cases + appointments + admissions so the roster can show
     activity counts alongside identity."""
-    where = ["u.role = 'patient'"]
+    where = ["u.role = 'patient'", "coalesce(u.is_archived, FALSE) = FALSE"]
     args: List[Any] = []
     if q and q.strip():
         args.append(f"%{q.strip().lower()}%")

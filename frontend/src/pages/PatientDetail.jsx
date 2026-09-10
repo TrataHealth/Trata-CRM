@@ -5,6 +5,7 @@ import { relativeTime } from "../lib/constants";
 import {
   ArrowLeft, User, Phone, Mail, Calendar, HeartPulse, AlertTriangle,
   Bed, Ambulance, Activity, Loader2, ShieldCheck, FileText, MapPin,
+  Clock, LogOut,
 } from "lucide-react";
 
 const T = {
@@ -123,6 +124,13 @@ export default function PatientDetail({ mode = "admin" }) {
         )}
       </section>
 
+      <TimelineFeed
+        admissions={admissions}
+        appointments={appointments}
+        emergencyCases={emergency_cases}
+        ambulanceRides={ambulance_rides}
+      />
+
       <ActivityList
         title="Admissions" icon={Bed} rows={admissions}
         empty="No hospital admissions on record."
@@ -209,6 +217,137 @@ function ActivityList({ title, icon: Icon, rows, empty, renderRow, renderRight }
             </div>
           ))}
         </div>
+      )}
+    </section>
+  );
+}
+
+
+// ── Unified Patient Timeline ───────────────────────────────────────────────
+const TL_KIND = {
+  admission: { icon: Bed,       tone: "bg-[#DEEBFF] text-[#0747A6]", ring: "ring-[#0052CC]", label: "Admission" },
+  discharge: { icon: LogOut,    tone: "bg-[#E3FCEF] text-[#006644]", ring: "ring-[#006644]", label: "Discharge" },
+  appointment: { icon: Calendar,tone: "bg-[#EAE6FF] text-[#403294]", ring: "ring-[#5243AA]", label: "Appointment" },
+  emergency: { icon: Activity,  tone: "bg-[#FFEBE6] text-[#BF2600]", ring: "ring-[#BF2600]", label: "SOS · Emergency" },
+  ride:      { icon: Ambulance, tone: "bg-[#FFFAE6] text-[#974F0C]", ring: "ring-[#FF991F]", label: "Ambulance ride" },
+};
+
+function fmtDate(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString("en-IN", {
+      day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+    });
+  } catch { return String(iso); }
+}
+
+function TimelineFeed({ admissions = [], appointments = [], emergencyCases = [], ambulanceRides = [] }) {
+  // Flatten all events into one array with a normalised { at, kind, title, subtitle, status }
+  const events = [];
+  admissions.forEach((a) => {
+    if (a.triage_time) {
+      events.push({
+        id: `adm-${a.id}`,
+        at: a.triage_time,
+        kind: "admission",
+        title: a.admission_number ? `Admitted · ${a.admission_number}` : "Admitted",
+        subtitle: a.chief_complaint || a.case_type || `Ward ${a.ward_type || "—"} · Bed ${a.bed_number || "—"}`,
+        status: a.status,
+        priority: a.triage_priority,
+      });
+    }
+    // Discharges get their own event when the status is discharged (best-effort — no discharge_time in schema)
+    if ((a.status || "").toLowerCase() === "discharged") {
+      events.push({
+        id: `dis-${a.id}`,
+        at: a.triage_time,   // best available signal
+        kind: "discharge",
+        title: `Discharged from ward ${a.ward_type || "—"}`,
+        subtitle: a.chief_complaint || a.admission_number,
+        status: "completed",
+      });
+    }
+  });
+  appointments.forEach((a) => events.push({
+    id: `apt-${a.id}`,
+    at: a.appointment_date || a.created_at,
+    kind: "appointment",
+    title: a.reason || "Doctor appointment",
+    subtitle: `${a.time_slot || "—"}`,
+    status: a.status,
+  }));
+  emergencyCases.forEach((c) => events.push({
+    id: `sos-${c.id}`,
+    at: c.created_at,
+    kind: "emergency",
+    title: c.case_type || "Emergency case",
+    subtitle: c.reason || "—",
+    status: c.status,
+    priority: c.priority,
+  }));
+  ambulanceRides.forEach((r) => events.push({
+    id: `ride-${r.id}`,
+    at: r.scheduled_time || r.created_at,
+    kind: "ride",
+    title: r.booking_id ? `Ride · ${r.booking_id}` : "Ambulance ride",
+    subtitle: `${r.pickup_address || "—"} → ${r.drop_address || "—"}`,
+    status: r.status,
+    isSos: r.is_emergency,
+    fare: r.total_fare,
+  }));
+
+  // Sort newest first
+  events.sort((a, b) => {
+    const ta = a.at ? new Date(a.at).getTime() : 0;
+    const tb = b.at ? new Date(b.at).getTime() : 0;
+    return tb - ta;
+  });
+
+  return (
+    <section className={T.card} data-testid="patient-timeline">
+      <div className={T.head}>
+        <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> Timeline · {events.length}</span>
+        <span className="normal-case text-[10px] text-[#5E6C84] font-normal">Everything, newest first</span>
+      </div>
+      {events.length === 0 ? (
+        <div className="p-8 text-center text-xs text-[#5E6C84]" data-testid="patient-timeline-empty">
+          No activity yet. Admissions, appointments, SOS, and ambulance rides will appear here as they happen.
+        </div>
+      ) : (
+        <ol className="relative py-3">
+          {/* vertical rail */}
+          <div className="absolute left-[26px] top-3 bottom-3 w-px bg-[#DFE1E6]" aria-hidden />
+          {events.map((e, idx) => {
+            const meta = TL_KIND[e.kind] || TL_KIND.appointment;
+            const Icon = meta.icon;
+            return (
+              <li key={e.id} className="relative flex gap-3 px-4 py-3" data-testid={`patient-timeline-event-${e.kind}`}>
+                <div className={`relative z-10 h-[26px] w-[26px] rounded-full grid place-items-center ring-2 ring-white ${meta.tone} shrink-0`}>
+                  <Icon className="h-3.5 w-3.5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`${T.chip} ${meta.tone}`}>{meta.label}</span>
+                    <span className="text-sm font-semibold text-[#091E42]">{e.title}</span>
+                    {e.isSos && <span className={`${T.chip} bg-[#FFEBE6] text-[#BF2600]`}>SOS</span>}
+                    {e.priority && <span className={`${T.chip} bg-[#F4F5F7] text-[#42526E]`}>{String(e.priority).toUpperCase()}</span>}
+                  </div>
+                  {e.subtitle && <div className="text-[11px] text-[#5E6C84] mt-0.5 line-clamp-2">{e.subtitle}</div>}
+                  <div className="flex items-center gap-3 mt-1 text-[10px] text-[#5E6C84]">
+                    <span>{fmtDate(e.at)}</span>
+                    <span>·</span>
+                    <span>{e.at ? relativeTime(e.at) : "—"}</span>
+                    {e.fare != null && <><span>·</span><span>₹ {e.fare}</span></>}
+                  </div>
+                </div>
+                <div className="shrink-0">
+                  {e.status && <StatusChip status={e.status} />}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
       )}
     </section>
   );
