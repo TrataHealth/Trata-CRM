@@ -3932,6 +3932,141 @@ async def sync_supabase_users_now(current=Depends(get_current_user)):
     return await _sync_supabase_users_into_contacts()
 
 
+# ── Test-user purge (Iter 41) ──────────────────────────────────────────────
+# Bulk-cleanup: nuke every account whose name matches the well-known test
+# patterns (probe, TEST*, Dr Test, IT84, Demo Hospital) from **both** the
+# shared Supabase tables (users + vertical profile + kyc_documents +
+# hospital_staff + hospital_patients as hospital + crm_provider_leads) AND
+# the local Mongo CRM (contacts, crm_users, activities). Preserves real
+# master admins because their names ("Master Admin") don't match the
+# patterns.
+_TEST_PATTERNS_SQL = (
+    "%test%", "%probe%", "%it84%", "%demo hospital%", "%dr test%",
+)
+_TEST_EXTRA_EXACT = ("Sunrise Care Hospital", "Metro Ambulance Ltd", "UI Tester")
+
+
+class TestUserPurgeBody(BaseModel):
+    dry_run: bool = False
+
+
+@api.post("/admin/purge-test-users")
+async def purge_test_users(body: Optional[TestUserPurgeBody] = None, current=Depends(get_current_user)):
+    """Delete every test user from Supabase + CRM. Master-admin only. Pass
+    `{"dry_run": true}` to preview which users would be deleted without
+    touching a single row. Real master admins are always preserved because
+    their names don't match the patterns and their phones are excluded from
+    the sweep."""
+    if not (current.get("is_master_admin") or current.get("role") == "admin"):
+        raise HTTPException(status_code=403, detail="Master admin only")
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    dry = bool(body and body.dry_run)
+
+    protected_phones = set(MASTER_ADMIN_PHONES)
+    pool = await sb.get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, name, phone, role FROM public.users
+             WHERE (
+                lower(coalesce(name,'')) LIKE ANY($1::text[])
+                OR name = ANY($2::text[])
+             )
+             AND coalesce(is_archived, FALSE) = FALSE
+        """, list(_TEST_PATTERNS_SQL), list(_TEST_EXTRA_EXACT))
+        targets = []
+        for r in rows:
+            phone10 = (r["phone"] or "")[-10:]
+            if phone10 in protected_phones:
+                continue
+            targets.append({"id": str(r["id"]), "name": r["name"], "phone": r["phone"], "role": r["role"]})
+
+        if dry:
+            return {"success": True, "dry_run": True, "would_delete": len(targets), "targets": targets[:200]}
+
+        # Cascade cleanup. Because the Trata mobile platform has 100+ FKs
+        # pointing to `users` (bills, payments, appointments, emergency_cases,
+        # …) we CANNOT hard-delete the user row without breaking history.
+        # Strategy:
+        #   • Hard-delete tables we own for the CRM directory (kyc_documents,
+        #     hospital_staff, hospital_profiles, ambulance_providers,
+        #     doctors, pathologists, crm_provider_leads).
+        #   • **Soft-archive** the `users` row (is_archived=TRUE,
+        #     is_active=FALSE). Our sync filter already skips archived users,
+        #     so they instantly disappear from Trata Users AND from the
+        #     mobile Provider App (which honours the same flag).
+        user_ids = [t["id"] for t in targets]
+        phones_full = [t["phone"] for t in targets if t.get("phone")]
+        phones10 = [(p or "")[-10:] for p in phones_full]
+
+        async with conn.transaction():
+            # KYC docs and vertical profiles (each keyed on user_id — safe hard delete)
+            await conn.execute("DELETE FROM public.kyc_documents        WHERE user_id = ANY($1::text[])", user_ids)
+            await conn.execute("DELETE FROM public.hospital_staff       WHERE hospital_id = ANY($1::text[]) OR user_id = ANY($1::text[])", user_ids)
+            await conn.execute("DELETE FROM public.hospital_profiles    WHERE user_id = ANY($1::text[])", user_ids)
+            await conn.execute("DELETE FROM public.ambulance_providers  WHERE user_id = ANY($1::text[])", user_ids)
+            await conn.execute("DELETE FROM public.doctors              WHERE user_id = ANY($1::text[])", user_ids)
+            await conn.execute("DELETE FROM public.pathologists         WHERE user_id = ANY($1::text[])", user_ids)
+            # Provider-app leads mirror
+            await conn.execute("DELETE FROM public.crm_provider_leads   WHERE phone = ANY($1::text[]) OR phone = ANY($2::text[])",
+                               phones_full, phones10)
+            # Soft-archive the user (no cascade needed, history preserved)
+            archived = await conn.execute("""
+                UPDATE public.users
+                   SET is_archived = TRUE, is_active = FALSE,
+                       archived_at = now(), archived_reason = 'test_user_cleanup',
+                       updated_at = now()
+                 WHERE id = ANY($1::text[])
+            """, user_ids)
+
+    sb_archived = int(archived.rsplit(" ", 1)[-1] or 0)
+
+    # CRM (Mongo) cleanup — by phone (both 10-digit and +91 variants) + name fallback
+    all_phones = set(phones10) | set(p for p in phones_full if p) | set(f"+91{p}" for p in phones10 if p)
+    all_phones.discard("")
+    mongo_contacts = await db.contacts.delete_many({
+        "$or": [
+            {"phone": {"$in": list(all_phones)}} if all_phones else {"__never__": True},
+            {"supabase_user_id": {"$in": user_ids}} if user_ids else {"__never__": True},
+        ]
+    })
+    # Second sweep: match by name pattern to catch CRM-native rows that were
+    # never in Supabase (legacy inserts, admin-only test contacts, etc.).
+    import re as _re
+    name_pattern = _re.compile(r"(test|probe|it84|demo hospital|dr\s*test)", _re.IGNORECASE)
+    exact_names = list(_TEST_EXTRA_EXACT)
+    mongo_by_name = await db.contacts.delete_many({
+        "$or": [
+            {"name": {"$regex": name_pattern}},
+            {"name": {"$in": exact_names}},
+        ]
+    })
+    mongo_contacts_total = mongo_contacts.deleted_count + mongo_by_name.deleted_count
+    mongo_crm_users = await db.crm_users.delete_many({
+        "phone": {"$in": list(all_phones)},
+        "is_master_admin": {"$ne": True},
+    }) if all_phones else None
+    mongo_activities = await db.activities.delete_many({
+        "contact_id": {"$in": [c for c in [r.get("id") for r in targets] if c]},
+    }) if targets else None
+
+    logger.info(f"purge-test-users: Supabase archived={sb_archived}, Mongo contacts={mongo_contacts_total}")
+
+    # Reset the sync cache so the next contacts fetch doesn't re-import stale data.
+    _SB_CONTACTS_SYNC_STATE["last_run_at"] = _time.time()
+
+    return {
+        "success": True,
+        "dry_run": False,
+        "supabase_users_archived": sb_archived,
+        "crm_contacts_deleted": mongo_contacts_total,
+        "crm_users_deleted": mongo_crm_users.deleted_count if mongo_crm_users else 0,
+        "activities_deleted": mongo_activities.deleted_count if mongo_activities else 0,
+        "targets_matched": len(targets),
+    }
+
+
+
 async def _seed_hospital_demo_ops() -> Dict[str, Any]:
     """Idempotently seed 8 beds + 1 broadcasted SOS case for the demo hospital
     (City Care Hospital · 9000020004). Safe to re-run — inserts only if the

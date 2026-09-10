@@ -15,7 +15,15 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 38 (2026-02, this session) — Patients section (fully synced with mobile Provider App)
+### Iter 41 (2026-02, this session) — Test User Purge · Trata Users cleaned
+- **Bulk cleanup of 71 test users** from both shared Supabase and CRM Mongo. Trata Users went from 66 → 26 real users; Patients tab now shows the single real patient (Rahul Sharma) instead of 7 test rows.
+- Matches names against `test`, `probe`, `it84`, `demo hospital`, `dr test` (case-insensitive) plus exact matches for `Sunrise Care Hospital`, `Metro Ambulance Ltd`, `UI Tester`. Master admin phones (`9873117605`, `9161108882`) are always protected.
+- **Strategy**: soft-archive in Supabase (`is_archived=TRUE, is_active=FALSE, archived_reason='test_user_cleanup'`) because 100+ FK tables reference `users`. Existing sync filter already excludes archived users so they vanish from CRM and any mobile view that honours the flag.
+- Vertical profile tables + kyc_documents + hospital_staff + crm_provider_leads are hard-deleted. Mongo `contacts`, `crm_users`, and activities are hard-deleted by phone + name pattern.
+- **Also patched** the background `sync_users_from_admin` loop so test-named users can never sneak back in from the upstream Trata Admin App on the 5-min tick.
+- New endpoint `POST /api/admin/purge-test-users` (accepts `{"dry_run": true}` for preview). Idempotent — re-runnable to sweep any new test users going forward.
+
+### Iter 38 (2026-02) — Patients section (fully synced with mobile Provider App)
 - **New Patients section for two personas**, both reading directly from shared Supabase:
    - **Master admin** at `/admin/patients` — Trata-wide roster of every `users` row where `role='patient'`, with rollup counts (cases · appointments · admissions) per row + summary tiles. Search by name or phone.
    - **Providers (hospitals)** at `/provider/patients` — hospital-scoped roster from `hospital_patients` filtered by the caller's `hospital_id`. Same clinical fields the mobile Provider App shows: age, sex, blood group, allergies, chronic conditions, diagnosis, admission/discharge dates, status. Other verticals return a "coming soon" scope message (mobile app is still primary there).

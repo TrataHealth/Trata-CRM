@@ -293,10 +293,14 @@ def _normalize_phone(p: Optional[str]) -> str:
 async def sync_users_from_admin(db) -> Dict[str, int]:
     """Pull /api/admin/users from the admin app and upsert healthcare-provider records as CRM contacts.
     Includes ambulance_provider, hospital, doctor, paramedic, lab/pathologist, pharmacy.
-    Existing contacts get a metadata refresh; never overwrites pipeline_stage or assigned_agent_id."""
+    Existing contacts get a metadata refresh; never overwrites pipeline_stage or assigned_agent_id.
+    Test users (names matching test/probe/it84/demo hospital/dr test) are skipped so the CRM directory
+    stays clean of dev fixtures."""
+    import re as _re
     PROVIDER_ROLES = {"ambulance_provider", "hospital", "doctor", "paramedic", "lab", "pathologist", "pharmacy"}
-    # Map upstream role → CRM contact type (CRM uses 'pathologist' for labs)
     ROLE_TO_TYPE = {"lab": "pathologist"}
+    TEST_NAME_RX = _re.compile(r"(test|probe|it84|demo hospital|dr\s*test)", _re.IGNORECASE)
+    TEST_NAME_EXACT = {"Sunrise Care Hospital", "Metro Ambulance Ltd", "UI Tester"}
     payload = await admin_api_get("/api/admin/users")
     if not payload:
         return {"fetched": 0, "created": 0, "updated": 0, "skipped": 0}
@@ -307,6 +311,10 @@ async def sync_users_from_admin(db) -> Dict[str, int]:
     for u in users:
         role = u.get("role")
         if role not in PROVIDER_ROLES:
+            skipped += 1
+            continue
+        name = (u.get("name") or "").strip()
+        if name and (TEST_NAME_RX.search(name) or name in TEST_NAME_EXACT):
             skipped += 1
             continue
         contact_type = ROLE_TO_TYPE.get(role, role)
