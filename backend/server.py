@@ -37,6 +37,13 @@ MONGO_URL = os.environ['MONGO_URL']
 DB_NAME = os.environ['DB_NAME']
 JWT_SECRET = os.environ['JWT_SECRET']
 MASTER_ADMIN_PHONE = os.environ['MASTER_ADMIN_PHONE']
+# Additional master-admin phones may be added by setting MASTER_ADMIN_PHONES to a
+# comma-separated list. The primary MASTER_ADMIN_PHONE is always included.
+MASTER_ADMIN_PHONES = {
+    p.strip() for p in (
+        (MASTER_ADMIN_PHONE + "," + os.environ.get("MASTER_ADMIN_PHONES", "")).split(",")
+    ) if p.strip()
+}
 MASTER_ADMIN_OTP = os.environ['MASTER_ADMIN_OTP']
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 UPSTREAM_SYNC_INTERVAL_MIN = int(os.environ.get('UPSTREAM_SYNC_INTERVAL_MIN', '5'))
@@ -555,7 +562,7 @@ async def verify_otp(data: LoginVerifyOTP):
     # ── Branch 1: explicit "sign in as staff" ────────────────────────────
     if login_as == "staff":
         # Master admin auto-bootstrap on first login.
-        if not existing and phone == MASTER_ADMIN_PHONE:
+        if not existing and phone in MASTER_ADMIN_PHONES:
             existing = await _ensure_master_admin_user(phone)
             await db.crm_users.insert_one(existing.copy())
         if not existing:
@@ -594,7 +601,7 @@ async def verify_otp(data: LoginVerifyOTP):
     else:
         user = existing
         if not user:
-            if phone == MASTER_ADMIN_PHONE:
+            if phone in MASTER_ADMIN_PHONES:
                 user = await _ensure_master_admin_user(phone)
                 await db.crm_users.insert_one(user.copy())
             else:
@@ -5655,19 +5662,27 @@ async def startup():
         # Sales rep must report to area_manager — but Priya is regional_manager.
         # Skip auto-link to keep hierarchy clean; admin can wire it via UI once area managers exist.
         pass
-    # Ensure master admin exists
-    if not await db.crm_users.find_one({"phone": MASTER_ADMIN_PHONE}):
-        await db.crm_users.insert_one({
-            "id": str(uuid.uuid4()),
-            "phone": MASTER_ADMIN_PHONE,
-            "name": "Master Admin",
-            "email": "admin@tratahealth.com",
-            "role": "admin",
-            "is_master_admin": True,
-            "is_active": True,
-            "avatar": None,
-            "created_at": now_iso(),
-        })
+    # Ensure every configured master admin exists
+    for _ma_phone in MASTER_ADMIN_PHONES:
+        if not await db.crm_users.find_one({"phone": _ma_phone}):
+            await db.crm_users.insert_one({
+                "id": str(uuid.uuid4()),
+                "phone": _ma_phone,
+                "name": "Master Admin",
+                "email": "admin@tratahealth.com",
+                "role": "admin",
+                "is_master_admin": True,
+                "is_active": True,
+                "avatar": None,
+                "created_at": now_iso(),
+            })
+        else:
+            # Idempotently promote any existing account to master-admin (in case
+            # the phone was previously a regular user).
+            await db.crm_users.update_one(
+                {"phone": _ma_phone},
+                {"$set": {"is_master_admin": True, "role": "admin", "is_active": True}},
+            )
     # Kick upstream sync (immediate + background loop)
     if us.upstream_enabled():
         logger.info(f"Upstream sync enabled → {os.environ.get('UPSTREAM_API_URL')}")
