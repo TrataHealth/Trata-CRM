@@ -5,6 +5,7 @@ their activities (emergency cases, appointments, bookings, KYC), deal pipeline, 
 """
 import os
 import logging
+import time as _time
 import uuid
 import random
 import hmac
@@ -1121,6 +1122,76 @@ async def activity_feed(limit: int = 20, current=Depends(require_internal)):
 
 
 # ---------- Contacts ----------
+# Cache: run Supabase → contacts sync at most once per 60s so the Trata Users
+# tab always feels live but we don't hammer Postgres on every keystroke.
+_SB_CONTACTS_SYNC_STATE = {"last_run_at": 0.0, "running": False}
+_SB_CONTACTS_SYNC_TTL = 60.0  # seconds
+
+
+async def _sync_supabase_users_into_contacts() -> Dict[str, Any]:
+    """Idempotently mirror every shared-Supabase user (patient app + provider
+    app) into the Mongo `contacts` collection. Keyed by phone — if a
+    contact already exists we only patch the fields that came from the
+    upstream source (never blow away CRM-owned fields like pipeline_stage
+    once a sales rep has moved the lead)."""
+    if not _supabase_ready():
+        return {"success": False, "reason": "supabase_offline"}
+    if _SB_CONTACTS_SYNC_STATE["running"]:
+        return {"success": True, "skipped": "already_running"}
+    _SB_CONTACTS_SYNC_STATE["running"] = True
+    inserted = updated = skipped = 0
+    try:
+        rows = await sb.list_all_users_for_crm_sync(limit=2000)
+        for r in rows:
+            phone = (r.get("phone") or "").strip()
+            if not phone:
+                skipped += 1
+                continue
+            existing = await db.contacts.find_one({"phone": phone}, {"_id": 0, "id": 1, "pipeline_stage": 1, "assigned_agent_id": 1, "kyc_status": 1})
+            if existing:
+                # Patch only upstream-owned fields; preserve CRM state.
+                patch: Dict[str, Any] = {
+                    "supabase_user_id": r["supabase_user_id"],
+                    "name": r["name"],
+                    "type": r["type"],
+                    "email": r.get("email") or None,
+                    "city": r.get("city") or None,
+                    "state": r.get("state") or None,
+                    "address": r.get("address") or None,
+                    "is_active": r["is_active"],
+                    "updated_at": now_iso(),
+                    "last_upstream_sync_at": now_iso(),
+                }
+                # Only bump verification / stage if CRM hasn't been touched.
+                if not existing.get("assigned_agent_id"):
+                    if r.get("is_verified") and existing.get("kyc_status") != "approved":
+                        patch["kyc_status"] = "approved"
+                        patch["is_verified"] = True
+                await db.contacts.update_one({"phone": phone}, {"$set": patch})
+                updated += 1
+            else:
+                new_row = {
+                    "id": str(uuid.uuid4()),
+                    **r,
+                    "deal_value": 0,
+                    "assigned_agent_id": None,
+                    "assigned_agent_name": None,
+                    "onboarded_by": "supabase_sync",
+                    "created_at": r.get("created_at") or now_iso(),
+                    "updated_at": now_iso(),
+                    "last_upstream_sync_at": now_iso(),
+                }
+                await db.contacts.insert_one(new_row)
+                inserted += 1
+        _SB_CONTACTS_SYNC_STATE["last_run_at"] = _time.time()
+        return {"success": True, "inserted": inserted, "updated": updated, "skipped": skipped, "total": inserted + updated + skipped}
+    except Exception as e:
+        logger.warning(f"supabase-users → contacts sync failed: {e}")
+        return {"success": False, "reason": str(e)}
+    finally:
+        _SB_CONTACTS_SYNC_STATE["running"] = False
+
+
 @api.get("/contacts")
 async def list_contacts(
     type: Optional[str] = None,
@@ -1132,6 +1203,16 @@ async def list_contacts(
     limit: int = 50,
     current=Depends(get_current_user),
 ):
+    # Auto-sync from shared Supabase for admin/manager readers so the
+    # directory always mirrors what the mobile Provider App + Patient App
+    # currently show. Cached to at most once / 60s.
+    if is_admin_or_manager(current):
+        try:
+            if (_time.time() - _SB_CONTACTS_SYNC_STATE["last_run_at"]) > _SB_CONTACTS_SYNC_TTL:
+                await _sync_supabase_users_into_contacts()
+        except Exception as e:
+            logger.warning(f"contacts auto-sync skipped: {e}")
+
     qry: Dict[str, Any] = {}
     if type:
         qry["type"] = type
@@ -3835,6 +3916,20 @@ async def mirror_contacts_to_postgres(current=Depends(get_current_user)):
             key = res.get("reason", "unknown")
             reasons[key] = reasons.get(key, 0) + 1
     return {"success": True, "total": total, "mirrored": ok, "failed": failed, "failure_reasons": reasons}
+
+
+@api.post("/admin/sync-supabase-users")
+async def sync_supabase_users_now(current=Depends(get_current_user)):
+    """Manual trigger for the shared-Supabase → CRM `contacts` mirror. The
+    Trata Users page auto-runs this on load (cached for 60s), but admins
+    can force a fresh sync from here."""
+    if not is_admin_or_manager(current):
+        raise HTTPException(status_code=403, detail="Master admin only")
+    if not sb.is_configured():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+    # Reset cache so this call always runs.
+    _SB_CONTACTS_SYNC_STATE["last_run_at"] = 0.0
+    return await _sync_supabase_users_into_contacts()
 
 
 async def _seed_hospital_demo_ops() -> Dict[str, Any]:

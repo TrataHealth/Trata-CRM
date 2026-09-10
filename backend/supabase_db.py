@@ -1433,3 +1433,95 @@ async def fetch_patient_detail(user_id: str, hospital_scope_id: Optional[str] = 
         **associations,
     }
 
+
+
+# ── Full user sync from shared Supabase → CRM contacts (Iter 40) ────────────
+# Trata Users tab needs to show every user on the shared platform (patient
+# app + provider app), not just what the CRM has locally. This helper reads
+# the source-of-truth `users` table + best-known name/city hints from the
+# vertical profiles so the CRM can idempotently mirror them into Mongo
+# `contacts`.
+_SB_ROLE_TO_CRM_TYPE = {
+    "patient":            "patient",
+    "hospital":           "hospital",
+    "ambulance_provider": "ambulance_provider",
+    "doctor":             "doctor",
+    "pathologist":        "pathologist",
+    "paramedic":          "paramedic",
+    "pharmacy":           "pharmacy",
+    "pharmacist":         "pharmacy",
+    "lab":                "pathologist",
+    "lab_tech":           "pathologist",
+}
+
+
+async def list_all_users_for_crm_sync(limit: int = 2000) -> List[Dict[str, Any]]:
+    """Every non-admin user on the shared Trata platform + a best-match
+    display name / city / state pulled from their vertical profile row.
+    Shape is CRM-`contacts`-friendly so the caller can upsert straight into
+    Mongo."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rs = await conn.fetch("""
+            WITH prof AS (
+              SELECT user_id, name, phone, city, state, address,
+                     verification_status AS vstatus
+                FROM public.hospital_profiles
+              UNION ALL
+              SELECT user_id, business_name AS name, phone, city, state, address,
+                     status AS vstatus
+                FROM public.ambulance_providers
+              UNION ALL
+              SELECT user_id, full_name AS name, phone, city, state, address,
+                     CASE WHEN is_verified THEN 'approved' ELSE NULL END AS vstatus
+                FROM public.doctors
+              UNION ALL
+              SELECT user_id, coalesce(lab_name, name) AS name, phone, city, state, address,
+                     status AS vstatus
+                FROM public.pathologists
+            )
+            SELECT u.id, u.phone, u.name AS user_name, u.email, u.role, u.user_type,
+                   u.is_active, u.verification_status, u.created_at, u.updated_at,
+                   p.name AS profile_name, p.city, p.state, p.address, p.vstatus
+              FROM public.users u
+              LEFT JOIN prof p ON p.user_id = u.id
+             WHERE u.role IS NOT NULL
+               AND u.role <> 'admin'
+               AND coalesce(u.is_archived, FALSE) = FALSE
+             ORDER BY u.created_at DESC NULLS LAST
+             LIMIT $1
+        """, limit)
+    out: List[Dict[str, Any]] = []
+    for r in rs:
+        role = (r["role"] or "").lower()
+        crm_type = _SB_ROLE_TO_CRM_TYPE.get(role)
+        if not crm_type:
+            continue
+        name = (r["profile_name"] or r["user_name"] or "").strip()
+        # Skip skeleton rows with no phone AND no name — they're not useful in a
+        # people directory.
+        raw_phone = (r["phone"] or "").strip()
+        phone = raw_phone[-10:] if raw_phone else ""
+        if not phone and not name:
+            continue
+        vstatus = (r["vstatus"] or r["verification_status"] or "").lower()
+        is_verified = vstatus == "approved"
+        out.append({
+            "supabase_user_id": str(r["id"]),
+            "name": name or f"User {phone[-4:]}" if phone else "Unnamed",
+            "type": crm_type,
+            "phone": phone,
+            "email": r["email"],
+            "city": r["city"],
+            "state": r["state"],
+            "address": r["address"],
+            "is_verified": is_verified,
+            "is_active": bool(r["is_active"]),
+            "kyc_status": "approved" if is_verified else "pending",
+            "pipeline_stage": "onboarded" if is_verified else "contacted",
+            "source": "supabase_sync",
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+        })
+    return out
+
