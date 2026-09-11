@@ -15,7 +15,13 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 43 (2026-02, this session) — Timeline Filters + CRM ↔ Trataxone Bidirectional Sync
+### Iter 44 (2026-02, this session) — Purge Test Users button (master admin)
+- **New "Purge test users" button** on the Trata Users toolbar (`/contacts`), visible only to master admins (`is_master_admin: true`). Red-tinted to signal destructive action.
+- **Two-step confirmation** — first click runs `POST /api/admin/purge-test-users` with `dry_run: true` to preview count + sample of matched names; a native `confirm()` shows the count and up to 5 example names before the actual sweep runs. Master-admin accounts always preserved (their names never match the test patterns).
+- **Wired to existing purge endpoint** — no new backend work. Same sweep patterns (`test`, `probe`, `it84`, `demo hospital`, `dr test` + exact matches for Sunrise Care, Metro Ambulance, UI Tester). Same soft-archive strategy in Supabase (preserves FK integrity) + hard-delete in Mongo.
+- **Ships preview→production**: preview stays clean (26 users, verified this session), production currently at 66 users (46 test) — user will click the button once after next deploy to clean production.
+
+### Iter 43 (2026-02) — Timeline Filters + CRM ↔ Trataxone Bidirectional Sync
 - **Timeline Filters**: pill filter on the patient detail timeline — `All / Admissions / Appointments / SOS / Rides`. Each pill shows a live per-kind count, greys out to disabled at count=0, and the active pill is tinted with its kind's colour (blue admission / purple appointment / red SOS / amber ride). Choice is remembered in `sessionStorage` (`patient-timeline-filter`) so tab-switches don't reset the view. "All" filter includes discharge sub-events under Admissions so hospital reviewers see the full arc.
 - **CRM → Supabase bidirectional sync** (Trataxone DB): new `upsert_user_from_crm()` helper mirrors CRM contact edits back into shared Supabase — `name` + `email` go to `users`, `city` + `state` + `address` go to the vertical profile (`hospital_profiles` / `ambulance_providers` / `doctors` / `pathologists`). Runs on every `PATCH /api/contacts/:id`. Matches by `supabase_user_id` first, falls back to phone (10-digit and `+91` variants). Never touches phone/role — those are identity.
 - **`ContactStatusUpdate` model extended** to accept `name`, `email`, `city`, `state`, `address` — the CRM edit UI can now push identity + location fields, and every edit auto-mirrors upstream.

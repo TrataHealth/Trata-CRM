@@ -3,8 +3,9 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { CONTACT_TYPES, PIPELINE_STAGES, typeLabel, fmtCurrency, relativeTime } from "../lib/constants";
-import { Filter, Download, CheckCircle2, XCircle, Search, UserPlus } from "lucide-react";
+import { Filter, Download, CheckCircle2, XCircle, Search, UserPlus, Trash2, Loader2 } from "lucide-react";
 import OnboardProviderModal from "../components/OnboardProviderModal";
+import { toast } from "sonner";
 
 export default function Contacts() {
   const [params, setParams] = useSearchParams();
@@ -19,6 +20,36 @@ export default function Contacts() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const canOnboard = !!(user?.is_master_admin || ["admin", "manager", "national_manager", "regional_manager", "zonal_manager", "area_manager"].includes(user?.role));
+  const canPurge = !!user?.is_master_admin;
+  const [purging, setPurging] = useState(false);
+
+  const purgeTestUsers = async () => {
+    // Two-step confirm: dry-run preview first, then actual purge.
+    try {
+      setPurging(true);
+      const { data: preview } = await api.post("/admin/purge-test-users", { dry_run: true });
+      if (!preview.would_delete) {
+        toast.success("No test users to purge — the directory is already clean.");
+        return;
+      }
+      const sample = (preview.targets || []).slice(0, 5).map((t) => `• ${t.name}`).join("\n");
+      const ok = window.confirm(
+        `This will archive ${preview.would_delete} test users from shared Supabase AND delete them from the CRM.\n\n` +
+        `Sample:\n${sample}${preview.would_delete > 5 ? `\n…and ${preview.would_delete - 5} more` : ""}\n\n` +
+        `Master admin accounts are always preserved. Continue?`
+      );
+      if (!ok) return;
+      const { data: result } = await api.post("/admin/purge-test-users", { dry_run: false });
+      toast.success(
+        `Purged ${result.supabase_users_archived} Supabase users, ${result.crm_contacts_deleted} CRM contacts.`
+      );
+      await fetch();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Purge failed");
+    } finally {
+      setPurging(false);
+    }
+  };
 
   const fetch = async () => {
     setLoading(true);
@@ -80,6 +111,18 @@ export default function Contacts() {
           >
             <Download className="h-4 w-4" /> Export CSV
           </button>
+          {canPurge && (
+            <button
+              data-testid="contacts-purge-test-btn"
+              onClick={purgeTestUsers}
+              disabled={purging}
+              title="Bulk-archive every test user from CRM + shared Supabase"
+              className="flex items-center gap-2 px-3 py-2 text-sm border border-[#DFE1E6] rounded-md text-[#BF2600] hover:bg-[#FFEBE6] hover:border-[#FF5630]/40 disabled:opacity-50 disabled:cursor-wait"
+            >
+              {purging ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              {purging ? "Purging…" : "Purge test users"}
+            </button>
+          )}
         </div>
       </div>
 
