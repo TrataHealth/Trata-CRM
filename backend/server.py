@@ -985,13 +985,24 @@ async def dashboard_stats(range_key: str = Query("7d", alias="range"), current=D
             return {**q, "created_at": {"$gte": since_iso}}
         return q
 
-    total_contacts = await db.contacts.count_documents({})
+    # Iter 45 — same test-user filter as the Trata Users directory so the
+    # Dashboard KPIs and the Users roster can't disagree.
+    _TEST_RX = {"$regex": r"(test|probe|it84|demo hospital|dr\s*test)", "$options": "i"}
+    _TEST_EXACT = ["Sunrise Care Hospital", "Metro Ambulance Ltd", "UI Tester"]
+    _REAL_ONLY: Dict[str, Any] = {
+        "$and": [
+            {"name": {"$not": _TEST_RX}},
+            {"name": {"$nin": _TEST_EXACT}},
+        ]
+    }
+
+    total_contacts = await db.contacts.count_documents(_REAL_ONLY)
     by_type = {}
     for t in ["patient", "doctor", "hospital", "paramedic", "ambulance_provider", "pathologist"]:
-        by_type[t] = await db.contacts.count_documents({"type": t})
+        by_type[t] = await db.contacts.count_documents({**_REAL_ONLY, "type": t})
 
-    verified = await db.contacts.count_documents({"is_verified": True})
-    pending = await db.contacts.count_documents({"is_verified": False})
+    verified = await db.contacts.count_documents({**_REAL_ONLY, "is_verified": True})
+    pending = await db.contacts.count_documents({**_REAL_ONLY, "is_verified": False})
 
     active_cases = await db.activities.count_documents(_scoped({
         "category": "emergency_case",
@@ -1221,6 +1232,13 @@ async def list_contacts(
             logger.warning(f"contacts auto-sync skipped: {e}")
 
     qry: Dict[str, Any] = {}
+    # Iter 45 — hide test rows from the roster at read-time, as a belt-and-
+    # braces defence against upstream test fixtures that may slip through
+    # the sync filters.
+    qry["name"] = {"$not": {"$regex": r"(test|probe|it84|demo hospital|dr\s*test)", "$options": "i"}}
+    qry["name_not_in"] = None  # placeholder removed below
+    del qry["name_not_in"]
+    qry["$and"] = [{"name": {"$nin": ["Sunrise Care Hospital", "Metro Ambulance Ltd", "UI Tester"]}}]
     if type:
         qry["type"] = type
     if pipeline_stage:

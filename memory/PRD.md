@@ -15,7 +15,16 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 44 (2026-02, this session) — Purge Test Users button (master admin)
+### Iter 45 (2026-02, this session) — Preview↔Production number mismatch · deep fix
+- **Root cause**: new test users were being created in the shared Supabase upstream (by QA teams on the mobile apps). The CRM's 60-second auto-sync faithfully brought them in because `list_all_users_for_crm_sync()` filtered by `is_archived` but didn't look at the name pattern. The `/dashboard/stats` KPI tiles also counted every Mongo contact, including legacy test rows that pre-dated my purge.
+- **Three-layer defence** against test-row pollution:
+  1. **Supabase sync** (`supabase_db.list_all_users_for_crm_sync`) — now skips names matching `test / probe / it84 / demo hospital / dr test` + exact matches for `Sunrise Care Hospital`, `Metro Ambulance Ltd`, `UI Tester` at the source. New upstream test fixtures never reach CRM.
+  2. **Admin-bridge sync** (`admin_bridge.sync_users_from_admin`) — same filter already applied in Iter 41, verified still active on the 5-min upstream pull.
+  3. **Read path** (`/api/contacts` + `/api/dashboard/stats`) — belt-and-braces regex filter so any legacy test rows in Mongo stay hidden from users even before a purge runs.
+- **Verified on preview**: Dashboard went from `33 total / 7 verified / 26 pending` → `28 total / 7 verified / 21 pending`. Role tiles reconciled with Trata Users roster. `/contacts?q=test` returns 0.
+- **For production**: redeploy will apply the same filter and the Dashboard KPIs will drop from 73→~26 on their own. The master-admin "Purge test users" button (Iter 44) is still available for a one-click hard cleanup if preferred.
+
+### Iter 44 (2026-02) — Purge Test Users button (master admin)
 - **New "Purge test users" button** on the Trata Users toolbar (`/contacts`), visible only to master admins (`is_master_admin: true`). Red-tinted to signal destructive action.
 - **Two-step confirmation** — first click runs `POST /api/admin/purge-test-users` with `dry_run: true` to preview count + sample of matched names; a native `confirm()` shows the count and up to 5 example names before the actual sweep runs. Master-admin accounts always preserved (their names never match the test patterns).
 - **Wired to existing purge endpoint** — no new backend work. Same sweep patterns (`test`, `probe`, `it84`, `demo hospital`, `dr test` + exact matches for Sunrise Care, Metro Ambulance, UI Tester). Same soft-archive strategy in Supabase (preserves FK integrity) + hard-delete in Mongo.

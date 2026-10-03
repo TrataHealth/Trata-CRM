@@ -1459,7 +1459,13 @@ async def list_all_users_for_crm_sync(limit: int = 2000) -> List[Dict[str, Any]]
     """Every non-admin user on the shared Trata platform + a best-match
     display name / city / state pulled from their vertical profile row.
     Shape is CRM-`contacts`-friendly so the caller can upsert straight into
-    Mongo."""
+    Mongo. Test users (name matches test/probe/it84/demo hospital/dr test
+    plus the known exact-match sentinels) are filtered out at the source so
+    they never leak into the CRM directory even if someone creates them in
+    the shared Supabase upstream."""
+    import re as _re
+    _TEST_RX = _re.compile(r"(test|probe|it84|demo hospital|dr\s*test)", _re.IGNORECASE)
+    _TEST_EXACT = {"Sunrise Care Hospital", "Metro Ambulance Ltd", "UI Tester"}
     pool = await get_pool()
     async with pool.acquire() as conn:
         rs = await conn.fetch("""
@@ -1498,6 +1504,10 @@ async def list_all_users_for_crm_sync(limit: int = 2000) -> List[Dict[str, Any]]
         if not crm_type:
             continue
         name = (r["profile_name"] or r["user_name"] or "").strip()
+        # Filter test fixtures at the source — the shared Supabase is used by
+        # many teams and QA, we don't want their test rows to appear in CRM.
+        if name and (_TEST_RX.search(name) or name in _TEST_EXACT):
+            continue
         # Skip skeleton rows with no phone AND no name — they're not useful in a
         # people directory.
         raw_phone = (r["phone"] or "").strip()
