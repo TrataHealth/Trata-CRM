@@ -5,7 +5,7 @@ import { relativeTime } from "../lib/constants";
 import {
   ArrowLeft, User, Phone, Mail, Calendar, HeartPulse, AlertTriangle,
   Bed, Ambulance, Activity, Loader2, ShieldCheck, FileText, MapPin,
-  Clock, LogOut,
+  Clock, LogOut, FlaskConical,
 } from "lucide-react";
 
 const T = {
@@ -78,7 +78,7 @@ export default function PatientDetail({ mode = "admin" }) {
     </div>
   );
 
-  const { patient, clinical_profile, emergency_cases = [], appointments = [], admissions = [], ambulance_rides = [] } = state.data || {};
+  const { patient, clinical_profile, emergency_cases = [], appointments = [], admissions = [], ambulance_rides = [], lab_bookings = [] } = state.data || {};
   const cp = clinical_profile || {};
 
   return (
@@ -129,6 +129,7 @@ export default function PatientDetail({ mode = "admin" }) {
         appointments={appointments}
         emergencyCases={emergency_cases}
         ambulanceRides={ambulance_rides}
+        labBookings={lab_bookings}
       />
 
       <ActivityList
@@ -155,10 +156,29 @@ export default function PatientDetail({ mode = "admin" }) {
         renderRow={(a) => (
           <>
             <div className="font-semibold text-[#091E42]">{a.reason || "Consultation"}</div>
+            <div className="text-[11px] text-[#5E6C84]">{a.doctor_name || "—"}{a.hospital_name ? ` · ${a.hospital_name}` : ""}</div>
             <div className="text-[11px] text-[#5E6C84]">{a.appointment_date || "—"} · {a.time_slot || "—"}</div>
           </>
         )}
         renderRight={(a) => <StatusChip status={a.status} />}
+      />
+
+      <ActivityList
+        title="Lab tests" icon={FlaskConical} rows={lab_bookings}
+        empty="No lab / diagnostic bookings yet."
+        renderRow={(b) => (
+          <>
+            <div className="font-semibold text-[#091E42]">{b.booking_id || b.id.slice(0, 8)} · {b.pathologist_name || "Lab"}</div>
+            <div className="text-[11px] text-[#5E6C84]">{(b.tests || []).map(t => t.testName || t.name).filter(Boolean).join(", ") || "—"}</div>
+            <div className="text-[10px] text-[#5E6C84]">{b.scheduled_date || "—"} · {b.scheduled_time || "—"} · {(b.service_type || "").replace(/_/g, " ")}</div>
+          </>
+        )}
+        renderRight={(b) => (
+          <div className="flex flex-col items-end gap-1 text-[11px] text-[#5E6C84]">
+            <StatusChip status={b.status} />
+            <span>₹ {b.total_amount ?? "—"}</span>
+          </div>
+        )}
       />
 
       <ActivityList
@@ -230,6 +250,7 @@ const TL_KIND = {
   appointment: { icon: Calendar,tone: "bg-[#EAE6FF] text-[#403294]", ring: "ring-[#5243AA]", label: "Appointment" },
   emergency: { icon: Activity,  tone: "bg-[#FFEBE6] text-[#BF2600]", ring: "ring-[#BF2600]", label: "SOS · Emergency" },
   ride:      { icon: Ambulance, tone: "bg-[#FFFAE6] text-[#974F0C]", ring: "ring-[#FF991F]", label: "Ambulance ride" },
+  lab:       { icon: FlaskConical, tone: "bg-[#E6FCFF] text-[#008DA6]", ring: "ring-[#00A3BF]", label: "Lab test" },
 };
 
 function fmtDate(iso) {
@@ -242,7 +263,7 @@ function fmtDate(iso) {
   } catch { return String(iso); }
 }
 
-function TimelineFeed({ admissions = [], appointments = [], emergencyCases = [], ambulanceRides = [] }) {
+function TimelineFeed({ admissions = [], appointments = [], emergencyCases = [], ambulanceRides = [], labBookings = [] }) {
   const [activeFilter, setActiveFilter] = React.useState(() => {
     try { return sessionStorage.getItem("patient-timeline-filter") || "all"; }
     catch { return "all"; }
@@ -306,6 +327,15 @@ function TimelineFeed({ admissions = [], appointments = [], emergencyCases = [],
     fare: r.total_fare,
   }));
 
+  labBookings.forEach((b) => events.push({
+    id: `lab-${b.id}`,
+    at: b.created_at,
+    kind: "lab",
+    title: b.booking_id ? `Lab test · ${b.booking_id}` : "Lab test",
+    subtitle: (b.tests || []).map(t => t.testName || t.name).filter(Boolean).join(", ") || b.pathologist_name || "—",
+    status: b.status,
+  }));
+
   // Sort newest first
   events.sort((a, b) => {
     const ta = a.at ? new Date(a.at).getTime() : 0;
@@ -314,7 +344,7 @@ function TimelineFeed({ admissions = [], appointments = [], emergencyCases = [],
   });
 
   // Per-kind counts drive the pill filter labels
-  const counts = { all: events.length, admission: 0, discharge: 0, appointment: 0, emergency: 0, ride: 0 };
+  const counts = { all: events.length, admission: 0, discharge: 0, appointment: 0, emergency: 0, ride: 0, lab: 0 };
   events.forEach((e) => { counts[e.kind] = (counts[e.kind] || 0) + 1; });
 
   const FILTER_PILLS = [
@@ -323,6 +353,7 @@ function TimelineFeed({ admissions = [], appointments = [], emergencyCases = [],
     { key: "appointment", label: "Appointments",  tone: "bg-[#EAE6FF] text-[#403294]" },
     { key: "emergency",   label: "SOS",           tone: "bg-[#FFEBE6] text-[#BF2600]" },
     { key: "ride",        label: "Rides",         tone: "bg-[#FFFAE6] text-[#974F0C]" },
+    { key: "lab",         label: "Lab tests",     tone: "bg-[#E6FCFF] text-[#008DA6]" },
   ];
 
   const filtered = activeFilter === "all"

@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { toast } from "sonner";
 import {
   UserPlus, Building2, Ambulance, Stethoscope, FlaskConical,
-  ShieldCheck, ChevronRight, Loader2, AlertTriangle, RefreshCw, ArrowUpRight,
+  ShieldCheck, ChevronRight, Loader2, AlertTriangle, RefreshCw, ArrowUpRight, MapPin,
 } from "lucide-react";
 
 const T = {
@@ -37,7 +37,7 @@ function StatusChip({ status }) {
 
 const emptyForm = {
   phone: "", name: "", vertical: "hospital",
-  city: "", state: "", email: "", address: "",
+  city: "", state: "", email: "", address: "", lat: "", lng: "",
 };
 
 export default function AdminOnboarding() {
@@ -46,6 +46,22 @@ export default function AdminOnboarding() {
   const [form, setForm] = useState(emptyForm);
   const [busy, setBusy] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [geo, setGeo] = useState({ busy: false, results: [] });
+
+  const lookup = async () => {
+    const q = [form.address, form.city, form.state].filter(Boolean).join(", ");
+    if (q.length < 3) return toast.error("Enter address / city first");
+    setGeo({ busy: true, results: [] });
+    try {
+      const { data } = await api.get("/admin/geocode", { params: { q } });
+      if (!data.results?.length) toast.error("No match — enter lat/lng manually");
+      else setForm(f => ({ ...f, lat: String(data.results[0].lat), lng: String(data.results[0].lng) }));
+      setGeo({ busy: false, results: data.results || [] });
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Lookup failed");
+      setGeo({ busy: false, results: [] });
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -60,9 +76,14 @@ export default function AdminOnboarding() {
   const submit = async () => {
     if (!form.name.trim()) return toast.error("Provider name is required");
     if (!/^\d{10}$/.test(form.phone)) return toast.error("Enter a valid 10-digit phone");
+    const lat = parseFloat(form.lat), lng = parseFloat(form.lng);
+    const hasLoc = Number.isFinite(lat) && Number.isFinite(lng);
+    if (form.vertical !== "doctor" && !hasLoc) return toast.error("Latitude & longitude are required for patient-app discovery");
     setBusy(true);
     try {
-      const { data } = await api.post("/admin/onboarding/providers", form);
+      const { data } = await api.post("/admin/onboarding/providers", {
+        ...form, lat: hasLoc ? lat : null, lng: hasLoc ? lng : null,
+      });
       toast.success(data.already_existed
         ? "Provider already existed on Trata — jumping to KYC"
         : `${form.name} onboarded — now upload the KYC docs`);
@@ -157,6 +178,33 @@ export default function AdminOnboarding() {
                   onChange={e => setForm({ ...form, address: e.target.value })}
                   data-testid="admin-onb-address" />
               </label>
+            </div>
+            <div className="border border-dashed border-[#DFE1E6] rounded-md p-3 space-y-2" data-testid="admin-onb-location">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold flex items-center gap-1">
+                  <MapPin className="h-3 w-3" /> Location {form.vertical !== "doctor" ? "*" : "(optional)"}
+                </div>
+                <button type="button" className={T.btnGhost} onClick={lookup} disabled={geo.busy} data-testid="admin-onb-geocode">
+                  {geo.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MapPin className="h-3.5 w-3.5" />} Look up from address
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-[11px] text-[#42526E]">Latitude
+                  <input className={T.input} value={form.lat} inputMode="decimal" placeholder="19.2352"
+                    onChange={e => setForm({ ...form, lat: e.target.value })} data-testid="admin-onb-lat" />
+                </label>
+                <label className="text-[11px] text-[#42526E]">Longitude
+                  <input className={T.input} value={form.lng} inputMode="decimal" placeholder="72.8408"
+                    onChange={e => setForm({ ...form, lng: e.target.value })} data-testid="admin-onb-lng" />
+                </label>
+              </div>
+              {geo.results.length > 1 && (
+                <select className={T.input} data-testid="admin-onb-geocode-results"
+                  onChange={e => { const r = geo.results[+e.target.value]; setForm(f => ({ ...f, lat: String(r.lat), lng: String(r.lng) })); }}>
+                  {geo.results.map((r, i) => <option key={i} value={i}>{r.label}</option>)}
+                </select>
+              )}
+              <p className="text-[10px] text-[#5E6C84]">Patients discover providers by distance — without coordinates the provider won&apos;t appear in the Patient App.</p>
             </div>
             <div className="flex justify-end gap-2 pt-1">
               <button className={T.btnGhost} onClick={() => { setForm(emptyForm); setShowForm(false); }}>Cancel</button>

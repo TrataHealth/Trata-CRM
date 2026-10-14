@@ -86,13 +86,24 @@ export default function AdminProviderKyc() {
       "The mobile Provider App and Trata Admin App will unlock this provider immediately."
     )) return;
     setApproving(true);
+    const post = (body) => api.post(`/admin/onboarding/providers/${userId}/approve-all`, body || {});
     try {
-      const { data } = await api.post(`/admin/onboarding/providers/${userId}/approve-all`);
-      toast.success(`${data.docs_approved} docs approved · provider is now VERIFIED`);
+      let res;
+      try { res = await post(); }
+      catch (e) {
+        if (e?.response?.data?.detail?.error !== "location_missing") throw e;
+        const v = window.prompt("This provider has no location. Enter latitude,longitude (e.g. 19.2352,72.8408):");
+        if (!v) { toast.error("Approval cancelled — location required"); return; }
+        const [lat, lng] = v.split(",").map(x => parseFloat(x.trim()));
+        res = await post({ lat, lng });
+      }
+      toast.success(`${res.data.docs_approved} docs approved · provider is now VERIFIED`);
       await load();
     } catch (e) {
       const detail = e?.response?.data?.detail;
-      if (typeof detail === "object" && detail?.missing) {
+      if (typeof detail === "object" && detail?.message && !detail?.missing) {
+        toast.error(detail.message);
+      } else if (typeof detail === "object" && detail?.missing) {
         toast.error(`${detail.message} (missing: ${detail.missing.join(", ")})`);
       } else {
         toast.error(detail || "Approval failed");

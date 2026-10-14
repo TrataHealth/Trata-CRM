@@ -523,7 +523,7 @@ async def _try_supabase_provider_lookup(phone: str) -> Optional[dict]:
             "doctor":    "doctors",
             "paramedic": "paramedic_profiles",
             "pathology": "pathologists",
-            "pharmacy":  "pharmacy_profiles",
+            "pharmacy":  "pharmacy_providers",
         }
         profile_id = None
         table = _PROFILE_TABLE.get(provider_type)
@@ -1429,6 +1429,39 @@ class AdminOnboardProviderBody(BaseModel):
     state: Optional[str] = None
     email: Optional[str] = None
     address: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+
+
+class AdminApproveBody(BaseModel):
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+
+
+@api.get("/admin/geocode")
+async def admin_geocode(q: str = Query(..., min_length=3), current=Depends(get_current_user)):
+    """Address → lat/lng lookup (OpenStreetMap Nominatim) for onboarding forms."""
+    if not is_internal(current):
+        raise HTTPException(status_code=403, detail="Internal staff only")
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get("https://nominatim.openstreetmap.org/search",
+                                 params={"q": q, "format": "json", "limit": 5, "countrycodes": "in"},
+                                 headers={"User-Agent": "Trata-CRM/1.0 (onboarding geocoder)"})
+            r.raise_for_status()
+            rows = r.json()
+    except Exception as e:
+        logger.warning(f"geocode failed: {e}")
+        raise HTTPException(status_code=502, detail="Address lookup unavailable — enter lat/lng manually")
+    return {"results": [{"lat": float(x["lat"]), "lng": float(x["lon"]), "label": x.get("display_name")} for x in rows]}
+
+
+@api.post("/admin/migrations/hospital-verified")
+async def admin_migrate_hospital_verified(current=Depends(get_current_user)):
+    """One-shot F4 enum migration: hospital_profiles 'approved' → 'verified'."""
+    _require_admin(current)
+    return await sb.migrate_hospital_approved_to_verified()
 
 
 @api.post("/admin/onboarding/providers")
@@ -1446,12 +1479,15 @@ async def admin_onboarding_create_provider(body: AdminOnboardProviderBody, curre
         raise HTTPException(status_code=400, detail="Name is required")
     if not phone or len(phone) != 10:
         raise HTTPException(status_code=400, detail="A valid 10-digit phone is required")
+    if body.vertical != "doctor" and not sb.valid_coords(body.lat, body.lng):
+        raise HTTPException(status_code=400, detail="Valid latitude and longitude are required so the provider is discoverable in the Patient App")
 
     # 1) Supabase user + vertical profile (source of truth · Provider App reads this)
     sb_res = await sb.create_provider_from_admin(
         phone=phone, name=name, vertical=body.vertical,
         city=body.city, state=body.state, email=body.email, address=body.address,
         onboarded_by=current.get("name") or current.get("phone"),
+        lat=body.lat, lng=body.lng,
     )
     if not sb_res.get("success"):
         raise HTTPException(status_code=400, detail=sb_res.get("reason", "onboard_failed"))
@@ -1609,7 +1645,8 @@ async def admin_onboarding_kyc_upload(user_id: str, body: AdminKycUploadBody, cu
 
 
 @api.post("/admin/onboarding/providers/{user_id}/approve-all")
-async def admin_onboarding_approve_all(user_id: str, current=Depends(get_current_user)):
+async def admin_onboarding_approve_all(user_id: str, body: Optional[AdminApproveBody] = None,
+                                       current=Depends(get_current_user)):
     """One-click bulk KYC approval. Every submitted/pending doc → approved,
     vertical profile → verified, `users.verification_status` → approved.
     Refuses to run if a *required* doc is still missing."""
@@ -1640,7 +1677,13 @@ async def admin_onboarding_approve_all(user_id: str, current=Depends(get_current
     res = await sb.approve_all_provider_kyc(
         user_id=user_id, vertical=vertical,
         admin_name=current.get("name") or current.get("phone"),
+        lat=body.lat if body else None, lng=body.lng if body else None,
     )
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail={
+            "error": res.get("reason"),
+            "message": "Add the provider's latitude/longitude before approving — patients can't discover it without a location.",
+        })
     # Mirror the approval into CRM contacts so KYC queue reflects it too.
     try:
         await db.contacts.update_many(
@@ -3838,13 +3881,6 @@ async def seed_demo_accounts(current=Depends(get_current_user)):
                         SELECT $1::text, $2::text, $3, $3, $4, $5, $6, 'pending', TRUE, now()
                          WHERE NOT EXISTS (SELECT 1 FROM public.pathologists WHERE user_id = $2::text)""",
                         sb_profile_id, sb_user_id, name, phone, city, state)
-                elif ptype == "pharmacy":
-                    await conn.execute("""
-                        INSERT INTO public.pharmacy_profiles
-                          (id, user_id, pharmacy_name, owner_name, phone, city, state, verification_status, is_active, created_at)
-                        VALUES ($1, $2, $3, $3, $4, $5, $6, 'pending', TRUE, now())
-                        ON CONFLICT (user_id) DO NOTHING""",
-                        sb_profile_id, sb_user_id, name, phone, city, state)
             return sb_user_id
         except Exception as e:
             logger.warning(f"demo-seed Supabase mirror for {phone}/{ptype} failed: {e}")
@@ -5475,6 +5511,40 @@ async def provider_pc_dashboard(current=Depends(get_current_user)):
 
 
 
+# ── Ambulance allocation (canonical ambulance_allocations) ─────────────────
+def _require_ambulance(current) -> None:
+    if current.get("role") != "provider_owner" or current.get("provider_type") != "ambulance":
+        raise HTTPException(status_code=403, detail="Ambulance provider only")
+    if not _supabase_ready():
+        raise HTTPException(status_code=503, detail="Supabase not configured")
+
+
+class AssignAmbulanceBody(BaseModel):
+    ambulance_id: str
+
+
+class AllocationStatusBody(BaseModel):
+    status: str  # dispatched | arrived | completed
+
+
+@api.post("/provider/ambulance/cases/{case_id}/assign")
+async def provider_assign_ambulance(case_id: str, body: AssignAmbulanceBody, current=Depends(get_current_user)):
+    _require_ambulance(current)
+    res = await sb.assign_ambulance_to_case(current.get("supabase_user_id") or current["id"], case_id, body.ambulance_id)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("reason", "assign_failed"))
+    return res
+
+
+@api.post("/provider/ambulance/allocations/{allocation_id}/status")
+async def provider_allocation_status(allocation_id: str, body: AllocationStatusBody, current=Depends(get_current_user)):
+    _require_ambulance(current)
+    res = await sb.update_ambulance_allocation(current.get("supabase_user_id") or current["id"], allocation_id, body.status)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("reason", "update_failed"))
+    return res
+
+
 # ── Hospital Emergency Command Centre (Phase 3 write-parity) ────────────────
 def _require_hospital(current) -> None:
     if current.get("role") != "provider_owner" or current.get("provider_type") != "hospital":
@@ -5596,12 +5666,17 @@ async def hospital_admit(case_id: str, body: AdmitRequest, current=Depends(get_c
 class DischargeRequest(BaseModel):
     outcome: Optional[str] = "discharged"
     notes: Optional[str] = None
+    final_diagnosis: Optional[str] = None
+    follow_up_instructions: Optional[str] = None
+    condition_at_discharge: Optional[str] = None
 
 
 @api.post("/hospital/admissions/{admission_id}/discharge")
 async def hospital_discharge(admission_id: str, body: DischargeRequest, current=Depends(get_current_user)):
     _require_hospital(current)
-    res = await sb.discharge_patient(_hospital_user_id(current), admission_id, body.outcome, body.notes)
+    res = await sb.discharge_patient(_hospital_user_id(current), admission_id, body.outcome, body.notes,
+                                     body.final_diagnosis, body.follow_up_instructions,
+                                     body.condition_at_discharge, current.get("name"))
     if not res.get("success"):
         raise HTTPException(status_code=400, detail=res.get("reason", "discharge_failed"))
     return res

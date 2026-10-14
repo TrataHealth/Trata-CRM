@@ -234,7 +234,7 @@ async def fetch_kyc_overview() -> List[Dict[str, Any]]:
          LEFT JOIN public.ambulance_providers ap ON ap.user_id = u.id
          LEFT JOIN public.hospital_profiles  hp ON hp.user_id = u.id
              WHERE u.role IN ('ambulance_provider','hospital','doctor','paramedic','lab','pathologist','pharmacy')
-          ORDER BY (case when lower(coalesce(u.verification_status,'')) in ('pending','submitted','') then 0 else 1 end),
+          ORDER BY (case when lower(coalesce(u.verification_status,'')) in ('pending','pending_review','pending_address','submitted','') then 0 else 1 end),
                    u.created_at DESC NULLS LAST
         """)
     return _rows(rs)
@@ -340,6 +340,15 @@ async def fetch_ambulance_provider_dashboard(user_id: str) -> Dict[str, Any]:
                 WHERE ambulance_provider_id=$1
              ORDER BY created_at DESC NULLS LAST
                 LIMIT 10""", pid)
+        allocations = await conn.fetch(
+            """SELECT a.id, a.case_id, a.ambulance_id, a.status, a.assigned_by,
+                      a.allocated_at, a.dispatched_at, a.arrived_at, a.completed_at,
+                      a.response_time_minutes, am.vehicle_number
+                 FROM public.ambulance_allocations a
+            LEFT JOIN public.ambulances am ON am.id = a.ambulance_id
+                WHERE a.ambulance_provider_id=$1
+             ORDER BY a.allocated_at DESC NULLS LAST
+                LIMIT 20""", pid)
         fleet = await conn.fetch(
             """SELECT id, vehicle_number, ambulance_type, model, status,
                       assigned_driver_name, assigned_driver_phone,
@@ -367,7 +376,69 @@ async def fetch_ambulance_provider_dashboard(user_id: str) -> Dict[str, Any]:
         "kpis": dict(kpi_row) if kpi_row else {},
         "recent_cases": recent_rows,
         "fleet": fleet_rows,
+        "allocations": _rows(allocations),
     }
+
+
+_ALLOC_CASE_STATUS = {"assigned": "AMBULANCE_ASSIGNED", "dispatched": "EN_ROUTE",
+                      "arrived": "ARRIVED", "completed": "COMPLETED"}
+_ALLOC_TS_COL = {"dispatched": "dispatched_at", "arrived": "arrived_at", "completed": "completed_at"}
+
+
+async def assign_ambulance_to_case(user_id: str, case_id: str, ambulance_id: str) -> Dict[str, Any]:
+    """Ambulance provider assigns one of its vehicles → ambulance_allocations row
+    (canonical D2) + emergency_cases ambulance fields."""
+    import uuid as _uuid
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        pid = await conn.fetchval("SELECT id FROM public.ambulance_providers WHERE user_id=$1", user_id)
+        if not pid:
+            return {"success": False, "reason": "ambulance_provider_missing"}
+        case = await conn.fetchrow("SELECT id, ambulance_provider_id, status FROM public.emergency_cases WHERE id=$1", case_id)
+        if not case:
+            return {"success": False, "reason": "case_not_found"}
+        if case["ambulance_provider_id"] and case["ambulance_provider_id"] != pid:
+            return {"success": False, "reason": "case_assigned_to_other_provider"}
+        if not await conn.fetchval("SELECT 1 FROM public.ambulances WHERE id=$1 AND provider_id=$2", ambulance_id, pid):
+            return {"success": False, "reason": "ambulance_not_in_fleet"}
+        alloc_id = str(_uuid.uuid4())
+        async with conn.transaction():
+            await conn.execute("""
+                UPDATE public.ambulance_allocations SET status='reassigned'
+                 WHERE case_id=$1 AND status IN ('assigned','dispatched')""", case_id)
+            await conn.execute("""
+                INSERT INTO public.ambulance_allocations
+                  (id, case_id, ambulance_provider_id, ambulance_id, status, assigned_by, allocated_at, created_at)
+                VALUES ($1::text, $2, $3, $4, 'assigned', $5, now(), now())
+            """, alloc_id, case_id, pid, ambulance_id, user_id)
+            await conn.execute("""
+                UPDATE public.emergency_cases SET ambulance_provider_id=$2, ambulance_id=$3,
+                       status='AMBULANCE_ASSIGNED', updated_at=now() WHERE id=$1
+            """, case_id, pid, ambulance_id)
+    return {"success": True, "allocation_id": alloc_id, "case_id": case_id, "ambulance_id": ambulance_id}
+
+
+async def update_ambulance_allocation(user_id: str, allocation_id: str, status: str) -> Dict[str, Any]:
+    if status not in _ALLOC_TS_COL:
+        return {"success": False, "reason": "invalid_status"}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        pid = await conn.fetchval("SELECT id FROM public.ambulance_providers WHERE user_id=$1", user_id)
+        a = await conn.fetchrow("SELECT id, case_id, allocated_at FROM public.ambulance_allocations WHERE id=$1 AND ambulance_provider_id=$2",
+                                allocation_id, pid)
+        if not a:
+            return {"success": False, "reason": "allocation_not_found"}
+        col = _ALLOC_TS_COL[status]
+        async with conn.transaction():
+            await conn.execute(f"""
+                UPDATE public.ambulance_allocations SET status=$2, {col}=now(),
+                       response_time_minutes = CASE WHEN $2='arrived'
+                         THEN (extract(epoch FROM now() - allocated_at)/60)::int ELSE response_time_minutes END
+                 WHERE id=$1""", allocation_id, status)
+            if a["case_id"]:
+                await conn.execute("UPDATE public.emergency_cases SET status=$2, updated_at=now() WHERE id=$1",
+                                   a["case_id"], _ALLOC_CASE_STATUS[status])
+    return {"success": True, "allocation_id": allocation_id, "status": status}
 
 
 # Vertical → (table, business-name column, extra columns) so we can render every
@@ -377,7 +448,7 @@ _VERTICAL_PROFILE_SPEC = {
     "doctor":     ("doctors",            "full_name",    ["specialization", "qualification", "experience", "doctor_type"]),
     "paramedic":  ("paramedic_profiles", "full_name",    ["skills", "average_response_time", "total_cases_handled", "rating"]),
     "pathology":  ("pathologists",       "lab_name",     ["registration_number", "gst_number", "display_name"]),
-    "pharmacy":   ("pharmacy_profiles",  "pharmacy_name",["drug_licence_number", "pharmacist_name", "gst_number", "owner_name"]),
+    "pharmacy":   ("pharmacy_providers", "business_name",["drug_license_number", "gst_number", "owner_name"]),
 }
 
 
@@ -631,6 +702,30 @@ async def decline_emergency_case(user_id: str, case_id: str, reason: Optional[st
     return {"success": True, "case_id": case_id, "reason_recorded": bool(reason)}
 
 
+async def _sync_bed_inventory(conn, hospital_id: str, bed_type: Optional[str]) -> None:
+    """Recompute hospital_bed_inventory for one (hospital_id=users.id, bed_type) from hospital_beds."""
+    if not bed_type:
+        return
+    c = await conn.fetchrow("""
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE is_available) AS free,
+               count(*) FILTER (WHERE NOT coalesce(is_available, FALSE)) AS occ,
+               round(avg(nullif(daily_rate, 0)))::int AS rate
+          FROM public.hospital_beds WHERE hospital_id=$1 AND bed_type=$2""", hospital_id, bed_type)
+    r = await conn.execute("""
+        UPDATE public.hospital_bed_inventory
+           SET total_count=$3, available_count=$4, occupied_count=$5,
+               rate_per_day=COALESCE($6, rate_per_day), last_updated=now()
+         WHERE hospital_id=$1 AND bed_type=$2""", hospital_id, bed_type, c["total"], c["free"], c["occ"], c["rate"])
+    if r.endswith(" 0"):
+        await conn.execute("""
+            INSERT INTO public.hospital_bed_inventory
+              (id, hospital_id, bed_type, total_count, available_count, occupied_count, reserved_count,
+               rate_per_day, last_updated, created_at)
+            VALUES ($1::text, $2, $3, $4, $5, $6, 0, $7, now(), now())
+        """, str(__import__("uuid").uuid4()), hospital_id, bed_type, c["total"], c["free"], c["occ"], c["rate"])
+
+
 async def toggle_bed(user_id: str, bed_id: str, is_available: bool,
                      reason: str = "manual_toggle") -> Dict[str, Any]:
     """Flip a bed's availability + write a bed_status_logs row for audit."""
@@ -658,6 +753,7 @@ async def toggle_bed(user_id: str, bed_id: str, is_available: bool,
               (id, hospital_id, bed_type, previous_available, new_available, change_reason, changed_by, created_at)
             VALUES ($1::text, $2, $3, $4, $5, $6, $7, now())
         """, str(__import__("uuid").uuid4()), hospital_id, bed["bed_type"], prev_free, new_free, reason, user_id)
+        await _sync_bed_inventory(conn, hospital_id, bed["bed_type"])
     return {"success": True, "bed_id": bed_id, "is_available": is_available,
             "previous_available": prev_free, "new_available": new_free}
 
@@ -677,6 +773,7 @@ async def add_hospital_bed(user_id: str, bed_type: str, bed_number: str,
               (id, hospital_id, bed_type, bed_number, ward, is_available, daily_rate, created_at, updated_at)
             VALUES ($1::text, $2, $3, $4, $5, TRUE, $6, now(), now())
         """, bed_id, hospital_id, bed_type, bed_number, ward, daily_rate)
+        await _sync_bed_inventory(conn, hospital_id, bed_type)
     return {"success": True, "bed_id": bed_id}
 
 
@@ -782,6 +879,7 @@ async def admit_from_case(user_id: str, case_id: str, bed_id: Optional[str],
             await conn.execute(
                 "UPDATE public.hospital_beds SET is_available=FALSE, patient_id=$1, updated_at=now() WHERE id=$2",
                 patient_id, bed_id)
+            await _sync_bed_inventory(conn, hospital_id, bed["bed_type"])
         await conn.execute("""
             INSERT INTO public.patient_admissions
               (id, admission_number, patient_id, hospital_id, admission_type, case_type,
@@ -801,7 +899,11 @@ async def admit_from_case(user_id: str, case_id: str, bed_id: Optional[str],
 
 
 async def discharge_patient(user_id: str, admission_id: str,
-                            outcome: Optional[str], notes: Optional[str]) -> Dict[str, Any]:
+                            outcome: Optional[str], notes: Optional[str],
+                            final_diagnosis: Optional[str] = None,
+                            follow_up_instructions: Optional[str] = None,
+                            condition_at_discharge: Optional[str] = None,
+                            prepared_by_name: Optional[str] = None) -> Dict[str, Any]:
     """Set discharge_time + status=discharged, free the bed, and optionally append
     an admission_notes row with the discharge summary."""
     hospital_id = await _hospital_owner_user_id(user_id)
@@ -811,19 +913,29 @@ async def discharge_patient(user_id: str, admission_id: str,
     pool = await get_pool()
     async with pool.acquire() as conn:
         adm = await conn.fetchrow(
-            "SELECT id, bed_id, emergency_case_id, hospital_id FROM public.patient_admissions WHERE id=$1",
+            "SELECT id, bed_id, emergency_case_id, hospital_id, chief_complaint FROM public.patient_admissions WHERE id=$1",
             admission_id)
         if not adm or adm["hospital_id"] != hospital_id:
             return {"success": False, "reason": "admission_not_ours"}
+        summary_id = str(_uuid.uuid4())
+        await conn.execute("""
+            INSERT INTO public.discharge_summaries
+              (id, admission_id, discharge_type, admission_diagnosis, final_diagnosis, treatment_given,
+               condition_at_discharge, follow_up_instructions, prepared_by_id, prepared_by_name,
+               discharge_time, created_at, updated_at)
+            VALUES ($1::text, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), now(), now())
+        """, summary_id, admission_id, outcome or "discharged", adm["chief_complaint"], final_diagnosis,
+             notes, condition_at_discharge, follow_up_instructions, user_id, prepared_by_name)
         await conn.execute("""
             UPDATE public.patient_admissions
                SET status = 'discharged', discharge_time = now(), updated_at = now()
              WHERE id = $1
         """, admission_id)
         if adm["bed_id"]:
-            await conn.execute(
-                "UPDATE public.hospital_beds SET is_available=TRUE, patient_id=NULL, updated_at=now() WHERE id=$1",
+            bt = await conn.fetchval(
+                "UPDATE public.hospital_beds SET is_available=TRUE, patient_id=NULL, updated_at=now() WHERE id=$1 RETURNING bed_type",
                 adm["bed_id"])
+            await _sync_bed_inventory(conn, hospital_id, bt)
         if adm["emergency_case_id"]:
             await conn.execute(
                 "UPDATE public.emergency_cases SET status='COMPLETED', updated_at=now() WHERE id=$1",
@@ -834,7 +946,7 @@ async def discharge_patient(user_id: str, admission_id: str,
                   (id, admission_id, note_type, title, content, author_id, author_role, is_critical, created_at)
                 VALUES ($1::text, $2, 'discharge', 'Discharge summary', $3, $4, 'hospital', FALSE, now())
             """, str(_uuid.uuid4()), admission_id, notes, user_id)
-    return {"success": True, "outcome": outcome or "discharged"}
+    return {"success": True, "outcome": outcome or "discharged", "discharge_summary_id": summary_id}
 
 
 # ── Full vertical profile fetch (Iter 36 · Profile parity with mobile app) ──
@@ -1117,28 +1229,41 @@ _SB_ROLE_BY_VERTICAL = {
 }
 
 
+def valid_coords(lat: Any, lng: Any) -> bool:
+    try:
+        lat, lng = float(lat), float(lng)
+    except (TypeError, ValueError):
+        return False
+    return -90 <= lat <= 90 and -180 <= lng <= 180 and not (lat == 0 and lng == 0)
+
+
 async def create_provider_from_admin(phone: str, name: str, vertical: str,
                                      city: Optional[str], state: Optional[str],
                                      email: Optional[str], address: Optional[str],
-                                     onboarded_by: Optional[str]) -> Dict[str, Any]:
-    """Create a provider directly in shared Supabase: `users` row + vertical
-    profile row. Idempotent on phone — returns the existing user_id if the
-    phone already has a row. Runs one transaction so a mid-flight failure
-    doesn't leave orphaned users."""
+                                     onboarded_by: Optional[str],
+                                     lat: Optional[float] = None,
+                                     lng: Optional[float] = None) -> Dict[str, Any]:
+    """Canonical onboarding: `users` row + canonical profile row (user_id = users.id)
+    with coordinates in each table's native shape. Never writes tratax_tenants."""
     sb_role = _SB_ROLE_BY_VERTICAL.get(vertical)
     if not sb_role:
         return {"success": False, "reason": f"unsupported_vertical:{vertical}"}
+    has_loc = valid_coords(lat, lng)
+    if vertical != "doctor" and not has_loc:
+        return {"success": False, "reason": "valid_lat_lng_required"}
+    loc_json = json.dumps({"lat": float(lat), "lng": float(lng)}) if has_loc else None
+    flat = float(lat) if has_loc else None
+    flng = float(lng) if has_loc else None
     import uuid as _uuid
     pool = await get_pool()
+    existing = None
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # 1) users row — reuse if the phone is already registered.
             existing = await conn.fetchrow(
                 "SELECT id, role, verification_status FROM public.users WHERE phone IN ($1, $2) LIMIT 1",
                 phone, f"+91{phone}")
             if existing:
                 user_id = str(existing["id"])
-                # If the existing account is a wildly different role, don't clobber.
                 if existing["role"] and existing["role"] not in {sb_role, "patient", None}:
                     return {"success": False, "reason": f"phone_already_registered_as:{existing['role']}", "user_id": user_id}
             else:
@@ -1148,22 +1273,28 @@ async def create_provider_from_admin(phone: str, name: str, vertical: str,
                          (id, phone, name, role, is_active, verification_status, email, created_at)
                        VALUES ($1, $2, $3, $4, TRUE, 'pending', $5, now())""",
                     user_id, phone, name, sb_role, email)
-            # 2) vertical profile — only create if absent.
             prof_id = str(_uuid.uuid4())
             if vertical == "hospital":
                 await conn.execute("""
                     INSERT INTO public.hospital_profiles
-                      (id, user_id, name, phone, city, state, address, verification_status, created_at)
-                    SELECT $1::text, $2::text, $3, $4, $5, $6, $7, 'pending', now()
+                      (id, user_id, name, phone, city, state, address, location, verification_status, created_at)
+                    SELECT $1::text, $2::text, $3, $4, $5, $6, $7, $8::json, 'pending_review', now()
                      WHERE NOT EXISTS (SELECT 1 FROM public.hospital_profiles WHERE user_id = $2::text)
-                """, prof_id, user_id, name, phone, city, state, address)
+                """, prof_id, user_id, name, phone, city, state, address, loc_json)
+                await conn.execute(
+                    "UPDATE public.hospital_profiles SET location=$2::json WHERE user_id=$1::text AND location IS NULL",
+                    user_id, loc_json)
             elif vertical == "ambulance":
                 await conn.execute("""
                     INSERT INTO public.ambulance_providers
-                      (id, user_id, business_name, owner_name, phone, city, state, address, email, status, created_at)
-                    SELECT $1::text, $2::text, $3, $3, $4, $5, $6, $7, $8, 'pending', now()
+                      (id, user_id, business_name, owner_name, phone, city, state, address, email,
+                       business_lat, business_lng, status, onboarded_by, created_at)
+                    SELECT $1::text, $2::text, $3, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, now()
                      WHERE NOT EXISTS (SELECT 1 FROM public.ambulance_providers WHERE user_id = $2::text)
-                """, prof_id, user_id, name, phone, city, state, address, email)
+                """, prof_id, user_id, name, phone, city, state, address, email, flat, flng, onboarded_by)
+                await conn.execute(
+                    "UPDATE public.ambulance_providers SET business_lat=$2, business_lng=$3 WHERE user_id=$1::text AND business_lat IS NULL",
+                    user_id, flat, flng)
             elif vertical == "doctor":
                 await conn.execute("""
                     INSERT INTO public.doctors
@@ -1174,12 +1305,43 @@ async def create_provider_from_admin(phone: str, name: str, vertical: str,
             elif vertical == "pathology":
                 await conn.execute("""
                     INSERT INTO public.pathologists
-                      (id, user_id, name, lab_name, phone, city, state, address, email, status, is_active, created_at)
-                    SELECT $1::text, $2::text, $3, $3, $4, $5, $6, $7, $8, 'pending', TRUE, now()
+                      (id, user_id, name, lab_name, phone, city, state, address, email,
+                       latitude, longitude, location, status, is_active, is_verified, created_at)
+                    SELECT $1::text, $2::text, $3, $3, $4, $5, $6, $7, $8, $9, $10, $11::json,
+                           'pending', TRUE, FALSE, now()
                      WHERE NOT EXISTS (SELECT 1 FROM public.pathologists WHERE user_id = $2::text)
-                """, prof_id, user_id, name, phone, city, state, address, email)
+                """, prof_id, user_id, name, phone, city, state, address, email, flat, flng, loc_json)
+                await conn.execute("""
+                    UPDATE public.pathologists SET latitude=$2, longitude=$3, location=$4::json
+                     WHERE user_id=$1::text AND latitude IS NULL""", user_id, flat, flng, loc_json)
+                path_id = await conn.fetchval("SELECT id FROM public.pathologists WHERE user_id=$1::text", user_id)
+                await _ensure_lab_branch(conn, path_id, active=False)
     return {"success": True, "user_id": user_id, "role": sb_role,
-            "already_existed": bool(existing) if 'existing' in locals() else False}
+            "already_existed": bool(existing)}
+
+
+async def _ensure_lab_branch(conn, pathologist_id: str, active: bool) -> None:
+    """Create/refresh the `labs` branch row linked via labs.pathologist_profile_id.
+    `labs` has no status column — visibility = is_active + latitude/longitude."""
+    p = await conn.fetchrow("""SELECT id, name, lab_name, display_name, phone, email, city, state,
+                                      address, pincode, latitude, longitude
+                                 FROM public.pathologists WHERE id=$1""", pathologist_id)
+    if not p:
+        return
+    r = await conn.execute("""
+        UPDATE public.labs SET is_active=$2, is_verified=$2,
+               latitude=COALESCE($3, latitude), longitude=COALESCE($4, longitude), updated_at=now()
+         WHERE pathologist_profile_id=$1""", pathologist_id, active, p["latitude"], p["longitude"])
+    if r.endswith(" 0"):
+        import uuid as _uuid
+        await conn.execute("""
+            INSERT INTO public.labs
+              (id, name, display_name, phone, email, address, city, state, pincode,
+               latitude, longitude, is_active, is_verified, pathologist_profile_id, created_at, updated_at)
+            VALUES ($1::text, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13, now(), now())
+        """, str(_uuid.uuid4()), p["lab_name"] or p["name"], p["display_name"] or p["lab_name"] or p["name"],
+             p["phone"], p["email"], p["address"], p["city"], p["state"], p["pincode"],
+             p["latitude"], p["longitude"], active, pathologist_id)
 
 
 async def admin_upload_kyc_document(user_id: str, vertical: str,
@@ -1211,24 +1373,37 @@ async def admin_upload_kyc_document(user_id: str, vertical: str,
     return {"success": True, "document_id": doc_id, "status": "submitted", "uploaded_by": "admin"}
 
 
-_PROFILE_APPROVE_SQL = {
-    "hospital":  "UPDATE public.hospital_profiles SET verification_status='approved', updated_at=now() WHERE user_id=$1::text",
-    "ambulance": "UPDATE public.ambulance_providers SET status='approved', approved_at=now(), updated_at=now() WHERE user_id=$1::text",
-    "doctor":    "UPDATE public.doctors SET is_verified=TRUE, updated_at=now() WHERE user_id=$1::text",
-    "pathology": "UPDATE public.pathologists SET status='approved', is_verified=TRUE, approved_at=now(), updated_at=now() WHERE user_id=$1::text",
-}
+async def _profile_coords(conn, user_id: str, vertical: str):
+    if vertical == "hospital":
+        v = await conn.fetchval("SELECT location::text FROM public.hospital_profiles WHERE user_id=$1::text", user_id)
+        try:
+            d = json.loads(v) if v else {}
+            return d.get("lat"), d.get("lng")
+        except Exception:
+            return None, None
+    if vertical == "pathology":
+        r = await conn.fetchrow("SELECT latitude, longitude FROM public.pathologists WHERE user_id=$1::text", user_id)
+        return (r["latitude"], r["longitude"]) if r else (None, None)
+    if vertical == "ambulance":
+        r = await conn.fetchrow("SELECT business_lat, business_lng FROM public.ambulance_providers WHERE user_id=$1::text", user_id)
+        return (r["business_lat"], r["business_lng"]) if r else (None, None)
+    return None, None
 
 
-async def approve_all_provider_kyc(user_id: str, vertical: str,
-                                   admin_name: Optional[str]) -> Dict[str, Any]:
-    """One-click bulk approval:
-      • Every `kyc_documents` row for this user with status in
-        (submitted | pending | uploaded | '' ) → approved
-      • The vertical profile → verified/approved
-      • `users.verification_status` → approved
-    Returns per-vertical counts so the UI can render a receipt."""
+async def approve_all_provider_kyc(user_id: str, vertical: str, admin_name: Optional[str],
+                                   lat: Optional[float] = None, lng: Optional[float] = None) -> Dict[str, Any]:
+    """One-click approval → docs approved, users + profile 'verified' (hospital) /
+    'approved' (pathologists, ambulance), labs branch activated. Refuses if the
+    entity has no valid coordinates (patient discovery needs them)."""
+    admin = admin_name or "master_admin"
     pool = await get_pool()
     async with pool.acquire() as conn:
+        if vertical in ("hospital", "pathology", "ambulance"):
+            if not valid_coords(lat, lng):
+                lat, lng = await _profile_coords(conn, user_id, vertical)
+            if not valid_coords(lat, lng):
+                return {"success": False, "reason": "location_missing"}
+            lat, lng = float(lat), float(lng)
         async with conn.transaction():
             r = await conn.execute("""
                 UPDATE public.kyc_documents
@@ -1236,15 +1411,45 @@ async def approve_all_provider_kyc(user_id: str, vertical: str,
                        reviewed_by=$2, updated_at=now()
                  WHERE user_id=$1
                    AND lower(coalesce(status,'')) IN ('','pending','submitted','uploaded')
-            """, user_id, admin_name or "master_admin")
+            """, user_id, admin)
             approved_docs = int(r.rsplit(" ", 1)[-1] or 0)
             await conn.execute(
-                "UPDATE public.users SET verification_status='approved', updated_at=now() WHERE id=$1",
+                "UPDATE public.users SET verification_status='verified', updated_at=now() WHERE id=$1",
                 user_id)
-            prof_sql = _PROFILE_APPROVE_SQL.get(vertical)
-            if prof_sql:
-                await conn.execute(prof_sql, user_id)
-    return {"success": True, "docs_approved": approved_docs, "vertical": vertical}
+            if vertical == "hospital":
+                await conn.execute("""
+                    UPDATE public.hospital_profiles SET verification_status='verified',
+                           location=$2::json, updated_at=now() WHERE user_id=$1::text
+                """, user_id, json.dumps({"lat": lat, "lng": lng}))
+            elif vertical == "ambulance":
+                await conn.execute("""
+                    UPDATE public.ambulance_providers SET status='approved', approved_at=now(), approved_by=$2,
+                           business_lat=$3, business_lng=$4, updated_at=now() WHERE user_id=$1::text
+                """, user_id, admin, lat, lng)
+            elif vertical == "doctor":
+                await conn.execute(
+                    "UPDATE public.doctors SET is_verified=TRUE, is_active=TRUE, updated_at=now() WHERE user_id=$1::text",
+                    user_id)
+            elif vertical == "pathology":
+                path_id = await conn.fetchval("""
+                    UPDATE public.pathologists SET status='approved', is_verified=TRUE, is_active=TRUE,
+                           approved_at=now(), approved_by=$2, latitude=$3, longitude=$4,
+                           location=$5::json, updated_at=now()
+                     WHERE user_id=$1::text RETURNING id
+                """, user_id, admin, lat, lng, json.dumps({"lat": lat, "lng": lng}))
+                if path_id:
+                    await _ensure_lab_branch(conn, path_id, active=True)
+    return {"success": True, "docs_approved": approved_docs, "vertical": vertical,
+            "location": {"lat": lat, "lng": lng} if lat is not None else None}
+
+
+async def migrate_hospital_approved_to_verified() -> Dict[str, Any]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        r = await conn.execute("""
+            UPDATE public.hospital_profiles SET verification_status='verified', updated_at=now()
+             WHERE lower(coalesce(verification_status,''))='approved'""")
+    return {"success": True, "migrated": int(r.rsplit(" ", 1)[-1] or 0)}
 
 
 async def fetch_provider_summary(user_id: str) -> Optional[Dict[str, Any]]:
@@ -1298,7 +1503,8 @@ async def list_all_patients_admin(q: Optional[str], limit: int = 200) -> List[Di
             SELECT u.id, u.name, u.phone, u.email, u.dob, u.patient_id, u.is_active,
                    u.verification_status, u.created_at, u.last_login_at,
                    (SELECT count(*) FROM public.emergency_cases c WHERE c.patient_id = u.id OR c.customer_id = u.id) AS cases,
-                   (SELECT count(*) FROM public.appointments a WHERE a.patient_id = u.id)                          AS appts,
+                   (SELECT count(*) FROM public.consultation_bookings a WHERE a.patient_id = u.id)                 AS appts,
+                   (SELECT count(*) FROM public.pathology_bookings pb WHERE pb.patient_id = u.id)             AS lab_tests,
                    (SELECT count(*) FROM public.patient_admissions ad WHERE ad.patient_id = u.id)                  AS admits
               FROM public.users u
              WHERE {' AND '.join(where)}
@@ -1336,6 +1542,18 @@ async def list_hospital_patients_for_provider(hospital_user_id: str, q: Optional
     return _rows(rs)
 
 
+# OPD bookings live in consultation_bookings (patient app canonical); aliased to the
+# legacy appointment shape. hospital_id there = hospital_profiles.id.
+_CONSULT_SQL = """
+    SELECT id, booking_ref, doctor_id, doctor_name, doctor_specialty, hospital_id, hospital_name,
+           preferred_date AS appointment_date, preferred_time AS time_slot, consult_mode,
+           fee, reason, status, created_at
+      FROM public.consultation_bookings
+     WHERE patient_id = $1 {extra}
+     ORDER BY created_at DESC LIMIT 20
+"""
+
+
 async def _fetch_patient_associations(user_id: str, hospital_scope_id: Optional[str] = None) -> Dict[str, Any]:
     """Every case / appointment / booking a patient is linked to. If
     `hospital_scope_id` is provided, restrict to rows owned by that hospital
@@ -1350,13 +1568,9 @@ async def _fetch_patient_associations(user_id: str, hospital_scope_id: Optional[
                  WHERE (patient_id = $1 OR customer_id = $1) AND hospital_id = $2
                  ORDER BY created_at DESC LIMIT 20
             """, user_id, hospital_scope_id)
-            appointments = await conn.fetch("""
-                SELECT id, doctor_id, hospital_id, appointment_date, time_slot,
-                       reason, status, created_at
-                  FROM public.appointments
-                 WHERE patient_id = $1 AND hospital_id = $2
-                 ORDER BY appointment_date DESC NULLS LAST, created_at DESC LIMIT 20
-            """, user_id, hospital_scope_id)
+            appointments = await conn.fetch(_CONSULT_SQL.format(
+                extra="AND (hospital_id = $2 OR hospital_id IN (SELECT id FROM public.hospital_profiles WHERE user_id = $2))"),
+                user_id, hospital_scope_id)
             admissions = await conn.fetch("""
                 SELECT id, admission_number, admission_type, case_type, chief_complaint,
                        ward_type, bed_number, status, triage_priority, triage_time
@@ -1372,13 +1586,7 @@ async def _fetch_patient_associations(user_id: str, hospital_scope_id: Optional[
                  WHERE patient_id = $1 OR customer_id = $1
                  ORDER BY created_at DESC LIMIT 20
             """, user_id)
-            appointments = await conn.fetch("""
-                SELECT id, doctor_id, hospital_id, appointment_date, time_slot,
-                       reason, status, created_at
-                  FROM public.appointments
-                 WHERE patient_id = $1
-                 ORDER BY appointment_date DESC NULLS LAST, created_at DESC LIMIT 20
-            """, user_id)
+            appointments = await conn.fetch(_CONSULT_SQL.format(extra=""), user_id)
             admissions = await conn.fetch("""
                 SELECT id, admission_number, admission_type, case_type, chief_complaint,
                        ward_type, bed_number, status, triage_priority, triage_time, hospital_id
@@ -1386,6 +1594,14 @@ async def _fetch_patient_associations(user_id: str, hospital_scope_id: Optional[
                  WHERE patient_id = $1
                  ORDER BY triage_time DESC NULLS LAST LIMIT 20
             """, user_id)
+        lab_bookings = [] if hospital_scope_id else await conn.fetch("""
+            SELECT id, booking_id, pathologist_id, pathologist_name, service_type, tests::text AS tests_json,
+                   total_amount, scheduled_date, scheduled_time, status, payment_status,
+                   report_url, created_at
+              FROM public.pathology_bookings
+             WHERE patient_id = $1
+             ORDER BY created_at DESC LIMIT 20
+        """, user_id)
         ambulance_rides = await conn.fetch("""
             SELECT id, booking_id, booking_type, ambulance_type, is_emergency,
                    pickup_address, drop_address, status, scheduled_time, total_fare,
@@ -1399,7 +1615,18 @@ async def _fetch_patient_associations(user_id: str, hospital_scope_id: Optional[
         "appointments":    _rows(appointments),
         "admissions":      _rows(admissions),
         "ambulance_rides": _rows(ambulance_rides),
+        "lab_bookings":    _lab_rows(lab_bookings),
     }
+
+
+def _lab_rows(rows) -> List[Dict[str, Any]]:
+    out = []
+    for r in _rows(rows):
+        tj = r.pop("tests_json", None)
+        try: r["tests"] = json.loads(tj) if tj else []
+        except Exception: r["tests"] = []
+        out.append(r)
+    return out
 
 
 async def fetch_patient_detail(user_id: str, hospital_scope_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -1515,7 +1742,7 @@ async def list_all_users_for_crm_sync(limit: int = 2000) -> List[Dict[str, Any]]
         if not phone and not name:
             continue
         vstatus = (r["vstatus"] or r["verification_status"] or "").lower()
-        is_verified = vstatus == "approved"
+        is_verified = vstatus in ("approved", "verified")
         out.append({
             "supabase_user_id": str(r["id"]),
             "name": name or f"User {phone[-4:]}" if phone else "Unnamed",
