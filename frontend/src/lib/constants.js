@@ -5,6 +5,7 @@ export const CONTACT_TYPES = [
   { value: "paramedic", label: "Paramedics", icon: "Cross" },
   { value: "ambulance_provider", label: "Ambulance", icon: "Ambulance" },
   { value: "pathologist", label: "Pathology Labs", icon: "FlaskConical" },
+  { value: "diagnostic_centre", label: "Diagnostic Centres", icon: "ScanSearch" },
 ];
 
 export const TEAM_ROLES = [

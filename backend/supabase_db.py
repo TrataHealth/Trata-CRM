@@ -1533,6 +1533,49 @@ async def list_all_users_for_crm_sync(limit: int = 2000) -> List[Dict[str, Any]]
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
         })
+
+    # Diagnostic centres live in the shared `labs` table (parity sheet A4) —
+    # most have NO `users` row so the user sync above never sees them. Mirror
+    # active labs as CRM contacts of type `diagnostic_centre` so the Trata
+    # Users directory matches what patients can discover.
+    # NOTE: must run inside its own acquire — the users block already released.
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            labs_rs = await conn.fetch("""
+                SELECT id, name, display_name, phone, email, city, state, address,
+                       is_active, is_verified, created_at, updated_at
+                  FROM public.labs
+                 WHERE coalesce(is_active, FALSE) = TRUE
+                 ORDER BY created_at DESC NULLS LAST
+                 LIMIT $1
+            """, limit)
+        except Exception:
+            labs_rs = []
+    for r in labs_rs:
+        lname = (r["display_name"] or r["name"] or "").strip()
+        if not lname or _TEST_RX.search(lname) or lname in _TEST_EXACT:
+            continue
+        raw_phone = (r["phone"] or "").strip()
+        lphone = raw_phone[-10:] if raw_phone else f"lab-{str(r['id'])[:8]}"
+        out.append({
+            "supabase_user_id": None,
+            "supabase_lab_id": str(r["id"]),
+            "name": lname,
+            "type": "diagnostic_centre",
+            "phone": lphone,
+            "email": r["email"],
+            "city": r["city"],
+            "state": r["state"],
+            "address": r["address"],
+            "is_verified": bool(r["is_verified"]),
+            "is_active": bool(r["is_active"]),
+            "kyc_status": "approved" if r["is_verified"] else "pending",
+            "pipeline_stage": "onboarded" if r["is_verified"] else "contacted",
+            "source": "supabase_labs_sync",
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+        })
     return out
 
 

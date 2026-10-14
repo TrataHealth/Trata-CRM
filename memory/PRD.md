@@ -15,7 +15,12 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## What's Implemented (Latest first)
 
-### Iter 45 (2026-02, this session) — Preview↔Production number mismatch · deep fix
+### Iter 46 (2026-10) — Diagnostic Centres + Cross-app Table Parity Sheet
+- **Cross-app parity audit completed** against the patient app's authoritative table list (shareable at `/app/memory/TABLE_PARITY_CHECKLIST_CRM.md`). Filled rows A1–A8, B1–B7, C1–C8, D1–D3, E1–E10, F1–F6 with CRM's actual table, filter, R/W, and Match Y/N. **8 sync breaks flagged** for the joint convergence call: B2 OPD (`consultation_bookings` vs CRM's `appointments`), B3 lab bookings (`pathology_bookings` unread), C4 discharge summaries (never written), D2 `ambulance_allocations`, F4 enum (`verified` vs `approved`), A4 labs coverage, A1/A4/A8 missing `location`, E10 `hospital_bed_inventory`.
+- **Diagnostic Centres user type added** — the shared `labs` table (8 centres: Dr. Lal PathLabs, SRL Diagnostics, Metropolis, Thyrocare, Max Lab, Apollo Diagnostics, City X-Ray, Orange City Path) has NO `users` rows, so the CRM user-sync never saw them. `list_all_users_for_crm_sync` now mirrors active `labs` rows as contacts of type `diagnostic_centre` (source `supabase_labs_sync`, `supabase_lab_id` tracked, phone fallback `lab-{id8}` so re-syncs are idempotent). Test-name filter applies here too.
+- **Frontend**: new "Diagnostic Centres" tab on Trata Users (`CONTACT_TYPES` constant) and matching Dashboard tile (`by_type` loop extended). Dashboard: 28→36 total users, 7→15 verified.
+
+### Iter 45 (2026-02) — Preview↔Production number mismatch · deep fix
 - **Root cause**: new test users were being created in the shared Supabase upstream (by QA teams on the mobile apps). The CRM's 60-second auto-sync faithfully brought them in because `list_all_users_for_crm_sync()` filtered by `is_archived` but didn't look at the name pattern. The `/dashboard/stats` KPI tiles also counted every Mongo contact, including legacy test rows that pre-dated my purge.
 - **Three-layer defence** against test-row pollution:
   1. **Supabase sync** (`supabase_db.list_all_users_for_crm_sync`) — now skips names matching `test / probe / it84 / demo hospital / dr test` + exact matches for `Sunrise Care Hospital`, `Metro Ambulance Ltd`, `UI Tester` at the source. New upstream test fixtures never reach CRM.

@@ -998,7 +998,7 @@ async def dashboard_stats(range_key: str = Query("7d", alias="range"), current=D
 
     total_contacts = await db.contacts.count_documents(_REAL_ONLY)
     by_type = {}
-    for t in ["patient", "doctor", "hospital", "paramedic", "ambulance_provider", "pathologist"]:
+    for t in ["patient", "doctor", "hospital", "paramedic", "ambulance_provider", "pathologist", "diagnostic_centre"]:
         by_type[t] = await db.contacts.count_documents({**_REAL_ONLY, "type": t})
 
     verified = await db.contacts.count_documents({**_REAL_ONLY, "is_verified": True})
