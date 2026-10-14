@@ -1,0 +1,38 @@
+{
+  "summary": "Iter 11 — Verified canonical onboarding HTTP layer + UI. Created /app/backend/tests/test_admin_onboarding_v2.py (15 tests, 13 PASS, 2 FAIL). All 4 verticals onboard correctly with lat/lng validation, pathology also spawns labs branch, approve-all gates on required docs then flips hospital_profiles+users to 'verified'. Geocode (OSM) returns results. Hospital migration endpoint returns {success,migrated}. Frontend AdminOnboarding form shows every requested data-testid, blocks hospital submit without coords (toast 'Latitude & longitude are required…'), and 'Look up from address' button geocodes Mumbai → 19.11,72.83. BLOCKER on patient detail: GET /api/admin/patients and /api/admin/patients/{id} return empty / 404 because the shared Supabase has ZERO users with role='patient' (verified: `SELECT COUNT(*) FROM users WHERE role='patient' = 0`), so the patient `3a60f23b-7b3e-4fc4-8437-26b4ff49b4e1` referenced in consultation_bookings has no identity row in public.users or auth.users. All test rows cleaned up at teardown.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/admin/patients, /api/admin/patients/{id}", "issue": "list_all_patients_admin and fetch_patient_detail both hard-filter on `users.role='patient'`, but the shared Supabase has 0 rows with role='patient' (user_types in DB: provider_org, paramedic, individual, hospital_admin, ambulance_admin, pathologist). The specific patient_id `3a60f23b-7b3e-4fc4-8437-26b4ff49b4e1` referenced in `consultation_bookings` (Dr Jay, Fever) and `pathology_bookings` has NO row in public.users or auth.users. Result: admin roster is empty; patient detail returns 404; UI shows 'Patient unavailable / Patient not found'. Fix options: (a) seed a patient user row in public.users with role='patient' and id=3a60f23b-... matching the booking's patient_id, (b) relax fetch_patient_detail to accept users where role is NULL or user_type='individual', OR (c) derive the patient identity from consultation_bookings.patient_id (synthesize {id, name=null, phone=null}) when no users row exists so the appointments/lab_bookings still render.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Admin · Patient detail (/admin/patients/{id})", "issue": "Page renders '[data-testid=patient-detail-error] Patient unavailable / Patient not found' because the backend returns 404 for the only live patient_id in consultation_bookings. UI itself is correct — this is strictly a backend data/filter issue.", "affected_selectors": ["[data-testid='patient-detail-error']", "[data-testid='patient-detail-page']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_admin_onboarding_v2.py",
+    "/app/test_reports/pytest/admin_onboarding_v2.xml"
+  ],
+  "action_items": [
+    "Fix /api/admin/patients detail/list filter so patients referenced by consultation_bookings/pathology_bookings are discoverable even when users.role != 'patient' (or create a canonical patient row for 3a60f23b-7b3e-4fc4-8437-26b4ff49b4e1 in the shared Supabase). This is the only blocker left in the onboarding+patient contract."
+  ],
+  "critical_code_review_comments": [
+    "supabase_db.py:1643 — `if not user or user['role'] != 'patient': return None` is too strict given the production DB has zero role='patient' rows. Suggest fallback: if no users row, derive stub patient {id:user_id, name:null, phone:null} from first consultation_bookings/pathology_bookings row and still return associations.",
+    "supabase_db.py:1494 — list_all_patients_admin WHERE `u.role='patient'` yields 0 rows against this prod DB (verified via /api/admin/patients returning {total:0}). The CRM 'Patients' tab is effectively dark. Consider widening to `role IN ('patient','customer', NULL) OR id IN (SELECT patient_id FROM consultation_bookings UNION SELECT patient_id FROM pathology_bookings UNION SELECT patient_id FROM emergency_cases)`.",
+    "server.py is now 6066 lines — grew another ~1.5k lines since iter 10. Admin onboarding + patient endpoints should be factored out into routes/admin.py.",
+    "AdminOnboarding.jsx:85 sends `lat: hasLoc ? lat : null`, so for doctor vertical (where lat/lng are optional) the backend sees `null` — handled by sb.valid_coords returning False → doctor branch bypasses coord gate. Confirmed working but worth a comment: non-doctor verticals rely on both FE pre-check AND BE 400 gate; defence-in-depth OK.",
+    "supabase_db.py _CONSULT_SQL: good — aliases preferred_date→appointment_date so the FE+API contract matches."
+  ],
+  "updated_files": ["/app/backend/tests/test_admin_onboarding_v2.py"],
+  "success_rate": {"backend": "87% (13/15 pytest)", "frontend": "90% (admin onboarding form + geocode + toast all PASS; patient detail blocked on backend 404)"},
+  "test_credentials": "Master admin 9873117605/Master@123 (OTP 123456). Admin UI role selector testid is `login-as-staff`, phone/otp/password testids are login-phone-input/login-otp-input/login-password-input.",
+  "seed_data_creation": "Test rows for phones 9999900001..9999900005 created in Supabase (users + hospital_profiles/pathologists+labs/ambulance_providers/doctors) and in Mongo crm_users+contacts, then DELETED in the module-teardown fixture. Verified zero leftover rows for `phone LIKE '99999%'` after pytest. Approve-all flow uploaded 1-byte base64 KYC stubs that were deleted along with the user rows (ON DELETE CASCADE via user_id).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent fixes the patient-role filter in supabase_db.fetch_patient_detail (and ideally list_all_patients_admin), re-run `python -m pytest /app/backend/tests/test_admin_onboarding_v2.py -v`; the 2 TestPatientDetail tests should turn green. The 13 passing tests cover: geocode auth + happy path, hospital-verified migration idempotency, 4× lat/lng validation (hospital/ambulance/pathology get 400, doctor allowed), 3× canonical DB-shape verification (hospital_profiles.location JSON + verification_status pending_review, pathologists row + linked labs row with pathologist_profile_id, ambulance_providers business_lat/business_lng + status pending), approve-all gate (400 w/ error=required_docs_missing) + approve-all success (verification_status flips to 'verified' on both users and hospital_profiles). Cleanup teardown is idempotent and safe to re-run.",
+  "rca of the issue": "Patient detail 404 RCA: `fetch_patient_detail(user_id)` in supabase_db.py:1638-1644 does `SELECT role FROM public.users WHERE id=$1` and bails out with `return None` if `user is None OR user.role != 'patient'`. For the probe patient `3a60f23b-7b3e-4fc4-8437-26b4ff49b4e1`, `public.users` has NO row at all (user is None → return None → server.py:1722 raises 404). The patient_id lives only in child tables (consultation_bookings, pathology_bookings). Across the whole shared DB, `SELECT COUNT(*) FROM users WHERE role='patient' = 0` — all patient-app users must be using a different storage (likely auth.users which this project doesn't mirror, or a soft 'customer' role). Reproduction: `curl -H 'Authorization: Bearer <admin>' $BASE/api/admin/patients` → `{\"patients\":[],\"total\":0}`. Mitigation: in fetch_patient_detail, if no users row is found, synthesize `{id:user_id, name:null, phone:null}` and still return associations so the admin can at least see the Dr Jay / Fever booking + any lab bookings. Longer-term: create a 'patient' identity row in users whenever a consultation_bookings/pathology_bookings row is inserted (patient app side)."
+}

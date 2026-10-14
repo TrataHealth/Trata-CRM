@@ -54,3 +54,15 @@ E1–E5, E7–E9: n/a. E6 kyc_documents: R+W, Y. E10: hospital_beds + bed_status
 3. No table has an `is_demo` column yet.
 4. Live hospitals: Xenon 'approved' (written by CRM), Sahayak 'verified', 2 pending — all 4 have location.
 5. Row counts: consultation_bookings 3 vs appointments 1; pathology_bookings 2 (unread by CRM); discharge_summaries 0; ambulance_allocations 0; hospital_bed_inventory 0.
+
+
+## CONVERGENCE APPLIED (2026-06, CRM side)
+- A1 hospital_profiles: onboard writes location {lat,lng} + 'pending_review'; approve-all → 'verified' (+ users 'verified'). Live 'approved' rows migrated (0 left). Approval refuses without coords.
+- A4 pathologists (status pending→approved, is_active, latitude/longitude/location) + labs branch row (pathologist_profile_id, is_active/is_verified false→true on approval).
+- A8 ambulance_providers business_lat/business_lng on onboard + approval.
+- A5 pharmacy_profiles code removed; reads use pharmacy_providers.
+- B2 reads consultation_bookings (hospital_id there = hospital_profiles.id; scoped queries accept both ids). B3 reads pathology_bookings (patient detail + timeline).
+- C4 discharge writes discharge_summaries row. D2 ambulance_allocations written on assign + status updates; read on ambulance dashboard.
+- E10 hospital_bed_inventory recomputed on bed add/toggle/admit/discharge.
+- Patients: patient app now uses role 'customer'/NULL (0 rows with role='patient') — CRM readers accept patient|customer|NULL.
+- NOT done (per user): is_demo column — provider team owns. tratax_tenants: CRM never writes it.

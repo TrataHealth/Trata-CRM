@@ -285,6 +285,14 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 ### Iter 7 (2026-06-10) — Sales Agent pivot
 ### Earlier (Iter 1-6) — Master admin CRM MVP, live upstream sync, PWA, multi-tenant providers, earnings, Ambulance-only scope.
 
+## Iter 41 (2026-06) — Canonical-table convergence (Patient-App READ Contract)
+- Onboarding requires lat/lng (manual + "Look up from address" via /api/admin/geocode, OSM Nominatim) for hospital/ambulance/pathology; writes users + canonical profile (user_id=users.id). Never writes tratax_tenants.
+- Hospital: location json + 'pending_review' → approve-all 'verified'. Pathology: pathologists + labs branch. Ambulance: business_lat/lng. Approval blocks without coords (UI prompts lat,lng).
+- consultation_bookings + pathology_bookings read in patient detail/timeline (Lab tests pill); discharge_summaries written on discharge; ambulance_allocations assign/status endpoints (/api/provider/ambulance/...); hospital_bed_inventory synced on bed changes; pharmacy_profiles → pharmacy_providers.
+- Patient readers accept role patient|customer|NULL (patient app no longer writes 'patient'); test-name filter on admin patient roster.
+- Tests: backend/tests/test_admin_onboarding_v2.py (16 pass). Report iteration_11.json.
+- Pending: is_demo column (provider team); ambulance assign UI on PC dashboard; discharge form fields (final diagnosis / follow-up) in UI.
+
 ## Backlog / Next
 
 ### P1

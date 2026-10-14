@@ -59,6 +59,15 @@ async def close_pool() -> None:
 
 
 # ── low-level helpers ────────────────────────────────────────────────────────
+import re as _re
+_TEST_RX = _re.compile(r"(test|probe|it84|demo hospital|dr\s*test)", _re.IGNORECASE)
+_TEST_EXACT = {"Sunrise Care Hospital", "Metro Ambulance Ltd", "UI Tester"}
+
+# Patient app writes role='customer' (or leaves role NULL on fresh OTP sign-ups).
+_PATIENT_ROLES = ("patient", "customer")
+_PATIENT_ROLE_SQL = "({a}role IN ('patient','customer') OR {a}role IS NULL OR {a}user_type = 'patient')"
+
+
 def _row(r: Optional[asyncpg.Record]) -> Optional[Dict[str, Any]]:
     if r is None:
         return None
@@ -138,7 +147,7 @@ async def fetch_patients(q: Optional[str] = None, limit: int = 200) -> List[Dict
     pool = await get_pool()
     async with pool.acquire() as conn:
         args: List[Any] = []
-        clauses = ["u.role = 'patient' OR u.user_type = 'patient'"]
+        clauses = [_PATIENT_ROLE_SQL.format(a="u.")]
         if q:
             args.append(f"%{q.lower()}%")
             clauses.append(f"(lower(coalesce(u.name,'')) LIKE ${len(args)} OR u.phone LIKE ${len(args)})")
@@ -185,7 +194,7 @@ async def fetch_network_stats() -> Dict[str, Any]:
         rows = await conn.fetch("""
             SELECT
               (SELECT count(*) FROM public.users)                                       AS users_total,
-              (SELECT count(*) FROM public.users WHERE role = 'patient' OR user_type = 'patient') AS patients,
+              (SELECT count(*) FROM public.users WHERE """ + _PATIENT_ROLE_SQL.format(a="") + """) AS patients,
               (SELECT count(*) FROM public.users WHERE role = 'ambulance_provider')     AS ambulance_providers,
               (SELECT count(*) FROM public.users WHERE role = 'hospital')               AS hospitals,
               (SELECT count(*) FROM public.users WHERE role = 'doctor')                 AS doctors,
@@ -1491,7 +1500,7 @@ async def list_all_patients_admin(q: Optional[str], limit: int = 200) -> List[Di
     """Master-admin roster: every user with role='patient', with a rollup of
     total emergency cases + appointments + admissions so the roster can show
     activity counts alongside identity."""
-    where = ["u.role = 'patient'", "coalesce(u.is_archived, FALSE) = FALSE"]
+    where = [_PATIENT_ROLE_SQL.format(a="u."), "coalesce(u.is_archived, FALSE) = FALSE"]
     args: List[Any] = []
     if q and q.strip():
         args.append(f"%{q.strip().lower()}%")
@@ -1511,7 +1520,9 @@ async def list_all_patients_admin(q: Optional[str], limit: int = 200) -> List[Di
              ORDER BY u.created_at DESC NULLS LAST
              LIMIT ${len(args)}
         """, *args)
-    return _rows(rs)
+    return [r for r in _rows(rs)
+            if not (r.get("name") and (_TEST_RX.search(r["name"]) or r["name"] in _TEST_EXACT))
+            and not str(r.get("id", "")).upper().startswith("TEST")]
 
 
 async def list_hospital_patients_for_provider(hospital_user_id: str, q: Optional[str],
@@ -1640,7 +1651,7 @@ async def fetch_patient_detail(user_id: str, hospital_scope_id: Optional[str] = 
                    verification_status, created_at, last_login_at, role, user_type
               FROM public.users WHERE id = $1
         """, user_id)
-        if not user or user["role"] != "patient":
+        if not user or not (user["role"] in _PATIENT_ROLES or user["role"] is None or user["user_type"] == "patient"):
             return None
         # Latest hospital_patients row (best clinical profile the mobile app has)
         hp = await conn.fetchrow("""
@@ -1670,6 +1681,7 @@ async def fetch_patient_detail(user_id: str, hospital_scope_id: Optional[str] = 
 # `contacts`.
 _SB_ROLE_TO_CRM_TYPE = {
     "patient":            "patient",
+    "customer":           "patient",
     "hospital":           "hospital",
     "ambulance_provider": "ambulance_provider",
     "doctor":             "doctor",
@@ -1690,9 +1702,6 @@ async def list_all_users_for_crm_sync(limit: int = 2000) -> List[Dict[str, Any]]
     plus the known exact-match sentinels) are filtered out at the source so
     they never leak into the CRM directory even if someone creates them in
     the shared Supabase upstream."""
-    import re as _re
-    _TEST_RX = _re.compile(r"(test|probe|it84|demo hospital|dr\s*test)", _re.IGNORECASE)
-    _TEST_EXACT = {"Sunrise Care Hospital", "Metro Ambulance Ltd", "UI Tester"}
     pool = await get_pool()
     async with pool.acquire() as conn:
         rs = await conn.fetch("""
@@ -1718,15 +1727,14 @@ async def list_all_users_for_crm_sync(limit: int = 2000) -> List[Dict[str, Any]]
                    p.name AS profile_name, p.city, p.state, p.address, p.vstatus
               FROM public.users u
               LEFT JOIN prof p ON p.user_id = u.id
-             WHERE u.role IS NOT NULL
-               AND u.role <> 'admin'
+             WHERE coalesce(u.role, 'patient') <> 'admin'
                AND coalesce(u.is_archived, FALSE) = FALSE
              ORDER BY u.created_at DESC NULLS LAST
              LIMIT $1
         """, limit)
     out: List[Dict[str, Any]] = []
     for r in rs:
-        role = (r["role"] or "").lower()
+        role = (r["role"] or "patient").lower()
         crm_type = _SB_ROLE_TO_CRM_TYPE.get(role)
         if not crm_type:
             continue
