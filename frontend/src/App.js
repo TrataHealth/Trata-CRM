@@ -35,6 +35,7 @@ import AdminLedger from "./pages/AdminLedger";
 import AdminLedgerProvider from "./pages/AdminLedgerProvider";
 import AdminLedgerSettings from "./pages/AdminLedgerSettings";
 import AdminLedgerReview from "./pages/AdminLedgerReview";
+import AdminRevenue from "./pages/AdminRevenue";
 import ProviderLedger from "./pages/ProviderLedger";
 import Patients from "./pages/Patients";
 import PatientDetail from "./pages/PatientDetail";
@@ -106,6 +107,7 @@ function App() {
           <Route path="/admin/ledger" element={<RequireAuth adminOnly><AdminLedger /></RequireAuth>} />
           <Route path="/admin/ledger/settings" element={<RequireAuth adminOnly><AdminLedgerSettings /></RequireAuth>} />
           <Route path="/admin/ledger/review" element={<RequireAuth adminOnly><AdminLedgerReview /></RequireAuth>} />
+          <Route path="/admin/ledger/revenue" element={<RequireAuth adminOnly><AdminRevenue /></RequireAuth>} />
           <Route path="/admin/ledger/:uid" element={<RequireAuth adminOnly><AdminLedgerProvider /></RequireAuth>} />
 
           {/* Shared (admins + providers + sales reps) */}

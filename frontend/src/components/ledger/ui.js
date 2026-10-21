@@ -24,13 +24,13 @@ export const pretty = (s) => String(s || "").replace(/_/g, " ").replace(/\b\w/g,
 
 export const KIND_LABEL = {
   consultation: "OPD consult", teleconsultation: "Teleconsult", sos: "Emergency SOS", admission: "Admission",
-  ambulance_ride: "Ambulance ride", lab_test: "Lab test", manual: "Extended service",
+  ambulance_ride: "Ambulance ride", lab_test: "Lab test", diagnostic_scan: "Imaging scan", manual: "Extended service",
 };
 
 export const STATUS_TONE = {
   approved: "bg-[#E3FCEF] text-[#006644]", pending_review: "bg-[#FFFAE6] text-[#974F0C]",
   rejected: "bg-[#FFEBE6] text-[#BF2600]", issued: "bg-[#DEEBFF] text-[#0747A6]",
-  shared: "bg-[#EAE6FF] text-[#403294]", paid: "bg-[#E3FCEF] text-[#006644]", void: "bg-[#F4F5F7] text-[#5E6C84]",
+  shared: "bg-[#EAE6FF] text-[#403294]", draft: "bg-[#FFF0B3] text-[#7A5D00]", paid: "bg-[#E3FCEF] text-[#006644]", void: "bg-[#F4F5F7] text-[#5E6C84]",
 };
 
 const errMsg = (e, fb) => {

@@ -8,6 +8,7 @@ ledger_invoices."""
 from __future__ import annotations
 
 import asyncio
+import hmac
 import html as _html
 import io
 import logging
@@ -20,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 import requests
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, Field
@@ -38,7 +39,7 @@ MAX_FILE = 15 * 1024 * 1024
 ALLOWED_MIME = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
 GST_PCT = 18.0
 BILLABLE_STATUSES = {"completed", "complete", "discharged", "delivered", "fulfilled", "closed", "done",
-                     "report_ready", "report_generated", "results_uploaded", "report_uploaded"}
+                     "report_ready", "report_generated", "results_uploaded", "report_uploaded", "reported"}
 STATE_CODES = {"01": "Jammu and Kashmir", "02": "Himachal Pradesh", "03": "Punjab", "04": "Chandigarh", "05": "Uttarakhand",
                "06": "Haryana", "07": "Delhi", "08": "Rajasthan", "09": "Uttar Pradesh", "10": "Bihar", "11": "Sikkim",
                "12": "Arunachal Pradesh", "13": "Nagaland", "14": "Manipur", "15": "Mizoram", "16": "Tripura",
@@ -247,6 +248,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
         await db.ledger_invoices.update_many({"active": {"$exists": False}, "status": {"$ne": "void"}}, {"$set": {"active": True}})
         await db.ledger_invoices.create_index([("provider_user_id", 1), ("month", 1)], unique=True,
                                               partialFilterExpression={"active": True}, name="one_active_invoice_per_month")
+        await db.cron_runs.create_index("run_id", unique=True)
 
     def is_admin(c) -> bool:
         return bool(c.get("is_master_admin") or c.get("role") == "admin")
@@ -612,7 +614,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
     async def put_billing(uid: str, body: BillingProfileBody, current=Depends(get_current_user)):
         require_admin(current)
         bad = [k for k, v in body.category_fee_pct.items() if k not in SERVICE_CATEGORIES + ["sos", "admission",
-               "consultation", "teleconsultation", "ambulance_ride", "lab_test"] or not 0 <= v <= 100]
+               "consultation", "teleconsultation", "ambulance_ride", "lab_test", "diagnostic_scan"] or not 0 <= v <= 100]
         if bad:
             raise HTTPException(status_code=400, detail=f"Invalid category fee: {bad}")
         doc = {"provider_user_id": uid, **body.model_dump(), "updated_at": _now(), "updated_by": actor(current)}
@@ -635,6 +637,9 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
     @r.post("/ledger/providers/{uid}/invoices")
     async def create_invoice(uid: str, body: InvoiceBody, current=Depends(get_current_user)):
         require_admin(current)
+        return await build_invoice(uid, body, actor(current), "issued")
+
+    async def build_invoice(uid: str, body: InvoiceBody, creator: Dict[str, Any], status: str) -> Dict[str, Any]:
         if not _month_ok(body.month):
             raise HTTPException(status_code=400, detail="month must be YYYY-MM")
         if not body.sac_code.strip():
@@ -698,24 +703,201 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             "gst_pct": GST_PCT, **tax, "gst_total": gst, "grand_total": _r2(taxable + gst),
             "seller": {k: st.get(k) for k in ("legal_name", "address", "state", "gstin", "pan", "cin", "email", "phone",
                                               "bank_name", "account_name", "account_number", "ifsc", "upi_id", "terms")},
-            "status": "issued", "active": True, "created_by": actor(current), "created_at": _now(),
+            "status": status, "active": True, "created_by": creator, "created_at": _now(),
         }
         try:
             await db.ledger_invoices.insert_one(dict(inv))
         except DuplicateKeyError:
             raise HTTPException(status_code=400, detail="An invoice already exists for this month — void it first")
-        seq = await db.ledger_counters.find_one_and_update({"id": f"inv-{body.month}"}, {"$inc": {"n": 1}},
-                                                           upsert=True, return_document=True)
-        inv["number"] = f"{st.get('invoice_prefix') or 'TH'}/{body.month.replace('-', '')}/{(seq or {}).get('n', 1):04d}"
-        await db.ledger_invoices.update_one({"id": inv["id"]}, {"$set": {"number": inv["number"]}})
+        if status == "issued":
+            inv.update(await assign_number(inv, st))
         await db.ledger_services.update_many({"id": {"$in": [m["id"] for m in manual]}}, {"$set": {"invoice_id": inv["id"]}})
         await db.ledger_promotions.update_many({"id": {"$in": [p["id"] for p in promos]}}, {"$set": {"invoice_id": inv["id"]}})
         return inv
 
-    @r.get("/ledger/invoices")
-    async def list_invoices(month: Optional[str] = None, current=Depends(get_current_user)):
+    async def assign_number(inv: Dict[str, Any], st: Dict[str, Any]) -> Dict[str, Any]:
+        seq = await db.ledger_counters.find_one_and_update({"id": f"inv-{inv['month']}"}, {"$inc": {"n": 1}},
+                                                           upsert=True, return_document=True)
+        issue = datetime.now(timezone.utc)
+        upd = {"number": f"{st.get('invoice_prefix') or 'TH'}/{inv['month'].replace('-', '')}/{(seq or {}).get('n', 1):04d}",
+               "issue_date": issue.date().isoformat(),
+               "due_date": (issue + timedelta(days=st.get("payment_terms_days") or 15)).date().isoformat()}
+        await db.ledger_invoices.update_one({"id": inv["id"]}, {"$set": upd})
+        return upd
+
+    async def provider_email(inv: Dict[str, Any]) -> Optional[str]:
+        bp = await billing_profile(inv["provider_user_id"])
+        em = (bp.get("billing_email") or inv.get("provider_email") or "").strip()
+        if not em:
+            try:
+                pool = await sb.get_pool()
+                async with pool.acquire() as conn:
+                    em = (await conn.fetchval("SELECT email FROM public.users WHERE id=$1", inv["provider_user_id"]) or "").strip()
+            except Exception as e:
+                logger.warning(f"provider email lookup failed: {e}")
+        return em if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", em or "") else None
+
+    async def notify_provider(inv: Dict[str, Any], kind: str) -> Dict[str, Any]:
+        """CRM (shared notifications) + email. Never raises; returns delivery log entry."""
+        overdue = kind == "reminder"
+        title = (f"Payment reminder: invoice {inv['number']} is overdue" if overdue
+                 else f"Invoice {inv['number']} from Trata Health")
+        msg = (f"Your {inv['month']} invoice of ₹{inv['grand_total']:,.2f} was due on {inv['due_date']}. Please arrange payment."
+               if overdue else f"Your {inv['month']} invoice of ₹{inv['grand_total']:,.2f} is ready. Due {inv['due_date']}.")
+        log = {"kind": kind, "at": _now(), "crm": False, "email": None, "email_status": "skipped"}
+        try:
+            pool = await sb.get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO public.notifications (id, user_id, title, message, notification_type, data, is_read, created_at)
+                    VALUES ($1, $2, $3, $4, $5, $6::json, FALSE, now())""",
+                    str(uuid.uuid4()), inv["provider_user_id"], title, msg,
+                    "invoice_reminder" if overdue else "invoice",
+                    __import__("json").dumps({"invoice_id": inv["id"], "number": inv["number"]}))
+            log["crm"] = True
+        except Exception as e:
+            logger.warning(f"invoice notify failed: {e}")
+        to = await provider_email(inv)
+        if not to:
+            log["email_status"] = "no_email_on_file"
+        else:
+            log["email"] = to
+            try:
+                import emailer
+                await emailer.send_email(to=to, subject=title, html=invoice_email_html(inv, overdue, inv.get("app_url")))
+                log["email_status"] = "sent"
+            except Exception as e:
+                log["email_status"] = f"failed:{e}"
+        await db.ledger_invoices.update_one({"id": inv["id"]}, {"$push": {"deliveries": log}})
+        return log
+
+    async def run_monthly_drafts(month: str, creator: Dict[str, Any]) -> Dict[str, Any]:
+        st = await settings()
+        sac = (st.get("default_sac") or "").strip()
+        if not sac:
+            return {"month": month, "created": 0, "error": "Set a default SAC code in Invoice settings"}
+        created, skipped = [], 0
+        allsv = await lsb.fetch_all_provider_services()
+        for v in allsv.values():
+            assign_groups(v)
+        cands = {u for u, v in allsv.items() if any(x["billable"] and (x["date"] or "").startswith(month) for x in v)}
+        cands |= set(await db.ledger_services.distinct("provider_user_id", {"status": "approved", "invoice_id": None,
+                     "is_deleted": {"$ne": True}, "service_date": {"$regex": f"^{month}"}}))
+        cands |= set(await db.ledger_promotions.distinct("provider_user_id", {"invoice_id": None, "is_deleted": {"$ne": True},
+                     "charge_date": {"$regex": f"^{month}"}}))
+        for p in [{"id": u} for u in cands]:
+            try:
+                inv = await build_invoice(p["id"], InvoiceBody(month=month, sac_code=sac), creator, "draft")
+                created.append({"id": inv["id"], "provider": inv["provider_name"], "total": inv["grand_total"]})
+            except HTTPException:
+                skipped += 1
+        logger.info(f"monthly drafts {month}: {len(created)} created, {skipped} skipped")
+        return {"month": month, "created": len(created), "skipped": skipped, "invoices": created}
+
+    async def run_reminders() -> Dict[str, Any]:
+        today = datetime.now(timezone(timedelta(hours=5, minutes=30))).date().isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=3) + timedelta(hours=1)).isoformat()
+        sent = []
+        async for inv in db.ledger_invoices.find({"status": "shared", "due_date": {"$lt": today}}, {"_id": 0, "lines": 0}):
+            if inv.get("last_reminder_at") and inv["last_reminder_at"] > cutoff:
+                continue
+            log = await notify_provider(inv, "reminder")
+            await db.ledger_invoices.update_one({"id": inv["id"]}, {"$set": {"last_reminder_at": _now()},
+                                                                    "$inc": {"reminder_count": 1}})
+            sent.append({"id": inv["id"], "number": inv["number"], **{k: log[k] for k in ("crm", "email_status")}})
+        return {"date": today, "reminded": len(sent), "items": sent}
+
+    def last_month() -> str:
+        d = datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(day=1) - timedelta(days=1)
+        return d.strftime("%Y-%m")
+
+    async def cron_guard(request: Request, name: str) -> Optional[str]:
+        auth = request.headers.get("authorization") or ""
+        secret = os.environ.get("WEBHOOK_CRON_SECRET") or ""
+        if not secret or not auth.startswith("Bearer ") or not hmac.compare_digest(auth[7:], secret):
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        try:
+            env = await request.json()
+        except Exception:
+            env = {}
+        if env is not None and not isinstance(env, dict):
+            raise HTTPException(status_code=400, detail="Invalid body")
+        run_id = request.headers.get("x-webhook-id") or (env or {}).get("run_id") or str(uuid.uuid4())
+        try:
+            await db.cron_runs.insert_one({"run_id": run_id, "name": name, "at": _now()})
+        except DuplicateKeyError:
+            return None
+        return run_id
+
+    @r.post("/cron/monthly-invoices")
+    async def cron_monthly(request: Request):
+        # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+        if await cron_guard(request, "monthly-invoices"):
+            asyncio.create_task(run_monthly_drafts(last_month(), {"id": "cron", "name": "Auto-raise (1st of month)", "role": "system"}))
+        return {"accepted": True}
+
+    @r.post("/cron/invoice-reminders")
+    async def cron_reminders(request: Request):
+        # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+        if await cron_guard(request, "invoice-reminders"):
+            asyncio.create_task(run_reminders())
+        return {"accepted": True}
+
+    @r.post("/ledger/run/monthly-drafts")
+    async def admin_run_drafts(month: Optional[str] = None, current=Depends(get_current_user)):
         require_admin(current)
-        q = {"month": month} if month else {}
+        return await run_monthly_drafts(month if _month_ok(month or "") else last_month(), actor(current))
+
+    @r.post("/ledger/run/reminders")
+    async def admin_run_reminders(current=Depends(get_current_user)):
+        require_admin(current)
+        return await run_reminders()
+
+    @r.get("/ledger/revenue")
+    async def revenue(months: int = 12, current=Depends(get_current_user)):
+        require_admin(current)
+        today = datetime.now(timezone(timedelta(hours=5, minutes=30))).date().isoformat()
+        by: Dict[str, Dict[str, Any]] = {}
+        outstanding: Dict[str, Dict[str, Any]] = {}
+        drafts = 0
+        async for i in db.ledger_invoices.find({"status": {"$ne": "void"}}, {"_id": 0, "lines": 0}):
+            if i["status"] == "draft":
+                drafts += 1
+                continue
+            m = by.setdefault(i["month"], {"month": i["month"], "invoices": 0, "service_fee": 0.0, "promotion_fee": 0.0,
+                                           "taxable": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0, "gst": 0.0,
+                                           "invoiced": 0.0, "paid": 0.0, "unpaid": 0.0, "overdue": 0.0})
+            m["invoices"] += 1
+            for k, src in (("service_fee", "service_fee"), ("promotion_fee", "promotion_fee"), ("taxable", "taxable_value"),
+                           ("cgst", "cgst"), ("sgst", "sgst"), ("igst", "igst"), ("gst", "gst_total"), ("invoiced", "grand_total")):
+                m[k] += float(i.get(src) or 0)
+            if i["status"] == "paid":
+                m["paid"] += i["grand_total"]
+            else:
+                m["unpaid"] += i["grand_total"]
+                late = bool(i.get("due_date")) and i["due_date"] < today
+                if late:
+                    m["overdue"] += i["grand_total"]
+                o = outstanding.setdefault(i["provider_user_id"], {"provider_user_id": i["provider_user_id"],
+                                           "provider_name": i.get("provider_name"), "unpaid": 0.0, "overdue": 0.0,
+                                           "invoices": 0, "oldest_due": None})
+                o["unpaid"] += i["grand_total"]
+                o["overdue"] += i["grand_total"] if late else 0
+                o["invoices"] += 1
+                o["oldest_due"] = min(filter(None, [o["oldest_due"], i.get("due_date")]), default=None)
+        rows = sorted(by.values(), key=lambda x: x["month"])[-max(1, min(months, 36)):]
+        for x in rows + list(outstanding.values()):
+            for k, v in x.items():
+                if isinstance(v, float):
+                    x[k] = _r2(v)
+        tot = {k: _r2(sum(x[k] for x in rows)) for k in ("service_fee", "promotion_fee", "taxable", "gst", "invoiced", "paid", "unpaid", "overdue")}
+        return {"months": rows, "totals": tot, "drafts": drafts,
+                "outstanding": sorted(outstanding.values(), key=lambda o: -o["unpaid"])}
+
+    @r.get("/ledger/invoices")
+    async def list_invoices(month: Optional[str] = None, status: Optional[str] = None, current=Depends(get_current_user)):
+        require_admin(current)
+        q = {k: v for k, v in (("month", month), ("status", status)) if v}
         return {"items": await db.ledger_invoices.find(q, {"_id": 0, "lines": 0}).sort("created_at", -1).to_list(500)}
 
     async def _invoice_for(iid: str, current) -> Dict[str, Any]:
@@ -731,25 +913,21 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
         return await _invoice_for(iid, current)
 
     @r.post("/ledger/invoices/{iid}/share")
-    async def share_invoice(iid: str, current=Depends(get_current_user)):
+    async def share_invoice(iid: str, request: Request, current=Depends(get_current_user)):
         require_admin(current)
         inv = await _invoice_for(iid, current)
         if inv["status"] == "void":
             raise HTTPException(status_code=400, detail="Invoice is void")
-        await db.ledger_invoices.update_one({"id": iid}, {"$set": {"status": "shared" if inv["status"] != "paid" else "paid",
+        if inv["status"] == "draft":
+            inv.update(await assign_number(inv, await settings()))
+        origin = request.headers.get("origin") or ""
+        app_url = origin if origin.startswith("https://") else inv.get("app_url")
+        new_status = "paid" if inv["status"] == "paid" else "shared"
+        await db.ledger_invoices.update_one({"id": iid}, {"$set": {"status": new_status, "app_url": app_url,
                                                                    "shared_at": _now(), "shared_by": actor(current)}})
-        try:
-            pool = await sb.get_pool()
-            async with pool.acquire() as conn:
-                await conn.execute("""
-                    INSERT INTO public.notifications (id, user_id, title, message, notification_type, data, is_read, created_at)
-                    VALUES ($1, $2, $3, $4, 'invoice', $5::json, FALSE, now())""",
-                    str(uuid.uuid4()), inv["provider_user_id"], f"Invoice {inv['number']} from Trata Health",
-                    f"Your {inv['month']} invoice of ₹{inv['grand_total']:,.2f} is ready. Due {inv['due_date']}.",
-                    __import__("json").dumps({"invoice_id": iid, "number": inv["number"]}))
-        except Exception as e:
-            logger.warning(f"invoice notify failed: {e}")
-        return {"success": True, "status": "shared"}
+        inv.update({"status": new_status, "app_url": app_url})
+        log = await notify_provider(inv, "shared")
+        return {"success": True, "status": new_status, "number": inv["number"], "delivery": log}
 
     @r.post("/ledger/invoices/{iid}/status")
     async def invoice_status(iid: str, status: str = Query(...), current=Depends(get_current_user)):
@@ -759,6 +937,8 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             raise HTTPException(status_code=400, detail="status must be paid or void")
         if inv["status"] == "void":
             raise HTTPException(status_code=400, detail="Invoice already void")
+        if status == "paid" and inv["status"] == "draft":
+            raise HTTPException(status_code=400, detail="Share the draft before marking it paid")
         if status == "void" and inv["status"] == "paid":
             raise HTTPException(status_code=400, detail="Paid invoices can't be voided — issue a credit note instead")
         upd = {"status": status, f"{status}_at": _now()}
@@ -777,7 +957,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
         from xhtml2pdf import pisa
         buf = io.BytesIO()
         await asyncio.to_thread(pisa.CreatePDF, render_invoice_html(inv), dest=buf, encoding="utf-8")
-        fname = inv["number"].replace("/", "-") + ".pdf"
+        fname = (inv.get("number") or f"DRAFT-{iid[:8]}").replace("/", "-") + ".pdf"
         return Response(content=buf.getvalue(), media_type="application/pdf",
                         headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
@@ -801,7 +981,7 @@ def render_invoice_html(inv: Dict[str, Any]) -> str:
     bank = "".join(f"<tr><td class='mut'>{k}</td><td>{e(s.get(v))}</td></tr>" for k, v in (
         ("Bank", "bank_name"), ("Account name", "account_name"), ("Account no.", "account_number"),
         ("IFSC", "ifsc"), ("UPI", "upi_id")) if s.get(v))
-    status = {"paid": "PAID", "void": "VOID"}.get(inv["status"], "TAX INVOICE")
+    status = {"paid": "PAID", "void": "VOID", "draft": "DRAFT"}.get(inv["status"], "TAX INVOICE")
     return f"""<html><head><meta charset="utf-8"/><style>
 @page {{ size: A4; margin: 14mm 12mm 16mm 12mm; }}
 body {{ font-family: Helvetica; font-size: 8.5pt; color: #091E42; }}
@@ -821,7 +1001,7 @@ table {{ width: 100%; border-collapse: collapse; }}
 <table class="band"><tr>
  <td><span class="brand">Trata Health</span><br/><span class="tag">CONNECTED EMERGENCY &amp; CARE NETWORK</span></td>
  <td class="r"><span style="font-size:13pt;font-weight:bold;">{status}</span><br/>
-   <span class="tag">Invoice # </span><b>{e(inv['number'])}</b><br/>
+   <span class="tag">Invoice # </span><b>{e(inv.get('number') or 'DRAFT — not issued')}</b><br/>
    <span class="tag">Issued {e(inv['issue_date'])} &#183; Due {e(inv['due_date'])}</span></td>
 </tr></table>
 <div class="accent"></div><br/>
@@ -855,3 +1035,36 @@ table {{ width: 100%; border-collapse: collapse; }}
  </table>{('<br/><div class="stamp r">&#10003; PAID</div>') if inv['status'] == 'paid' else ''}</td></tr></table>
 <br/><br/><div class="foot">{e(s.get('terms'))}<br/>This is a computer-generated invoice from the Trata Health CRM and does not require a physical signature.</div>
 </body></html>"""
+
+
+def invoice_email_html(inv: Dict[str, Any], overdue: bool, app_url: Optional[str]) -> str:
+    e = lambda v: _html.escape(str(v)) if v not in (None, "") else "—"  # noqa: E731
+    money = lambda v: f"&#8377;{float(v or 0):,.2f}"  # noqa: E731
+    head = "Payment overdue" if overdue else "Your Trata Health invoice"
+    lead = (f"Invoice <b>{e(inv['number'])}</b> for {e(inv['month'])} was due on <b>{e(inv['due_date'])}</b> and is still unpaid. "
+            "Please arrange payment at the earliest." if overdue else
+            f"Invoice <b>{e(inv['number'])}</b> for services to Trata Health patients in {e(inv['month'])} is ready.")
+    link = (f'<p style="margin:20px 0"><a href="{e(app_url)}/provider/ledger" style="background:#0B3D91;color:#ffffff;'
+            f'padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:bold">View &amp; download invoice</a></p>'
+            if app_url and app_url.startswith("https://") else
+            "<p>Sign in to your Trata provider console &rarr; Trata Patients &amp; Billing &rarr; Invoices to download the PDF.</p>")
+    s = inv.get("seller") or {}
+    bank = "".join(f"<tr><td style='color:#6B778C;padding:2px 12px 2px 0'>{k}</td><td>{e(s.get(v))}</td></tr>"
+                   for k, v in (("Bank", "bank_name"), ("Account name", "account_name"), ("Account no.", "account_number"),
+                                ("IFSC", "ifsc"), ("UPI", "upi_id")) if s.get(v))
+    rows = "".join(f"<tr><td style='padding:4px 0;color:#42526E'>{k}</td><td style='padding:4px 0;text-align:right'>{v}</td></tr>"
+                   for k, v in (("Service fees", money(inv["service_fee"])), ("Marketing / promotion fees", money(inv["promotion_fee"])),
+                                (f"GST @ {inv['gst_pct']:.0f}%", money(inv["gst_total"]))))
+    return f"""<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F5F7;padding:24px 0">
+<tr><td align="center"><table role="presentation" width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;font-family:Arial,sans-serif;color:#091E42">
+<tr><td style="background:#0B3D91;color:#ffffff;padding:18px 24px;border-radius:8px 8px 0 0"><div style="font-size:20px;font-weight:bold">Trata Health</div>
+<div style="font-size:11px;color:#BFD4FF;letter-spacing:1px">{'PAYMENT REMINDER' if overdue else 'TAX INVOICE'}</div></td></tr>
+<tr><td style="height:4px;background:#00B8A9"></td></tr>
+<tr><td style="padding:24px"><h2 style="margin:0 0 8px;font-size:18px">{head}</h2>
+<p style="font-size:14px;line-height:20px">Hello {e(inv.get('provider_name'))},</p><p style="font-size:14px;line-height:20px">{lead}</p>
+<table role="presentation" width="100%" style="font-size:13px;border-top:1px solid #DFE1E6;border-bottom:1px solid #DFE1E6;margin:12px 0">{rows}
+<tr><td style="padding:8px 0;font-weight:bold">Total payable</td><td style="padding:8px 0;text-align:right;font-weight:bold;font-size:16px">{money(inv['grand_total'])}</td></tr></table>
+<p style="font-size:12px;color:#42526E">Due date: <b>{e(inv['due_date'])}</b> &middot; SAC {e(inv.get('sac_code'))}</p>{link}
+{('<p style="font-size:12px;color:#42526E;margin-bottom:4px"><b>Pay to</b></p><table style="font-size:12px">' + bank + '</table>') if bank else ''}
+<p style="font-size:11px;color:#888;margin-top:24px">Sent by Trata Health billing. We never ask for passwords, OTPs or card details by email.
+Questions? Reply to your Trata relationship manager.</p></td></tr></table></td></tr></table>"""

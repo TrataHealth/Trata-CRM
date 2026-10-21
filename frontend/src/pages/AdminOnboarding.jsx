@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { toast } from "sonner";
 import {
   UserPlus, Building2, Ambulance, Stethoscope, FlaskConical,
-  ShieldCheck, ChevronRight, Loader2, AlertTriangle, RefreshCw, ArrowUpRight, MapPin,
+  ShieldCheck, ChevronRight, Loader2, AlertTriangle, RefreshCw, ArrowUpRight, MapPin, ScanLine,
 } from "lucide-react";
 
 const T = {
@@ -20,7 +20,8 @@ const VERTICALS = [
   { key: "hospital", label: "Hospital",   icon: Building2   },
   { key: "ambulance", label: "Ambulance", icon: Ambulance   },
   { key: "doctor", label: "Doctor",       icon: Stethoscope },
-  { key: "pathology", label: "Pathology", icon: FlaskConical},
+  { key: "path_lab", label: "Lab Partner", icon: FlaskConical },
+  { key: "diagnostic_centre", label: "Imaging & Diagnostics", icon: ScanLine },
 ];
 
 const STATUS_TONE = {
@@ -83,6 +84,7 @@ export default function AdminOnboarding() {
     try {
       const { data } = await api.post("/admin/onboarding/providers", {
         ...form, lat: hasLoc ? lat : null, lng: hasLoc ? lng : null,
+        ...(["path_lab", "diagnostic_centre"].includes(form.vertical) ? { vertical: "pathology", lab_kind: form.vertical } : {}),
       });
       toast.success(data.already_existed
         ? "Provider already existed on Trata — jumping to KYC"

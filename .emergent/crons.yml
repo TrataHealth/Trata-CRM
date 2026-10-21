@@ -1,0 +1,16 @@
+crons:
+  - name: invoice-reminders
+    description: "Daily 10am IST: CRM + email reminder for shared invoices past due, every 3 days until paid"
+    cron: "0 10 * * *"
+    timezone: "Asia/Kolkata"
+    endpoint: "{{BASE_URL}}/api/cron/invoice-reminders"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true
+  - name: monthly-draft-invoices
+    description: "1st of each month 6am IST: raise draft invoices for last month for every provider"
+    cron: "30 0 1 * *"
+    endpoint: "{{BASE_URL}}/api/cron/monthly-invoices"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

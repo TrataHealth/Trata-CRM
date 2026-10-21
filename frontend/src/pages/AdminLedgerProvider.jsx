@@ -9,7 +9,7 @@ import { PatientServices } from "../components/ledger/PatientServices";
 import { ServiceForm } from "../components/ledger/ServiceForm";
 import { InvoiceList } from "../components/ledger/InvoiceList";
 
-const FEE_KEYS = ["consultation", "teleconsultation", "admission", "ambulance_ride", "lab_test", "surgery", "procedure", "icu_stay", "room_charges", "implant", "diagnostics", "pharmacy", "other"];
+const FEE_KEYS = ["consultation", "teleconsultation", "admission", "ambulance_ride", "lab_test", "diagnostic_scan", "surgery", "procedure", "icu_stay", "room_charges", "implant", "diagnostics", "pharmacy", "other"];
 
 function Promotions({ uid, promos, onChanged }) {
   const [f, setF] = useState({ title: "", description: "", amount: "", charge_date: new Date().toISOString().slice(0, 10), channel: "in_app" });

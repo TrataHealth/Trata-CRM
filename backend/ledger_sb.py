@@ -46,12 +46,22 @@ async def list_providers() -> List[Dict[str, Any]]:
          LEFT JOIN public.doctors d ON d.user_id = u.id
              WHERE u.role = ANY($1::text[]) AND coalesce(u.is_archived, FALSE) = FALSE
              ORDER BY u.created_at DESC NULLS LAST""", list(LEDGER_ROLES))
+    split = {}
+    if await sb.lab_split_live():
+        async with pool.acquire() as conn:
+            for kind, (tbl, _b, _fk) in sb.LAB_KINDS.items():
+                for x in await conn.fetch(f"SELECT user_id::text AS uid, name, city FROM public.{tbl} WHERE coalesce(is_demo, FALSE) = FALSE"):
+                    split[x["uid"]] = (kind, x["name"], x["city"])
     out = []
     for r in rows:
         d = dict(r)
+        if d["id"] in split:
+            d["role"] = "pathologist"
+            kind, nm, city = split[d["id"]]
+            d.update(display_name=nm or d["display_name"], city=city or d["city"], lab_kind=kind)
         if _is_test(d["display_name"]) or _is_test(d["name"]):
             continue
-        d["vertical"] = LEDGER_ROLES[d["role"]]
+        d["vertical"] = d.get("lab_kind") or LEDGER_ROLES[d["role"]]
         d["created_at"] = d["created_at"].isoformat() if d["created_at"] else None
         out.append(d)
     return out
@@ -70,7 +80,17 @@ async def _id_map(conn, user_ids: Optional[List[str]] = None) -> Dict[str, Dict[
          UNION ALL SELECT id FROM public.doctors WHERE user_id=u.id AND u.role='doctor') x ON TRUE""",
         list(LEDGER_ROLES), user_ids)
     m: Dict[str, Dict[str, Any]] = {}
+    if await sb.lab_split_live():
+        for kind, (tbl, _b, _fk) in sb.LAB_KINDS.items():
+            for x in await conn.fetch(f"""SELECT id::text AS pid, user_id::text AS uid FROM public.{tbl}
+                                          WHERE ($1::text[] IS NULL OR user_id::text = ANY($1::text[]))""", user_ids):
+                if x["uid"]:
+                    o = m.setdefault(x["uid"], {"user_id": x["uid"], "vertical": kind})
+                    o.update(vertical=kind, profile_id=x["pid"])
+                    m[x["pid"]] = o
     for r in rows:
+        if r["user_id"] in m and m[r["user_id"]]["vertical"] in sb.LAB_KINDS:
+            continue
         o = m.setdefault(r["user_id"], {"user_id": r["user_id"], "vertical": LEDGER_ROLES[r["role"]]})
         if r["pid"]:
             o["profile_id"] = r["pid"]
@@ -134,6 +154,22 @@ async def _collect(conn, idmap: Dict[str, Dict[str, Any]]) -> Dict[str, List[Dic
                collection_address, report_url, payment_status, status, pathologist_notes, created_at
           FROM public.pathology_bookings WHERE pathologist_id = ANY($1::text[])"""),
     )
+
+    if await sb.lab_split_live():
+        L = await asyncio.gather(
+            q("""SELECT b.id::text AS id, b.path_lab_profile_id::text AS owner, b.patient_id::text AS patient_id,
+                        b.tests::text AS tests, b.collection_type, b.scheduled_for, b.total_amount, b.status,
+                        b.report_url, b.created_at, br.name AS branch
+                   FROM public.path_lab_bookings b LEFT JOIN public.path_lab_branches br ON br.id = b.path_lab_branch_id
+                  WHERE b.path_lab_profile_id::text = ANY($1::text[])"""),
+            q("""SELECT b.id::text AS id, b.diagnostic_centre_profile_id::text AS owner, b.patient_id::text AS patient_id,
+                        b.scans::text AS scans, b.scheduled_for, b.total_amount, b.status, b.report_url, b.images_url,
+                        b.referring_doctor_id::text AS referring_doctor_id, b.created_at, br.name AS branch
+                   FROM public.diagnostic_bookings b LEFT JOIN public.diagnostic_centre_branches br ON br.id = b.diagnostic_centre_branch_id
+                  WHERE b.diagnostic_centre_profile_id::text = ANY($1::text[])"""))
+        R = (*R[:5], [])  # legacy pathology_bookings ignored once split is live (ids preserved by migration)
+    else:
+        L = ([], [])
 
     def add(owner_id, vertical_ok, svc):
         o = idmap.get(owner_id)
@@ -200,6 +236,22 @@ async def _collect(conn, idmap: Dict[str, Dict[str, Any]]) -> Dict[str, List[Dic
                 "Scheduled": f"{r['scheduled_date'] or ''} {r['scheduled_time'] or ''}".strip(),
                 "Collection address": r["collection_address"], "Report": r["report_url"],
                 "Payment": r["payment_status"], "Lab notes": r["pathologist_notes"]}))
+
+    for r in L[0]:
+        tests = _j(r["tests"]) or []
+        names = ", ".join(str(t.get("name") or t.get("code") or "") for t in tests if isinstance(t, dict)) or None
+        add(r["owner"], {"path_lab"}, _svc("lab_test", r, r["patient_id"], None, None, r["created_at"],
+            f"Lab tests · {names or ''}".strip(" ·"), r["total_amount"], r["status"], {
+                "Tests": names, "Collection": (r["collection_type"] or "").replace("_", " "), "Branch": r["branch"],
+                "Scheduled": r["scheduled_for"].isoformat() if r["scheduled_for"] else None, "Report": r["report_url"]}))
+    for r in L[1]:
+        scans = _j(r["scans"]) or []
+        names = ", ".join(" ".join(filter(None, [str(t.get("modality") or ""), str(t.get("body_part") or "")])) for t in scans if isinstance(t, dict)) or None
+        add(r["owner"], {"diagnostic_centre"}, _svc("diagnostic_scan", r, r["patient_id"], None, None, r["created_at"],
+            f"Imaging · {names or ''}".strip(" ·"), r["total_amount"], r["status"], {
+                "Scans": names, "Branch": r["branch"], "Referring doctor": r["referring_doctor_id"],
+                "Scheduled": r["scheduled_for"].isoformat() if r["scheduled_for"] else None,
+                "Report": r["report_url"], "Images": r["images_url"]}))
 
     allsv = [x for v in by.values() for x in v]
     pids = list({x["patient_id"] for x in allsv if x["patient_id"]})

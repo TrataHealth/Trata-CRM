@@ -1431,6 +1431,7 @@ class AdminOnboardProviderBody(BaseModel):
     address: Optional[str] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
+    lab_kind: Optional[str] = None  # path_lab | diagnostic_centre (vertical=pathology)
 
 
 class AdminApproveBody(BaseModel):
@@ -1479,6 +1480,8 @@ async def admin_onboarding_create_provider(body: AdminOnboardProviderBody, curre
         raise HTTPException(status_code=400, detail="Name is required")
     if not phone or len(phone) != 10:
         raise HTTPException(status_code=400, detail="A valid 10-digit phone is required")
+    if body.vertical == "pathology" and body.lab_kind not in sb.LAB_KINDS:
+        raise HTTPException(status_code=400, detail="Choose Lab Partner (path_lab) or Imaging & Diagnostics Partner (diagnostic_centre)")
     if body.vertical != "doctor" and not sb.valid_coords(body.lat, body.lng):
         raise HTTPException(status_code=400, detail="Valid latitude and longitude are required so the provider is discoverable in the Patient App")
 
@@ -1487,7 +1490,7 @@ async def admin_onboarding_create_provider(body: AdminOnboardProviderBody, curre
         phone=phone, name=name, vertical=body.vertical,
         city=body.city, state=body.state, email=body.email, address=body.address,
         onboarded_by=current.get("name") or current.get("phone"),
-        lat=body.lat, lng=body.lng,
+        lat=body.lat, lng=body.lng, lab_kind=body.lab_kind or "path_lab",
     )
     if not sb_res.get("success"):
         raise HTTPException(status_code=400, detail=sb_res.get("reason", "onboard_failed"))

@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Receipt, Search, Loader2, ClipboardCheck, Settings2, RefreshCw, Building2, Ambulance, FlaskConical, Stethoscope } from "lucide-react";
+import { Receipt, Search, Loader2, ClipboardCheck, Settings2, RefreshCw, Building2, Ambulance, FlaskConical, Stethoscope, ScanLine } from "lucide-react";
 import api from "../lib/api";
 import { T, money, thisMonth, STATUS_TONE, pretty, toastErr } from "../components/ledger/ui";
 
-const V_ICON = { hospital: Building2, ambulance: Ambulance, pathology: FlaskConical, doctor: Stethoscope };
+const V_ICON = { hospital: Building2, ambulance: Ambulance, pathology: FlaskConical, path_lab: FlaskConical, diagnostic_centre: ScanLine, doctor: Stethoscope };
+const V_LABEL = { pathology: "Lab (legacy)", path_lab: "Lab Partner", diagnostic_centre: "Imaging & Diagnostics Partner" };
 
 const Kpi = ({ label, value, sub, testid }) => (
   <div className={`${T.card} p-4`} data-testid={testid}>
@@ -49,6 +50,7 @@ export default function AdminLedger() {
           <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="text-xs px-2 py-1.5 border border-[#DFE1E6] rounded bg-white" data-testid="ledger-month" />
           <button className={T.btnGhost} onClick={() => load(true)} data-testid="ledger-refresh"><RefreshCw className={`h-3.5 w-3.5 ${state.loading ? "animate-spin" : ""}`} /> Refresh</button>
           <Link to="/admin/ledger/review" className={T.btnGhost} data-testid="ledger-review-link"><ClipboardCheck className="h-3.5 w-3.5" /> Review queue{t.pending_review ? ` (${t.pending_review})` : ""}</Link>
+          <Link to="/admin/ledger/revenue" className={T.btn} data-testid="ledger-revenue-link"><Receipt className="h-3.5 w-3.5" /> Revenue</Link>
           <Link to="/admin/ledger/settings" className={T.btnGhost} data-testid="ledger-settings-link"><Settings2 className="h-3.5 w-3.5" /> Invoice settings</Link>
         </div>
       </div>
@@ -69,7 +71,8 @@ export default function AdminLedger() {
             </div>
             <select value={vertical} onChange={(e) => setVertical(e.target.value)} className="text-xs normal-case tracking-normal font-normal border border-[#DFE1E6] rounded bg-white px-2 py-1" data-testid="ledger-vertical">
               <option value="all">All types</option><option value="hospital">Hospitals</option><option value="ambulance">Ambulance</option>
-              <option value="pathology">Labs</option><option value="doctor">Doctors</option>
+              <option value="pathology">Labs (legacy)</option><option value="path_lab">Lab Partners</option>
+              <option value="diagnostic_centre">Imaging & Diagnostics Partners</option><option value="doctor">Doctors</option>
             </select>
             <label className="flex items-center gap-1 normal-case tracking-normal font-normal text-xs text-[#42526E]">
               <input type="checkbox" checked={onlyActive} onChange={(e) => setOnlyActive(e.target.checked)} data-testid="ledger-only-active" /> With Trata patients only
@@ -97,7 +100,7 @@ export default function AdminLedger() {
                         <Link to={`/admin/ledger/${p.id}`} className="flex items-center gap-2 group" data-testid={`ledger-open-${p.id}`}>
                           <Icon className="h-4 w-4 text-[#0052CC] shrink-0" />
                           <div className="min-w-0"><div className="font-semibold text-[#091E42] group-hover:underline truncate">{p.display_name}</div>
-                            <div className="text-[10px] text-[#5E6C84]">{pretty(p.vertical)} · {p.city || "—"}</div></div>
+                            <div className="text-[10px] text-[#5E6C84]">{V_LABEL[p.vertical] || pretty(p.vertical)} · {p.city || "—"}</div></div>
                         </Link>
                       </td>
                       <td className="px-3 py-2 text-right font-bold">{p.patients}</td>
