@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Optional
 import requests
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import Response
+from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, Field
 
 import ledger_sb as lsb
@@ -36,6 +37,44 @@ EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
 MAX_FILE = 15 * 1024 * 1024
 ALLOWED_MIME = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
 GST_PCT = 18.0
+BILLABLE_STATUSES = {"completed", "complete", "discharged", "delivered", "fulfilled", "closed", "done",
+                     "report_ready", "report_generated", "results_uploaded", "report_uploaded"}
+STATE_CODES = {"01": "Jammu and Kashmir", "02": "Himachal Pradesh", "03": "Punjab", "04": "Chandigarh", "05": "Uttarakhand",
+               "06": "Haryana", "07": "Delhi", "08": "Rajasthan", "09": "Uttar Pradesh", "10": "Bihar", "11": "Sikkim",
+               "12": "Arunachal Pradesh", "13": "Nagaland", "14": "Manipur", "15": "Mizoram", "16": "Tripura",
+               "17": "Meghalaya", "18": "Assam", "19": "West Bengal", "20": "Jharkhand", "21": "Odisha",
+               "22": "Chhattisgarh", "23": "Madhya Pradesh", "24": "Gujarat", "26": "Dadra and Nagar Haveli and Daman and Diu",
+               "27": "Maharashtra", "29": "Karnataka", "30": "Goa", "31": "Lakshadweep", "32": "Kerala", "33": "Tamil Nadu",
+               "34": "Puducherry", "35": "Andaman and Nicobar Islands", "36": "Telangana", "37": "Andhra Pradesh", "38": "Ladakh"}
+
+
+def state_code(state: Optional[str], gstin: Optional[str]) -> Optional[str]:
+    g = (gstin or "").strip()
+    if len(g) >= 2 and g[:2] in STATE_CODES:
+        return g[:2]
+    n = (state or "").strip().lower()
+    return next((c for c, name in STATE_CODES.items() if name.lower() == n), None)
+
+
+def _billable(s: Dict[str, Any]) -> bool:
+    return s["amount"] > 0 and (s.get("status") or "").strip().lower() in BILLABLE_STATUSES
+
+
+def _phone10(p) -> str:
+    d = re.sub(r"\D", "", str(p or ""))
+    return d[-10:] if len(d) >= 10 else ""
+
+
+def assign_groups(svcs: List[Dict[str, Any]]) -> None:
+    """Group key per patient: patient_id, merged across ids sharing the same phone."""
+    by_phone: Dict[str, str] = {}
+    for x in sorted(svcs, key=lambda x: x.get("date") or ""):
+        base = x.get("patient_id") or f"phone:{_phone10(x.get('patient_phone')) or 'unknown'}"
+        ph = _phone10(x.get("patient_phone"))
+        x["pkey"] = by_phone.setdefault(ph, base) if ph else base
+        x["billable"] = _billable(x)
+
+
 SERVICE_CATEGORIES = ["surgery", "procedure", "icu_stay", "room_charges", "implant", "diagnostics",
                       "pharmacy", "consultation", "ambulance", "lab_test", "other"]
 _storage_key: Optional[str] = None
@@ -193,6 +232,12 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
     r = APIRouter(prefix="/api")
     _cache: Dict[str, Any] = {}
 
+    @r.on_event("startup")
+    async def _indexes():
+        await db.ledger_invoices.update_many({"active": {"$exists": False}, "status": {"$ne": "void"}}, {"$set": {"active": True}})
+        await db.ledger_invoices.create_index([("provider_user_id", 1), ("month", 1)], unique=True,
+                                              partialFilterExpression={"active": True}, name="one_active_invoice_per_month")
+
     def is_admin(c) -> bool:
         return bool(c.get("is_master_admin") or c.get("role") == "admin")
 
@@ -222,11 +267,12 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
         if hit and not fresh and time.time() - hit[0] < 60:
             return hit[1]
         data = await lsb.fetch_provider_services(uid)
+        assign_groups(data.get("services", []))
         _cache[uid] = (time.time(), data)
         return data
 
     def patient_key(s) -> str:
-        return s.get("patient_id") or f"phone:{s.get('patient_phone') or 'unknown'}"
+        return s["pkey"]
 
     def fee_for(bp, category: str) -> float:
         return float((bp.get("category_fee_pct") or {}).get(category, bp.get("fee_pct", 10.0)))
@@ -259,12 +305,13 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
                 "created_by": m.get("created_by"), "reviewed_by": m.get("reviewed_by"),
                 "review_reason": m.get("review_reason"), "invoice_id": m.get("invoice_id"),
                 "linked_service_key": m.get("linked_service_key"), "ai_extracted": m.get("ai_extracted"),
+                "billable": m["status"] == "approved",
             })
         plist = []
         for p in patients.values():
             p["services"].sort(key=lambda s: s.get("date") or "", reverse=True)
             p["total_amount"] = _r2(sum(s["amount"] for s in p["services"]
-                                        if s["kind"] != "manual" or s["status"] == "approved"))
+                                        if (s["kind"] != "manual" and s.get("billable")) or s["status"] == "approved"))
             p["pending_review"] = sum(1 for s in p["services"] if s["kind"] == "manual" and s["status"] == "pending_review")
             plist.append(p)
         plist.sort(key=lambda p: max((s.get("date") or "" for s in p["services"]), default=""), reverse=True)
@@ -303,12 +350,14 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             provs, allsv = [dict(p) for p in hit[1][0]], hit[1][1]
         else:
             provs, allsv = await asyncio.gather(lsb.list_providers(), lsb.fetch_all_provider_services())
+            for v in allsv.values():
+                assign_groups(v)
             _cache["__all__"] = (time.time(), ([dict(p) for p in provs], allsv))
         for p in provs:
             svcs = allsv.get(p["id"], [])
             p["patients"] = len({patient_key(x) for x in svcs})
             p["auto_services"] = len(svcs)
-            p["month_auto_amount"] = _r2(sum(x["amount"] for x in svcs if (x["date"] or "").startswith(month)))
+            p["month_auto_amount"] = _r2(sum(x["amount"] for x in svcs if x["billable"] and (x["date"] or "").startswith(month)))
         man = {}
         async for m in db.ledger_services.find({"is_deleted": {"$ne": True}},
                                                {"_id": 0, "provider_user_id": 1, "status": 1, "amount": 1, "service_date": 1}):
@@ -421,6 +470,8 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             reply = await chat.send_message(UserMessage(
                 text=prompt, file_contents=[FileContentWithMimeType(file_path=path, mime_type=f["content_type"])]))
             parsed = parse_ai_json(str(reply))
+            if not isinstance(parsed, dict):
+                parsed = {}
         except Exception as e:
             logger.error(f"ledger ai extract failed: {e}")
             raise HTTPException(status_code=502, detail="AI extraction failed — please fill the form manually")
@@ -460,6 +511,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
         doc = {
             "id": str(uuid.uuid4()), "provider_user_id": uid, "patient_id": body.patient_id,
             "patient_name": body.patient_name or served[body.patient_id].get("patient_name"),
+            "patient_phone": served[body.patient_id].get("patient_phone"),
             "category": body.category, "title": body.title.strip(), "service_date": body.service_date,
             "amount": _r2(body.amount), "notes": body.notes, "line_items": body.line_items or [],
             "linked_service_key": body.linked_service_key,
@@ -502,8 +554,8 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
         s = await db.ledger_services.find_one({"id": sid, "is_deleted": {"$ne": True}}, {"_id": 0})
         if not s:
             raise HTTPException(status_code=404, detail="Service not found")
-        if s.get("invoice_id"):
-            raise HTTPException(status_code=400, detail="Already invoiced")
+        if s["status"] != "pending_review":
+            raise HTTPException(status_code=400, detail=f"Already {s['status']} — only pending entries can be reviewed")
         upd = {"status": "approved" if body.action == "approve" else "rejected", "review_reason": body.reason,
                "reviewed_by": actor(current), "reviewed_at": _now(), "updated_at": _now()}
         if body.action == "approve" and body.amount is not None:
@@ -537,7 +589,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
     @r.delete("/ledger/promotions/{pid}")
     async def delete_promo(pid: str, current=Depends(get_current_user)):
         require_admin(current)
-        pm = await db.ledger_promotions.find_one({"id": pid}, {"_id": 0})
+        pm = await db.ledger_promotions.find_one({"id": pid, "is_deleted": {"$ne": True}}, {"_id": 0})
         if not pm or pm.get("invoice_id"):
             raise HTTPException(status_code=400, detail="Not found or already invoiced")
         await db.ledger_promotions.update_one({"id": pid}, {"$set": {"is_deleted": True}})
@@ -584,7 +636,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
         done = await invoiced_keys(uid)
         lines: List[Dict[str, Any]] = []
         for s in data["services"]:
-            if (s["date"] or "").startswith(body.month) and s["amount"] > 0 and s["key"] not in done:
+            if (s["date"] or "").startswith(body.month) and s["billable"] and s["key"] not in done:
                 pct = fee_for(bp, s["kind"])
                 lines.append({"key": s["key"], "type": "service", "category": s["kind"], "date": (s["date"] or "")[:10],
                               "patient": s.get("patient_name") or s.get("patient_phone") or "—",
@@ -596,7 +648,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
         for m in manual:
             pct = fee_for(bp, m["category"])
             lines.append({"key": f"manual:{m['id']}", "type": "service", "category": m["category"],
-                          "date": m["service_date"], "patient": m.get("patient_name") or "—",
+                          "date": m["service_date"], "patient": m.get("patient_name") or m.get("patient_phone") or "—",
                           "description": m["title"],
                           "billable": m["amount"], "fee_pct": pct, "fee": _r2(m["amount"] * pct / 100)})
         promos = await db.ledger_promotions.find({"provider_user_id": uid, "invoice_id": None, "is_deleted": {"$ne": True},
@@ -612,7 +664,8 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
         service_fee = _r2(sum(x["fee"] for x in lines if x["type"] == "service"))
         promo_fee = _r2(sum(x["fee"] for x in lines if x["type"] == "promotion"))
         taxable = _r2(service_fee + promo_fee)
-        same_state = bool(st.get("state")) and (st.get("state") or "").strip().lower() == (bp.get("state") or "").strip().lower()
+        seller_code, buyer_code = state_code(st.get("state"), st.get("gstin")), state_code(bp.get("state"), bp.get("gstin"))
+        same_state = bool(seller_code) and seller_code == buyer_code
         gst = _r2(taxable * GST_PCT / 100)
         tax = ({"cgst": _r2(gst / 2), "sgst": _r2(gst - _r2(gst / 2)), "igst": 0.0} if same_state
                else {"cgst": 0.0, "sgst": 0.0, "igst": gst})
@@ -627,6 +680,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             "provider_vertical": data["vertical"], "provider_city": prov.get("city"), "provider_phone": prov.get("phone"),
             "provider_gstin": bp.get("gstin"), "provider_address": bp.get("billing_address"),
             "provider_state": bp.get("state"), "provider_email": bp.get("billing_email"),
+            "place_of_supply": f"{STATE_CODES[buyer_code]} ({buyer_code})" if buyer_code else (bp.get("state") or None),
             "month": body.month, "sac_code": body.sac_code.strip(), "notes": body.notes,
             "issue_date": issue.date().isoformat(),
             "due_date": (issue + timedelta(days=body.due_days or st.get("payment_terms_days") or 15)).date().isoformat(),
@@ -635,9 +689,12 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             "gst_pct": GST_PCT, **tax, "gst_total": gst, "grand_total": _r2(taxable + gst),
             "seller": {k: st.get(k) for k in ("legal_name", "address", "state", "gstin", "pan", "cin", "email", "phone",
                                               "bank_name", "account_name", "account_number", "ifsc", "upi_id", "terms")},
-            "status": "issued", "created_by": actor(current), "created_at": _now(),
+            "status": "issued", "active": True, "created_by": actor(current), "created_at": _now(),
         }
-        await db.ledger_invoices.insert_one(dict(inv))
+        try:
+            await db.ledger_invoices.insert_one(dict(inv))
+        except DuplicateKeyError:
+            raise HTTPException(status_code=400, detail="An invoice already exists for this month — void it first")
         await db.ledger_services.update_many({"id": {"$in": [m["id"] for m in manual]}}, {"$set": {"invoice_id": inv["id"]}})
         await db.ledger_promotions.update_many({"id": {"$in": [p["id"] for p in promos]}}, {"$set": {"invoice_id": inv["id"]}})
         return inv
@@ -689,7 +746,10 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             raise HTTPException(status_code=400, detail="status must be paid or void")
         if inv["status"] == "void":
             raise HTTPException(status_code=400, detail="Invoice already void")
-        await db.ledger_invoices.update_one({"id": iid}, {"$set": {"status": status, f"{status}_at": _now()}})
+        upd = {"status": status, f"{status}_at": _now()}
+        if status == "void":
+            upd["active"] = False
+        await db.ledger_invoices.update_one({"id": iid}, {"$set": upd})
         if status == "void":
             await db.ledger_services.update_many({"invoice_id": iid}, {"$set": {"invoice_id": None}})
             await db.ledger_promotions.update_many({"invoice_id": iid}, {"$set": {"invoice_id": None}})
@@ -756,7 +816,7 @@ table {{ width: 100%; border-collapse: collapse; }}
    {e(s.get('email'))} {('&#183; ' + e(s.get('phone'))) if s.get('phone') else ''}</td>
  <td width="50%"><div class="h">Billed to</div><b>{e(inv.get('provider_name'))}</b><br/>
    {e(inv.get('provider_address') or inv.get('provider_city'))}<br/>State: {e(inv.get('provider_state'))}<br/>
-   GSTIN: <b>{e(inv.get('provider_gstin'))}</b><br/>{e(inv.get('provider_email') or inv.get('provider_phone'))}</td>
+   GSTIN: <b>{e(inv.get('provider_gstin'))}</b><br/>Place of supply: <b>{e(inv.get('place_of_supply'))}</b><br/>{e(inv.get('provider_email') or inv.get('provider_phone'))}</td>
 </tr></table>
 <table class="box" style="background-color:#F7F9FC;"><tr>
  <td><span class="h">Billing period</span><br/><b>{e(inv['month'])}</b></td>

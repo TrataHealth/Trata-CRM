@@ -4,7 +4,7 @@ import { ArrowLeft, Loader2, Plus, Megaphone, FileText, Percent, Users, Trash2 }
 import { toast } from "sonner";
 import api from "../lib/api";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { T, money, thisMonth, pretty, toastErr } from "../components/ledger/ui";
+import { T, money, thisMonth, pretty, toastErr, INDIAN_STATES } from "../components/ledger/ui";
 import { PatientServices } from "../components/ledger/PatientServices";
 import { ServiceForm } from "../components/ledger/ServiceForm";
 import { InvoiceList } from "../components/ledger/InvoiceList";
@@ -77,7 +77,13 @@ function BillingTerms({ uid, bp, onChanged }) {
         {inp("gstin", "GSTIN", "22AAAAA0000A1Z5")}
         {inp("pan", "PAN")}
         {inp("billing_address", "Billing address")}
-        <div className="grid grid-cols-2 gap-2">{inp("state", "State", "Decides CGST+SGST vs IGST")}{inp("billing_email", "Billing email")}</div>
+        <div className="grid grid-cols-2 gap-2">
+          <label className={T.label}>State (place of supply)
+            <select className={T.input} value={f.state || ""} onChange={(e) => setF({ ...f, state: e.target.value })} data-testid="billing-state">
+              <option value="">Select…</option>{INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>{inp("billing_email", "Billing email")}</div>
+        <p className="text-[10px] text-[#5E6C84]">Same state as Trata → CGST 9% + SGST 9%; otherwise IGST 18%. GSTIN's state code takes priority when present.</p>
         <button className={T.btn} onClick={save} data-testid="billing-save">Save billing terms</button>
       </section>
     </div>
@@ -85,9 +91,13 @@ function BillingTerms({ uid, bp, onChanged }) {
 }
 
 function InvoiceTab({ uid, invoices, onChanged }) {
-  const [f, setF] = useState({ month: thisMonth(), sac_code: "", notes: "" });
+  const [f, setF] = useState(null);
   const [busy, setBusy] = useState(false);
-  useEffect(() => { api.get("/ledger/settings").then(({ data }) => setF((x) => ({ ...x, sac_code: x.sac_code || data.default_sac || "" }))).catch(() => {}); }, []);
+  useEffect(() => {
+    api.get("/ledger/settings").then(({ data }) => setF({ month: thisMonth(), sac_code: data.default_sac || "", notes: "" }))
+      .catch(() => setF({ month: thisMonth(), sac_code: "", notes: "" }));
+  }, []);
+  if (!f) return <div className="p-6 flex items-center gap-2 text-sm text-[#5E6C84]"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>;
   const gen = async () => {
     if (!f.sac_code.trim()) return toast.error("Enter the SAC code");
     setBusy(true);
@@ -104,7 +114,7 @@ function InvoiceTab({ uid, invoices, onChanged }) {
           <label className={T.label}>Notes on invoice<input className={T.input} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} data-testid="invoice-notes" /></label>
           <button className={T.btn} onClick={gen} disabled={busy} data-testid="invoice-generate-btn">{busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Raise invoice</button>
         </div>
-        <p className="text-[11px] text-[#5E6C84] mt-2">Includes app services with a bill amount, approved extended services and promotion fees dated in that month that aren't already invoiced. Trata fee + 18% GST. Items lock once invoiced.</p>
+        <p className="text-[11px] text-[#5E6C84] mt-2">Includes completed app services with a bill amount, approved extended services and promotion fees dated in that month that aren't already invoiced. Trata fee + 18% GST. Items lock once invoiced.</p>
       </section>
       <section className={T.card}><div className={T.head}>Invoices</div><InvoiceList invoices={invoices} admin onChanged={onChanged} /></section>
     </div>

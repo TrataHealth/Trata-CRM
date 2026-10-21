@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { ChevronDown, ChevronRight, FileText, Plus, Sparkles, Smartphone, Trash2 } from "lucide-react";
 import api from "../../lib/api";
-import { relativeTime } from "../../lib/constants";
 import { T, money, KIND_LABEL, STATUS_TONE, pretty, openFile, toastErr } from "./ui";
 
 function Details({ s }) {
@@ -54,6 +53,7 @@ function ServiceRow({ s, canDelete, onChanged }) {
               {isManual ? (s.source === "ai" && <span className="inline-flex items-center gap-0.5 text-[#5243AA]"><Sparkles className="h-2.5 w-2.5" />AI-filled</span>)
                 : <span className="inline-flex items-center gap-0.5 text-[#00875A]"><Smartphone className="h-2.5 w-2.5" />Patient app</span>}
               {s.invoice_id && <span className="text-[#0747A6]">· invoiced</span>}
+              {!isManual && s.amount > 0 && !s.billable && <span className="text-[#974F0C]" title="Billed only once the service is completed">· not yet billable</span>}
             </div>
           </div>
         </button>
@@ -85,7 +85,7 @@ export function PatientServices({ patients, onAdd, onChanged, canDelete }) {
                 <div className="h-8 w-8 rounded-full bg-[#DEEBFF] text-[#0747A6] text-xs font-bold flex items-center justify-center shrink-0">{(p.name || "?").slice(0, 1).toUpperCase()}</div>
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-[#091E42] truncate">{p.name || "Unnamed patient"}</div>
-                  <div className="text-[11px] text-[#5E6C84]">{p.phone || "—"} · {p.services.length} service{p.services.length === 1 ? "" : "s"} · first visit {p.first_seen ? relativeTime(p.first_seen) : "—"}</div>
+                  <div className="text-[11px] text-[#5E6C84]">{p.phone || "—"} · {p.services.length} service{p.services.length === 1 ? "" : "s"} · first visit {p.first_seen ? p.first_seen.slice(0, 10) : "—"}</div>
                 </div>
               </button>
               <div className="flex items-center gap-3 shrink-0">

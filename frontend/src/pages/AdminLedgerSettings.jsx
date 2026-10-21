@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import api from "../lib/api";
-import { T, toastErr } from "../components/ledger/ui";
+import { T, toastErr, INDIAN_STATES } from "../components/ledger/ui";
 
 const GROUPS = [
   ["Company", [["legal_name", "Legal name *"], ["address", "Registered address *"], ["state", "State *"], ["gstin", "GSTIN"], ["pan", "PAN"], ["cin", "CIN"], ["email", "Billing email"], ["phone", "Phone"]]],
@@ -35,7 +35,11 @@ export default function AdminLedgerSettings() {
           <div className="grid sm:grid-cols-2 gap-3">
             {fields.map(([k, label]) => (
               <label key={k} className={`${T.label} ${k === "address" ? "sm:col-span-2" : ""}`}>{label}
-                <input className={T.input} value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} data-testid={`settings-${k}`} />
+                {k === "state" ? (
+                  <select className={T.input} value={f.state || ""} onChange={(e) => setF({ ...f, state: e.target.value })} data-testid="settings-state">
+                    <option value="">Select…</option>{INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                ) : <input className={T.input} value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} data-testid={`settings-${k}`} />}
               </label>
             ))}
           </div>

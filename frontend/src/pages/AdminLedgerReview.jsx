@@ -24,7 +24,7 @@ function ReviewCard({ s, onDone }) {
         <div className="min-w-0">
           <div className="text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold">{s.provider_name || "Provider"} · {pretty(s.category)}</div>
           <div className="text-sm font-semibold text-[#091E42]">{s.title}</div>
-          <div className="text-[11px] text-[#5E6C84]">Patient {s.patient_name || "—"} · {s.service_date} · by {s.created_by?.name}
+          <div className="text-[11px] text-[#5E6C84]">Patient {s.patient_name || s.patient_phone || "—"} · {s.service_date} · by {s.created_by?.name}
             {s.source === "ai" && <span className="ml-1 inline-flex items-center gap-0.5 text-[#5243AA]"><Sparkles className="h-2.5 w-2.5" /> AI-filled</span>}</div>
         </div>
         <div className="text-right"><div className="text-[10px] text-[#5E6C84]">Claimed</div><div className="font-mono font-black">{money(s.amount)}</div></div>

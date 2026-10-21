@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Receipt, Search, Loader2, ClipboardCheck, Settings2, RefreshCw, Building2, Ambulance, FlaskConical, Stethoscope } from "lucide-react";
 import api from "../lib/api";
 import { T, money, thisMonth, STATUS_TONE, pretty, toastErr } from "../components/ledger/ui";
@@ -20,6 +20,7 @@ export default function AdminLedger() {
   const [q, setQ] = useState("");
   const [vertical, setVertical] = useState("all");
   const [onlyActive, setOnlyActive] = useState(true);
+  const navigate = useNavigate();
 
   const load = useCallback(async (fresh = false) => {
     setState((s) => ({ ...s, loading: true }));
@@ -91,7 +92,7 @@ export default function AdminLedger() {
                 {rows.map((p) => {
                   const Icon = V_ICON[p.vertical] || Building2;
                   return (
-                    <tr key={p.id} className="border-t border-[#DFE1E6] hover:bg-[#F8F9FA] transition-colors" data-testid={`ledger-row-${p.id}`}>
+                    <tr key={p.id} onClick={() => navigate(`/admin/ledger/${p.id}`)} className="border-t border-[#DFE1E6] hover:bg-[#F8F9FA] transition-colors cursor-pointer" data-testid={`ledger-row-${p.id}`}>
                       <td className="px-3 py-2">
                         <Link to={`/admin/ledger/${p.id}`} className="flex items-center gap-2 group" data-testid={`ledger-open-${p.id}`}>
                           <Icon className="h-4 w-4 text-[#0052CC] shrink-0" />

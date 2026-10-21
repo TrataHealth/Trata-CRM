@@ -70,7 +70,7 @@ export function ServiceForm({ open, onClose, mode, uid, patients, defaultPatient
             ...cur, category: x.category || cur.category, title: x.title || cur.title,
             service_date: /^\d{4}-\d{2}-\d{2}$/.test(x.service_date || "") ? x.service_date : cur.service_date,
             amount: x.amount != null ? String(x.amount) : cur.amount,
-            notes: [x.notes, x.bill_number && `Bill #${x.bill_number}`, x.doctor_name && `Dr. ${x.doctor_name}`].filter(Boolean).join(" · ") || cur.notes,
+            notes: [x.notes, x.bill_number && `Bill #${x.bill_number}`, x.doctor_name && (/^dr\.?\s/i.test(x.doctor_name) ? x.doctor_name : `Dr. ${x.doctor_name}`)].filter(Boolean).join(" · ") || cur.notes,
             line_items: (x.line_items || []).map((l) => ({ description: l.description, amount: String(l.amount ?? "") })),
           }));
           if (x.patient_name) {

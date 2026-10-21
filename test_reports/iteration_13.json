@@ -1,0 +1,58 @@
+{
+  "summary": "Tested the Provider Ledger feature end to end against live shared Supabase, using 2 TEST_probe hospitals (phones 9999900021/22). Each probe had one TEST emergency_cases row for patient 9afe9c0c. Backend: 46/46 pytest checks passed (test_provider_ledger.py). They cover access control, the providers list and detail, file upload and streaming with type/size/ownership rules, Gemini AI extraction of sample_bill.pdf, service validation (proof, patient, date, category, foreign proof), the provider submit → review approve/reject flow, promotions, billing terms, settings, and invoices. Invoice checks: CGST/SGST vs IGST math, SAC and month rules, duplicate block, item locks, PDF, share (Supabase notification row checked), provider visibility, paid, void and unlock, re-invoice. Frontend tested with Playwright: admin list (KPIs, search, type filter, toggle, month), Xenon detail (2 patient cards, service details expand, 4 tabs), AI autofill dialog (title, amount 70000, surgery, 3 line items, proof chip), the no-proof error toast, save → approved, promotions add/delete, billing save that persists, raise invoice that computes correctly, PDF download, share, paid, the provider console (/provider/ledger shows only the paid invoice; provider submit → pending review), review queue (reject needs a reason, approve with an adjusted amount), and the settings page save that persists. The PDF template renders cleanly. Found a HIGH race condition: concurrent invoice creation double-bills.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/ledger/providers/{uid}/invoices", "issue": "Race condition: 4 concurrent POSTs for the same provider and month gave 3x 200, creating TH/202605/0001-0003. All 3 included the same promotion line, so the provider was billed 3 times. The duplicate-month check (find_one) and the item locking (update_many after insert) are not atomic. Fix: add a unique partial index on ledger_invoices {provider_user_id, month} where status != 'void', or claim the items atomically first (update_many invoice_id: None → reserve id, then build lines from what was claimed).", "priority": "HIGH"},
+      {"endpoint": "POST /api/ledger/providers/{uid}/invoices", "issue": "App services are billed whatever their status. Xenon's consultations with status PENDING_HOSPITAL (not delivered yet) were invoiced at 10%. Cancelled, rejected or no-show bookings would also be billed. Filter auto services to completed/delivered statuses, or let the admin exclude lines.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/ledger/services/{sid}/review", "issue": "There is no status check, so an already rejected (or approved) entry can be re-reviewed. Re-approving a rejected item returned 200 approved. Limit this to pending_review, or record an explicit override audit."},
+      {"endpoint": "POST /api/ledger/ai-extract/{fid}", "issue": "If parse_ai_json returns a non-dict (list or str), parsed.get raises an unhandled 500. Guard with isinstance(parsed, dict)."},
+      {"endpoint": "create_invoice same_state", "issue": "The state comparison is free text ('MH' vs 'Maharashtra' → wrongly IGST). Use a state dropdown or GST state code (first 2 digits of the GSTIN)."},
+      {"endpoint": "create_invoice manual lines", "issue": "The patient falls back only to patient_name, so the PDF shows '—' when the Supabase user has no name. Auto lines fall back to the phone; do the same for manual lines and the review card."},
+      {"endpoint": "DELETE /api/ledger/promotions/{pid}", "issue": "Does not check is_deleted, so deleting twice returns success."},
+      {"endpoint": "Invoice PDF", "issue": "There is no 'Place of supply' line, which a GST tax invoice requires. Consider adding the provider state code there."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ServiceForm AI autofill notes", "issue": "Notes show 'Dr. Dr. R. Mehta' because the 'Dr.' prefix is added even when doctor_name already has it.", "selector": "[data-testid='service-notes']", "priority": "LOW"},
+      {"component": "AdminLedger table", "issue": "The row has hover styling, but clicking anywhere except the provider name does nothing. Only ledger-open-{uid} navigates. Make the whole row clickable.", "selector": "[data-testid^='ledger-row-']", "priority": "LOW"},
+      {"component": "InvoiceTab SAC", "issue": "The SAC field is empty when the tab first renders. The default_sac arrives later from the /ledger/settings fetch and silently fills the field, even after the user has cleared it.", "selector": "[data-testid='invoice-sac']", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Patient grouping", "issue": "Xenon shows 2 patient cards that are the same person (Siddharth Gupta, 9873117605) under 2 different patient_ids. Patients are keyed only by patient_id. Consider merging by phone.", "affected_selectors": ["[data-testid^='ledger-patient-']"]}
+    ],
+    "design_issues": [
+      {"screen": "ServiceForm / Promotions / ledger-month / invoice-month", "issues": ["These use the browser's native date and month pickers instead of the shadcn Calendar/Popover"]},
+      {"screen": "Billing terms", "issues": ["State is a free-text input, but it decides CGST+SGST vs IGST. Use a select of Indian states."]},
+      {"screen": "Patient card", "issues": ["'first visit' mixes relative ('5d ago') and absolute ('8/21/2026') formats"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_provider_ledger.py", "/app/backend/tests/ledger_probe_fixtures.py", "/app/test_reports/pytest/ledger_results.xml"],
+  "action_items": [
+    "HIGH: Make invoice creation atomic: unique partial index on (provider_user_id, month, status!=void), or atomic claiming of items. This prevents duplicate invoices and double-billed lines under concurrent requests.",
+    "HIGH: Bill only delivered/completed Patient-App services. Exclude PENDING, CANCELLED and REJECTED bookings from invoice lines and from month_billable.",
+    "Restrict review_service to pending_review items",
+    "Guard ai_extract against non-dict AI output",
+    "Add a patient phone fallback for manual invoice lines and review cards",
+    "Fix the duplicated 'Dr.' prefix in AI notes",
+    "Use a state dropdown or GSTIN state code for the GST same-state decision; add Place of Supply to the PDF",
+    "Optional: whole-row click in the ledger table; shadcn date pickers; patient dedupe by phone"
+  ],
+  "critical_code_review_comments": [
+    "ledger.py is 782 lines (>700). Move render_invoice_html and _inr_words into ledger_invoice_pdf.py.",
+    "create_invoice does find_one duplicate check → insert → update_many lock with no atomicity (confirmed double billing)",
+    "fee_for uses the auto-service 'kind' (sos, admission, consultation, …) as the category key. That works, but category_fee_pct allows overlapping keys ('consultation' is in both lists).",
+    "Orphan proof files (uploaded, never attached) stay in object storage and ledger_files forever, with no cleanup",
+    "Voiding a paid/shared invoice is allowed without a credit-note trail. Consider GST credit notes for shared invoices."
+  ],
+  "updated_files": ["/app/backend/tests/test_provider_ledger.py", "/app/backend/tests/ledger_probe_fixtures.py"],
+  "success_rate": {"backend": "100% of 46 planned tests passed; 2 HIGH issues found in additional probing", "frontend": "95% (all flows work; minor UI issues)"},
+  "test_credentials": "Master admin 9873117605 / 123456 / Master@123. Probe hospitals are created by ledger_probe_fixtures.py (9999900021/22, pwd Probe@12345).",
+  "seed_data_creation": "All of it has been cleaned up. Removed: Supabase probe users, hospital_profiles, emergency_cases and notifications; Mongo ledger_* docs for the probe uids, billing_profiles, and counters inv-2025-12/2026-05/2026-06. The temporary Xenon invoice TH/202610/0001 and its counter were deleted. Trata settings were restored (Uttar Pradesh, upi_id ''). One leftover ledger_files doc for Xenon (sample_bill.pdf, created 10:04, before my run) belongs to the main agent's smoke test. Pre-existing stale Supabase user with phone 9999900003 was not created by me and was left alone.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `cd /app/backend/tests && /root/.venv/bin/python ledger_probe_fixtures.py setup`, then `python -m pytest test_provider_ledger.py -v -p no:randomly` (tests are ordered and share state), then `python ledger_probe_fixtures.py cleanup`. Also delete the ledger_counters inv-2025-12 doc and restore settings. test_restore_settings restores the Trata settings. Probe providers are filtered out of /ledger/providers by the TEST_ name filter, but /admin/ledger/{uid} works directly. For UI, inject trata_token plus trata_user (security_setup_required=false) into localStorage. To retest the race fix, fire 4 parallel POST /invoices for the same month and expect exactly 1 x 200.",
+  "rca of the issue": "Double invoicing: create_invoice reads existing invoices (find_one), builds lines from items with invoice_id None, inserts the invoice, and only then sets invoice_id on the items. Concurrent requests all pass the check and all see the same unlocked items. Reproduce: add a promo for a provider, then send 4 threaded POST /api/ledger/providers/{uid}/invoices {month, sac_code}. This gave 3 issued invoices for the same month, each with the promo line. Mitigation: unique partial index plus catching DuplicateKeyError → 400, or atomic per-item claim with find_one_and_update."
+}
