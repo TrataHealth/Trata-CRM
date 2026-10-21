@@ -112,7 +112,7 @@ export default function AdminOnboarding() {
             Onboard providers &amp; approve KYC
           </h1>
           <p className="text-sm text-[#5E6C84] mt-1 max-w-2xl">
-            Create a new hospital, ambulance, doctor or path-lab account here — it will appear in the mobile Provider App
+            Create a new hospital, ambulance, doctor, Lab Partner or Imaging & Diagnostics Partner account here — it will appear in the mobile Provider App
             and the Trata Admin App instantly. Then upload the checklist docs and one-click approve.
           </p>
         </div>

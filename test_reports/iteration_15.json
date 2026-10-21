@@ -1,0 +1,43 @@
+{
+  "summary": "Tested the Trata CRM billing add-ons on the backend and frontend. Backend: the new suite test_ledger_billing_addons.py passes 27/27, and the regression suites test_provider_ledger.py and test_ledger_fixes_iter14.py pass 59/59. Verified: (1) Monthly drafts: a missing default_sac returns {created:0, error:'Set a default SAC code...'}. Drafts get status 'draft' and number null. A re-run creates no duplicates. Drafts are hidden from the provider (/provider/ledger, GET invoice and PDF all 403). The draft PDF renders with 'DRAFT' text and a DRAFT- filename. Marking a draft paid returns 400. Discarding (void) works, and re-raising after discard creates a fresh draft. ?status=draft filters correctly. (2) Share on a draft assigns a sequential TH/YYYYMM/NNNN number and today's issue/due dates, sets status shared, stores app_url and writes a Supabase notifications row (type 'invoice'). With billing_email delivered@resend.dev the email_status is 'sent'. With no email (users.email nulled) it is 'no_email_on_file'. The provider can then see the invoice and download the PDF. (3) Reminders: invoices not yet due are skipped. An overdue invoice is reminded once (CRM row 'invoice_reminder' plus email sent, reminder_count=1, last_reminder_at set, deliveries log). An immediate re-run reminds 0. After last_reminder_at is moved back more than 3 days it is reminded again (count=2). Paid invoices are never reminded. (4) Cron endpoints return 401 with no token or a wrong Bearer and 200 {accepted:true} with WEBHOOK_CRON_SECRET. The same X-Webhook-Id sent twice gives a single cron_runs doc. The monthly cron ran in the background (0 real drafts for 2026-09). (5) The revenue figures match invoice aggregates (drafts and void excluded), including invoiced=paid+unpaid, gst=cgst+sgst+igst, outstanding.overdue and oldest_due, and the drafts count. The run, reminder and revenue endpoints return 403 for providers. (6) Onboarding: vertical=pathology without lab_kind or with an invalid lab_kind returns 400. path_lab and diagnostic_centre create legacy pathologists and labs rows with the matching lab_type. lab_split_live() is False (only 2 of the 4 split tables exist). Frontend (Playwright, desktop 1920): /admin/ledger → Revenue link → /admin/ledger/revenue shows the 5 KPIs, chart, table, outstanding list and drafts list. 'Issue & share' toasts 'TH/202610/0005 shared · emailed to delivered@resend.dev' and moves the invoice into KPIs, table and outstanding. 'Discard' (after confirm) shows the toast 'Draft discarded'. 'Send due reminders now' toasts '0 …' and then '1 overdue reminder(s) sent' once the invoice was overdue. 'Raise last month's drafts now' runs with no errors. The provider page Invoices tab shows invoice-email-{id} 'Reminder 1× · sent'. The Billing terms tab shows the billing email. The onboarding tiles are Hospital, Ambulance, Doctor, Lab Partner and Imaging & Diagnostics, with no Pathology tile. Submitting Imaging & Diagnostics returned 200 with labs.lab_type=diagnostic_centre. There were no page errors. All probe data was cleaned up: Supabase users, notifications and labs; Mongo invoices, billing profiles and counters.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "run_monthly_drafts (cron + /ledger/run/monthly-drafts)", "issue": "The per-provider loop only catches HTTPException. Any other error, such as a Supabase timeout inside auto_services/list_providers or a KeyError, stops the whole run, and later providers get no draft. In the cron path asyncio.create_task swallows the exception silently. The task reference is also not kept, so it can be garbage-collected. Fix: catch Exception per provider and log it, and keep the tasks in a module-level set."},
+      {"endpoint": "build_invoice / assign_number", "issue": "Timezones are mixed. issue_date and due_date use the UTC date, while reminders 'today' and last_month() use IST. Between 00:00 and 05:30 IST the invoice issue_date is yesterday. The service month match also uses UTC timestamps. Use IST consistently."},
+      {"endpoint": "build_invoice provider_name", "issue": "provider_name is bp.legal_name or the list_providers display_name. list_providers drops TEST_ names (_is_test), and any provider missing from that list ends up with provider_name=None. The Provider column on drafts and outstanding is then blank. Fall back to users.name or the profile name."},
+      {"endpoint": "ledger_counters", "issue": "Per-month counters are never rolled back when invoices are deleted or voided, and test runs on this shared DB use up real serial numbers. My run left inv-2026-10 at n=5 (reset by me), and iter14 suites leave inv-2025-11/12 behind (reset by me). Make the probe fixture cleanup delete counters when no invoices exist for that month."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/admin/ledger/revenue", "issues": ["The Monthly breakdown table has no empty-state row when months[] is empty (the chart shows 'No issued invoices yet.' but the table is a bare header).", "The 'GST' legend and bar colour #B3D4FF has low contrast on white.", "The Y-axis shows '₹0.0k'/'₹0.3k' for small values; use ₹ units under 1k."]},
+      {"screen": "/admin/onboarding", "issues": ["The subtitle still says 'hospital, ambulance, doctor or path-lab account'. The roster's Vertical column shows 'Pathology' for both lab kinds; it could show Lab Partner or Imaging & Diagnostics."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ledger_billing_addons.py", "/app/test_reports/pytest/iter15_billing_addons.xml", "/app/test_reports/pytest/iter15_regression.xml"],
+  "action_items": [
+    "Harden run_monthly_drafts: catch Exception per provider and log it, and keep a reference to the asyncio.create_task tasks in the cron handlers",
+    "Use IST consistently for issue_date, due_date and month boundaries",
+    "Fall back to users.name for provider_name when the provider is not in list_providers",
+    "Make ledger_probe_fixtures cleanup reset ledger_counters, so tests don't use up production invoice serials",
+    "Optional: empty state for the revenue table, GST legend contrast, onboarding subtitle copy",
+    "ledger.py is 1070 lines; split it (invoices, cron/reminders, revenue, PDF/email templates)"
+  ],
+  "critical_code_review_comments": [
+    "provider_email() falls back to Supabase users.email. Sharing or reminding a real provider will email their registered address. That is intended, but test fixtures must null users.email (probe fixtures set probe@test.local, which would otherwise be emailed). I nulled it during this run.",
+    "The revenue totals object has no cgst/sgst/igst totals. The UI does not show them, but the API is inconsistent with months[].",
+    "A share on an already shared or paid invoice re-sends the notification and email each time it is called. That is acceptable as 'resend', but it is not rate-limited.",
+    "The cron monthly-invoices entry has no timezone. 30 0 1 * * in UTC is 06:00 IST, which is correct only if the scheduler defaults to UTC."
+  ],
+  "updated_files": ["/app/backend/tests/test_ledger_billing_addons.py"],
+  "success_rate": {"backend": "100% (86/86 incl. regression)", "frontend": "100%"},
+  "test_credentials": "Master admin 9873117605 / 123456 / Master@123. The token is taken from ledger_probe_fixtures (server_admin_login).",
+  "seed_data_creation": "Only TEST_probe data was used: probe hospitals 9999900021/22 via the fixtures, TEST_probe promotions, and onboarding test phones 9999900031/32/33. Everything was deleted afterwards (Supabase users, pathologists, labs, notifications; Mongo invoices, billing profiles, crm_users, contacts and ledger_counters).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The container date is 2026-10-21 UTC. Run `python ledger_probe_fixtures.py setup`, then null users.email for 9999900021/22 in Supabase so the probes are not emailed at probe@test.local, then run test_ledger_billing_addons.py, then cleanup. Probe SOS rows have amount 0, so the suite seeds TEST_probe promotions to make them billable. The teardown hard-deletes non-probe invoices created during the run. Reset ledger_counters after the run when no invoices remain.",
+  "rca of the issue": "There were no functional failures. The first run's 'created 0' was a test-data issue: probe SOS amounts are 0, so nothing was billable. It was fixed by seeding promotions."
+}

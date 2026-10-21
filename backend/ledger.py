@@ -200,6 +200,30 @@ DEFAULT_SETTINGS = {
 }
 
 
+IST = timezone(timedelta(hours=5, minutes=30))
+_BG_TASKS: set = set()
+
+
+def _spawn(coro) -> None:
+    t = asyncio.create_task(coro)
+    _BG_TASKS.add(t)
+
+    def _done(task):
+        _BG_TASKS.discard(task)
+        if not task.cancelled() and task.exception():
+            logger.error(f"background job failed: {task.exception()}")
+    t.add_done_callback(_done)
+
+
+async def _sb_name(uid: str) -> Optional[str]:
+    try:
+        pool = await sb.get_pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchval("SELECT name FROM public.users WHERE id=$1", uid)
+    except Exception:
+        return None
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -686,11 +710,11 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
         gst = _r2(taxable * GST_PCT / 100)
         tax = ({"cgst": _r2(gst / 2), "sgst": _r2(gst - _r2(gst / 2)), "igst": 0.0} if same_state
                else {"cgst": 0.0, "sgst": 0.0, "igst": gst})
-        issue = datetime.now(timezone.utc)
+        issue = datetime.now(IST)
         prov = next((x for x in await lsb.list_providers() if x["id"] == uid), {}) or {}
         inv = {
             "id": str(uuid.uuid4()), "number": None,
-            "provider_user_id": uid, "provider_name": bp.get("legal_name") or prov.get("display_name"),
+            "provider_user_id": uid, "provider_name": bp.get("legal_name") or prov.get("display_name") or await _sb_name(uid),
             "provider_vertical": data["vertical"], "provider_city": prov.get("city"), "provider_phone": prov.get("phone"),
             "provider_gstin": bp.get("gstin"), "provider_address": bp.get("billing_address"),
             "provider_state": bp.get("state"), "provider_email": bp.get("billing_email"),
@@ -718,7 +742,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
     async def assign_number(inv: Dict[str, Any], st: Dict[str, Any]) -> Dict[str, Any]:
         seq = await db.ledger_counters.find_one_and_update({"id": f"inv-{inv['month']}"}, {"$inc": {"n": 1}},
                                                            upsert=True, return_document=True)
-        issue = datetime.now(timezone.utc)
+        issue = datetime.now(IST)
         upd = {"number": f"{st.get('invoice_prefix') or 'TH'}/{inv['month'].replace('-', '')}/{(seq or {}).get('n', 1):04d}",
                "issue_date": issue.date().isoformat(),
                "due_date": (issue + timedelta(days=st.get("payment_terms_days") or 15)).date().isoformat()}
@@ -791,6 +815,9 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
                 created.append({"id": inv["id"], "provider": inv["provider_name"], "total": inv["grand_total"]})
             except HTTPException:
                 skipped += 1
+            except Exception as e:
+                skipped += 1
+                logger.error(f"monthly draft failed for {p['id']}: {e}")
         logger.info(f"monthly drafts {month}: {len(created)} created, {skipped} skipped")
         return {"month": month, "created": len(created), "skipped": skipped, "invoices": created}
 
@@ -833,14 +860,14 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
     async def cron_monthly(request: Request):
         # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
         if await cron_guard(request, "monthly-invoices"):
-            asyncio.create_task(run_monthly_drafts(last_month(), {"id": "cron", "name": "Auto-raise (1st of month)", "role": "system"}))
+            _spawn(run_monthly_drafts(last_month(), {"id": "cron", "name": "Auto-raise (1st of month)", "role": "system"}))
         return {"accepted": True}
 
     @r.post("/cron/invoice-reminders")
     async def cron_reminders(request: Request):
         # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
         if await cron_guard(request, "invoice-reminders"):
-            asyncio.create_task(run_reminders())
+            _spawn(run_reminders())
         return {"accepted": True}
 
     @r.post("/ledger/run/monthly-drafts")

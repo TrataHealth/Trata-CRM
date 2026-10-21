@@ -51,6 +51,9 @@ async def _cleanup_mongo(ids):
     await db.ledger_promotions.delete_many({"title": {"$regex": "TEST_probe"}})
     await db.crm_users.delete_many({"phone": {"$in": PHONES}})
     await db.contacts.delete_many({"phone": {"$in": PHONES}})
+    for c in await db.ledger_counters.find({}, {"_id": 0, "id": 1}).to_list(500):
+        if not await db.ledger_invoices.count_documents({"month": c["id"].replace("inv-", ""), "number": {"$ne": None}}):
+            await db.ledger_counters.delete_one({"id": c["id"]})
     cl.close()
 
 

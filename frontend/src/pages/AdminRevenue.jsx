@@ -14,7 +14,7 @@ const Kpi = ({ label, value, tone = "text-[#091E42]", testid }) => (
   </div>
 );
 
-const inr = (v) => `₹${(v / 1000).toFixed(v >= 100000 ? 0 : 1)}k`;
+const inr = (v) => (v < 1000 ? `₹${v}` : v < 100000 ? `₹${(v / 1000).toFixed(1)}k` : `₹${(v / 100000).toFixed(1)}L`);
 
 export default function AdminRevenue() {
   const [data, setData] = useState(null);
@@ -78,7 +78,7 @@ export default function AdminRevenue() {
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 <Bar dataKey="service_fee" stackId="f" name="Service fees" fill="#0B3D91" />
                 <Bar dataKey="promotion_fee" stackId="f" name="Promotion fees" fill="#00B8A9" />
-                <Bar dataKey="gst" stackId="f" name="GST" fill="#B3D4FF" />
+                <Bar dataKey="gst" stackId="f" name="GST" fill="#4C9AFF" />
                 <Bar dataKey="unpaid" name="Unpaid" fill="#FF991F" />
               </BarChart>
             </ResponsiveContainer>
@@ -93,7 +93,8 @@ export default function AdminRevenue() {
             <thead className="bg-[#F8F9FA] text-[#5E6C84] uppercase text-[10px]"><tr>
               {["Month", "Invoices", "Fees", "CGST", "SGST", "IGST", "Invoiced", "Paid", "Unpaid"].map((h, i) => <th key={h} className={`px-3 py-2 ${i ? "text-right" : "text-left"}`}>{h}</th>)}
             </tr></thead>
-            <tbody>{[...data.months].reverse().map((m) => (
+            <tbody>{data.months.length === 0 && <tr><td colSpan={9} className="px-3 py-6 text-center text-[#5E6C84]" data-testid="revenue-table-empty">No issued invoices yet.</td></tr>}
+              {[...data.months].reverse().map((m) => (
               <tr key={m.month} className="border-t border-[#DFE1E6]" data-testid={`revenue-row-${m.month}`}>
                 <td className="px-3 py-2 font-semibold">{m.month}</td><td className="px-3 py-2 text-right">{m.invoices}</td>
                 {["taxable", "cgst", "sgst", "igst", "invoiced", "paid", "unpaid"].map((k) => <td key={k} className={`px-3 py-2 text-right font-mono ${k === "unpaid" && m.unpaid ? "text-[#974F0C] font-bold" : ""}`}>{money(m[k])}</td>)}

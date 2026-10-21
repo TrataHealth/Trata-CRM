@@ -308,6 +308,15 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Data: Mongo ledger_* + billing_profiles; Supabase read-only (ledger_sb.py bulk parallel queries, ~4s, cached 45s).
 - Tests: tests/test_provider_ledger.py + test_ledger_fixes_iter14.py (59 pass). Reports iteration_13/14.
 
+## Iter 44 (2026-06) — Billing automation + Lab split prep
+- Email (Emergent managed Resend, emailer.py): invoice email on Share (summary + "View & download" link; managed email has no attachment support); delivery log on invoice.
+- Overdue reminders: shared invoices past due (IST) → CRM notification + email every 3 days until paid (cron daily 10:00 IST, /api/cron/invoice-reminders; manual /api/ledger/run/reminders).
+- Monthly auto-raise: 1st of month 06:00 IST → DRAFT invoices for last month (/api/cron/monthly-invoices; manual /api/ledger/run/monthly-drafts). Drafts get number on "Issue & share"; Discard = void. Needs default SAC in settings.
+- Revenue dashboard /admin/ledger/revenue: month-by-month fees, CGST/SGST/IGST, invoiced/paid/unpaid/overdue, outstanding by provider, drafts list.
+- Crons: /app/.emergent/crons.yml (WEBHOOK_CRON_SECRET, idempotent via cron_runs.run_id).
+- Lab split: onboarding offers Lab Partner / Imaging & Diagnostics (vertical=pathology + lab_kind). sb.lab_split_live() auto-detects the 4 new tables (10-min cache) → writes path_lab_profiles/diagnostic_centre_profiles + branches, approves via is_verified, ledger + patient timeline read path_lab_bookings/diagnostic_bookings. Split SQL paths UNTESTED until tables exist. Ack + 8 schema concerns: /app/memory/LAB_SPLIT_CRM_ACK.md.
+- Tests: tests/test_ledger_billing_addons.py (27 pass) + previous ledger suites. Report iteration_15.json.
+
 ## Backlog / Next
 
 ### P1
