@@ -31,6 +31,11 @@ import Settings from "./pages/Settings";
 import KycAdminQueue from "./pages/KycAdminQueue";
 import AdminOnboarding from "./pages/AdminOnboarding";
 import AdminProviderKyc from "./pages/AdminProviderKyc";
+import AdminLedger from "./pages/AdminLedger";
+import AdminLedgerProvider from "./pages/AdminLedgerProvider";
+import AdminLedgerSettings from "./pages/AdminLedgerSettings";
+import AdminLedgerReview from "./pages/AdminLedgerReview";
+import ProviderLedger from "./pages/ProviderLedger";
 import Patients from "./pages/Patients";
 import PatientDetail from "./pages/PatientDetail";
 import Network from "./pages/Network";
@@ -98,6 +103,10 @@ function App() {
           <Route path="/admin/patients" element={<RequireAuth adminOnly><Patients mode="admin" /></RequireAuth>} />
           <Route path="/admin/patients/:userId" element={<RequireAuth adminOnly><PatientDetail mode="admin" /></RequireAuth>} />
           <Route path="/network" element={<RequireAuth adminOnly><Network /></RequireAuth>} />
+          <Route path="/admin/ledger" element={<RequireAuth adminOnly><AdminLedger /></RequireAuth>} />
+          <Route path="/admin/ledger/settings" element={<RequireAuth adminOnly><AdminLedgerSettings /></RequireAuth>} />
+          <Route path="/admin/ledger/review" element={<RequireAuth adminOnly><AdminLedgerReview /></RequireAuth>} />
+          <Route path="/admin/ledger/:uid" element={<RequireAuth adminOnly><AdminLedgerProvider /></RequireAuth>} />
 
           {/* Shared (admins + providers + sales reps) */}
           <Route path="/tasks" element={<RequireAuth><Tasks /></RequireAuth>} />
@@ -117,6 +126,7 @@ function App() {
           <Route path="/provider/kyc" element={<RequireAuth providerOnly><ProviderKyc /></RequireAuth>} />
           <Route path="/provider/activities" element={<RequireAuth providerOnly><ProviderActivities /></RequireAuth>} />
           <Route path="/provider/earnings" element={<RequireAuth providerOnly><ProviderEarnings /></RequireAuth>} />
+          <Route path="/provider/ledger" element={<RequireAuth providerOnly><ProviderLedger /></RequireAuth>} />
           <Route path="/provider/profile" element={<RequireAuth providerOnly><ProviderProfile /></RequireAuth>} />
 
           <Route path="*" element={<Navigate to="/" replace />} />

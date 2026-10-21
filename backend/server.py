@@ -6138,6 +6138,16 @@ async def startup():
         us.start_background(db, UPSTREAM_SYNC_INTERVAL_MIN)
 
 
+@app.on_event("startup")
+async def _ledger_storage_init():
+    import asyncio
+    try:
+        await asyncio.to_thread(_ledger._init_storage)
+        logger.info("ledger object storage ready")
+    except Exception as e:
+        logger.error(f"ledger storage init failed: {e}")
+
+
 @app.on_event("shutdown")
 async def shutdown():
     us.stop_background()
@@ -6150,6 +6160,9 @@ async def root():
 
 
 app.include_router(api)
+import ledger as _ledger  # noqa: E402
+app.include_router(_ledger.create_ledger_router(db, get_current_user, get_current_user_from_query,
+                                                is_provider, EMERGENT_LLM_KEY, _parse_ai_json))
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

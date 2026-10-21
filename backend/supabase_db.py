@@ -42,8 +42,8 @@ async def get_pool() -> asyncpg.Pool:
             raise RuntimeError("DATABASE_URL not configured (Supabase disabled)")
         _pool = await asyncpg.create_pool(
             dsn=dsn,
-            min_size=1,
-            max_size=5,
+            min_size=2,
+            max_size=10,
             statement_cache_size=0,        # required for the transaction pooler
             max_inactive_connection_lifetime=1800,
             command_timeout=30,
