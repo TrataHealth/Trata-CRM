@@ -75,6 +75,16 @@ def assign_groups(svcs: List[Dict[str, Any]]) -> None:
         x["billable"] = _billable(x)
 
 
+def alias_map(svcs: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Any patient_id / phone / pkey seen for a provider → canonical pkey."""
+    m: Dict[str, str] = {}
+    for x in svcs:
+        for a in (x.get("patient_id"), _phone10(x.get("patient_phone")), x["pkey"]):
+            if a:
+                m[a] = x["pkey"]
+    return m
+
+
 SERVICE_CATEGORIES = ["surgery", "procedure", "icu_stay", "room_charges", "implant", "diagnostics",
                       "pharmacy", "consultation", "ambulance", "lab_test", "other"]
 _storage_key: Optional[str] = None
@@ -292,8 +302,9 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             p["name"] = p["name"] or s.get("patient_name")
             p["first_seen"] = min(filter(None, [p["first_seen"], s["date"]]), default=None)
             p["services"].append({**s, "invoice_id": invoiced.get(s["key"])})
+        aliases = alias_map(data["services"])
         for m in manual:
-            k = m["patient_id"]
+            k = aliases.get(m["patient_id"]) or aliases.get(_phone10(m.get("patient_phone")))
             p = patients.get(k)
             if not p:
                 continue
@@ -505,6 +516,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             raise HTTPException(status_code=400, detail="One or more proof documents are invalid")
         data = await auto_services(uid)
         served = {patient_key(s): s for s in data.get("services", [])}
+        body.patient_id = alias_map(data.get("services", [])).get(body.patient_id, body.patient_id)
         if body.patient_id not in served:
             raise HTTPException(status_code=400, detail="Patient has no Patient-App booking or SOS with this provider")
         admin = is_admin(current)
@@ -669,13 +681,10 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
         gst = _r2(taxable * GST_PCT / 100)
         tax = ({"cgst": _r2(gst / 2), "sgst": _r2(gst - _r2(gst / 2)), "igst": 0.0} if same_state
                else {"cgst": 0.0, "sgst": 0.0, "igst": gst})
-        seq = await db.ledger_counters.find_one_and_update({"id": f"inv-{body.month}"}, {"$inc": {"n": 1}},
-                                                           upsert=True, return_document=True)
-        n = (seq or {}).get("n", 1)
         issue = datetime.now(timezone.utc)
         prov = next((x for x in await lsb.list_providers() if x["id"] == uid), {}) or {}
         inv = {
-            "id": str(uuid.uuid4()), "number": f"{st.get('invoice_prefix') or 'TH'}/{body.month.replace('-', '')}/{n:04d}",
+            "id": str(uuid.uuid4()), "number": None,
             "provider_user_id": uid, "provider_name": bp.get("legal_name") or prov.get("display_name"),
             "provider_vertical": data["vertical"], "provider_city": prov.get("city"), "provider_phone": prov.get("phone"),
             "provider_gstin": bp.get("gstin"), "provider_address": bp.get("billing_address"),
@@ -695,6 +704,10 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             await db.ledger_invoices.insert_one(dict(inv))
         except DuplicateKeyError:
             raise HTTPException(status_code=400, detail="An invoice already exists for this month — void it first")
+        seq = await db.ledger_counters.find_one_and_update({"id": f"inv-{body.month}"}, {"$inc": {"n": 1}},
+                                                           upsert=True, return_document=True)
+        inv["number"] = f"{st.get('invoice_prefix') or 'TH'}/{body.month.replace('-', '')}/{(seq or {}).get('n', 1):04d}"
+        await db.ledger_invoices.update_one({"id": inv["id"]}, {"$set": {"number": inv["number"]}})
         await db.ledger_services.update_many({"id": {"$in": [m["id"] for m in manual]}}, {"$set": {"invoice_id": inv["id"]}})
         await db.ledger_promotions.update_many({"id": {"$in": [p["id"] for p in promos]}}, {"$set": {"invoice_id": inv["id"]}})
         return inv
@@ -746,6 +759,8 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             raise HTTPException(status_code=400, detail="status must be paid or void")
         if inv["status"] == "void":
             raise HTTPException(status_code=400, detail="Invoice already void")
+        if status == "void" and inv["status"] == "paid":
+            raise HTTPException(status_code=400, detail="Paid invoices can't be voided — issue a credit note instead")
         upd = {"status": status, f"{status}_at": _now()}
         if status == "void":
             upd["active"] = False

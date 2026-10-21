@@ -300,6 +300,14 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Tests: tests/test_dispatch_discharge_live.py (19 pass, auto-cleans probe rows). Report iteration_12.json.
 - Known gap: most providers have no CRM provider_id → payout events only fire for providers with payouts docs (payouts collection currently empty).
 
+## Iter 43 (2026-06) — Provider Ledger & monthly invoicing
+- Admin menu "Provider Ledger" (/admin/ledger): provider list (patients served via Patient App, app services, extended services, month billable, promos, invoice status) → provider page tabs: Patients & services (all patient-app details per service), Invoices, Promotions, Billing terms. Review queue /admin/ledger/review, Trata invoice settings /admin/ledger/settings.
+- Provider console "Trata Patients & Billing" (/provider/ledger): add extended services (pending review), see shared invoices.
+- Extended services: manual or AI-filled from bill (Gemini 2.5 Flash), proof docs mandatory (Emergent Object Storage, ledger_files). Admin entries auto-approved; provider entries need admin approval (amount adjustable).
+- Fees: % per provider + per-category overrides; flat promotion fees; only completed app services are billable. Invoice: SAC (manual), 18% GST (CGST+SGST same state via GSTIN code/state else IGST), place of supply, branded PDF (xhtml2pdf), share → provider console + Supabase notification, paid, void (not for paid). One active invoice per provider-month (unique index); sequential numbers.
+- Data: Mongo ledger_* + billing_profiles; Supabase read-only (ledger_sb.py bulk parallel queries, ~4s, cached 45s).
+- Tests: tests/test_provider_ledger.py + test_ledger_fixes_iter14.py (59 pass). Reports iteration_13/14.
+
 ## Backlog / Next
 
 ### P1

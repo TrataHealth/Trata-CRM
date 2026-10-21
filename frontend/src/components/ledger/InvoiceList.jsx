@@ -35,7 +35,7 @@ export function InvoiceList({ invoices, admin, onChanged }) {
                   <button className={T.btnGhost} onClick={() => downloadInvoice(i)} data-testid={`invoice-download-${i.id}`}><Download className="h-3.5 w-3.5" /> PDF</button>
                   {admin && i.status === "issued" && <button className={T.btn} onClick={() => act(i, "share", "Shared with provider")} data-testid={`invoice-share-${i.id}`}><Send className="h-3.5 w-3.5" /> Share</button>}
                   {admin && ["issued", "shared"].includes(i.status) && <button className={T.btnGhost} onClick={() => act(i, "status?status=paid", "Marked paid")} data-testid={`invoice-paid-${i.id}`}><CheckCircle2 className="h-3.5 w-3.5" /> Paid</button>}
-                  {admin && i.status !== "void" && <button className={T.btnDanger} onClick={() => window.confirm("Void this invoice? Its items become billable again.") && act(i, "status?status=void", "Invoice voided")} data-testid={`invoice-void-${i.id}`}><Ban className="h-3.5 w-3.5" /> Void</button>}
+                  {admin && !["void", "paid"].includes(i.status) && <button className={T.btnDanger} onClick={() => window.confirm("Void this invoice? Its items become billable again.") && act(i, "status?status=void", "Invoice voided")} data-testid={`invoice-void-${i.id}`}><Ban className="h-3.5 w-3.5" /> Void</button>}
                 </div>
               </td>
             </tr>

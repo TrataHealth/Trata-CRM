@@ -57,20 +57,20 @@ class TestAccess:
 
 # ── Provider list & detail ──
 class TestProviders:
-    def test_list_has_xenon_2_patients(self):
+    def test_list_has_xenon_1_merged_patient(self):
         r = api("GET", "/ledger/providers?month=" + MONTH)
         assert r.status_code == 200
         d = r.json()
         assert d["month"] == MONTH and {"providers", "patients", "pending_review", "month_billable"} <= set(d["totals"])
         x = next(p for p in d["providers"] if p["id"] == XENON)
-        assert x["patients"] == 2
+        assert x["patients"] == 1  # 2 patient_ids, same phone -> merged
         assert all(p["id"] != A for p in d["providers"])  # TEST_ names filtered from list
 
     def test_xenon_detail(self):
         r = api("GET", f"/ledger/providers/{XENON}")
         assert r.status_code == 200
         d = r.json()
-        assert len(d["patients"]) == 2 and all(p["services"] for p in d["patients"])
+        assert len(d["patients"]) == 1 and len(d["patients"][0]["services"]) == 2  # merged by phone
         assert "billing_profile" in d and "promotions" in d and "invoices" in d
 
     def test_probe_detail_one_patient(self):
@@ -295,10 +295,7 @@ class TestInvoice:
                 await c.close()
         assert len(asyncio.run(q())) == 1
 
-    def test_paid_then_void_unlocks(self):
-        r = api("POST", f"/ledger/invoices/{S['inv']}/status?status=paid")
-        assert r.status_code == 200
-        assert api("GET", f"/ledger/invoices/{S['inv']}").json()["status"] == "paid"
+    def test_void_unlocks_and_paid_cannot_void(self):
         assert api("POST", f"/ledger/invoices/{S['inv']}/status?status=bogus").status_code == 400
         assert api("POST", f"/ledger/invoices/{S['inv']}/status?status=void").status_code == 200
         assert api("POST", f"/ledger/invoices/{S['inv']}/status?status=void").status_code == 400
@@ -315,6 +312,8 @@ class TestInvoice:
         assert inv["igst"] == 2322 and inv["cgst"] == 0 and inv["grand_total"] == 15222
         assert inv["number"] != api("GET", f"/ledger/invoices/{S['inv']}").json()["number"]
         assert api("GET", f"/ledger/invoices/{S['inv2']}/pdf").status_code == 200
+        assert api("POST", f"/ledger/invoices/{S['inv2']}/status?status=paid").status_code == 200
+        assert api("POST", f"/ledger/invoices/{S['inv2']}/status?status=void").status_code == 400
 
     def test_restore_settings(self):
         o = S["orig_settings"]

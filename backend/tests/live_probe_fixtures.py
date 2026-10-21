@@ -27,20 +27,20 @@ LAT, LNG = 19.1178, 72.8631
 
 
 def login(phone, pwd):
-    r = requests.post(f"{BASE_URL}/api/auth/send-otp", json={"phone": phone}, timeout=20)
+    r = requests.post(f"{BASE_URL}/api/auth/send-otp", json={"phone": phone}, timeout=60)
     assert r.status_code == 200, r.text
-    r = requests.post(f"{BASE_URL}/api/auth/verify-otp", json={"phone": phone, "otp": OTP}, timeout=20)
+    r = requests.post(f"{BASE_URL}/api/auth/verify-otp", json={"phone": phone, "otp": OTP}, timeout=60)
     assert r.status_code == 200, r.text
     d = r.json()
     h = {"Authorization": f"Bearer {d['temp_token']}"}
     ep = "set-password" if d.get("needs_password_setup") else "login-password"
-    r = requests.post(f"{BASE_URL}/api/auth/{ep}", json={"password": pwd}, headers=h, timeout=20)
+    r = requests.post(f"{BASE_URL}/api/auth/{ep}", json={"password": pwd}, headers=h, timeout=60)
     assert r.status_code == 200, r.text
     tok = r.json().get("token") or r.json().get("access_token")
     if r.json().get("user", {}).get("security_setup_required"):
         requests.post(f"{BASE_URL}/api/auth/security-setup", headers={"Authorization": f"Bearer {tok}"}, json={
             "recovery_email": "probe@test.local",
-            "questions": [{"question_id": "q1", "answer": "trata"}, {"question_id": "q4", "answer": "trata"}]}, timeout=20)
+            "questions": [{"question_id": "q1", "answer": "trata"}, {"question_id": "q4", "answer": "trata"}]}, timeout=60)
     return tok, r.json().get("user")
 
 

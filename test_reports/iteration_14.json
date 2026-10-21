@@ -1,0 +1,35 @@
+{
+  "summary": "RETEST of the Provider Ledger fixes from iteration 13. Backend: 59/59 pytest passed. This covers 46 tests in test_provider_ledger.py, where I updated the Xenon assertions to 1 merged patient (they still said 2), plus 13 new tests in test_ledger_fixes_iter14.py. Verified fixes: (1) Race: 6 concurrent POST /invoices for the same provider and month gave exactly one 200 and five 400s, with 1 active invoice in the DB. The unique partial index one_active_invoice_per_month (active=true) exists, and void then re-invoice works. (2) Xenon's PENDING_HOSPITAL consultations have billable=false, patient total_amount is 0, and month_auto_amount/month_billable are 0 for 2026-08 and 2026-10. POST invoice for Xenon 2026-10 returns 400 'Nothing billable'. (3) Re-reviewing an approved or rejected entry returns 400. (4) Deleting a promotion twice returns 400. (5) GST: the GSTIN code wins over the state text (GSTIN 27 with state Karnataka → CGST/SGST, place_of_supply 'Maharashtra (27)'). With no GSTIN, the state name decides: Karnataka → IGST 'Karnataka (29)', Maharashtra → CGST. The PDF renders. (6) The manual invoice line patient is filled in (not '—'). UI (Playwright, desktop): clicking a non-name cell of a ledger table row opens the provider page. Xenon shows 1 patient card (Siddharth Gupta, 2 services) with '· not yet billable' on both rows and 'first visit 2026-08-21' as a date. billing-state and settings-state are SELECTs with 37 options. invoice-sac is prefilled with 998599 on first render. The provider console /provider/ledger loads its Patients and Invoices tabs. There were no page errors. All probe data was cleaned up.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/ledger/providers/{uid}/invoices", "issue": "The invoice-number counter (ledger_counters find_one_and_update $inc) runs BEFORE insert_one. Requests that lose the race, or that hit DuplicateKeyError, still use up a number. Observed: inv-2025-11 counter = 6 when only 3 invoices were created. GST rules expect consecutive invoice serials. Fix: allocate the number only after a successful insert (insert with a placeholder number, then set it), or roll back by reserving through the active-invoice claim."},
+      {"endpoint": "assign_groups / provider_detail", "issue": "The merged patient key (pkey) is the patient_id of the EARLIEST-dated service sharing that phone. Manual services store body.patient_id = pkey at creation time. If an earlier-dated booking under another patient_id later appears for the same phone, or for entries saved before this fix with the other id, the canonical pkey changes. provider_detail then skips the manual entry (patients.get(k) is None): it is hidden from admin and provider, but create_invoice still bills it. Fix: map manual m['patient_id'] through an alias map {any patient_id/phone → pkey}, or store patient_phone and match on it."},
+      {"endpoint": "POST /api/ledger/invoices/{iid}/status?status=void", "issue": "A PAID invoice can be voided, which unlocks its items for re-billing, with no audit reason. Consider blocking it or requiring a reason (credit note)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Provider console patient card (probe data only)", "issues": ["A patient with no name shows 'Unnamed patient'. This is acceptable, noted only for awareness."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_provider_ledger.py", "/app/backend/tests/test_ledger_fixes_iter14.py", "/app/backend/tests/ledger_probe_fixtures.py", "/app/test_reports/pytest/ledger_results_iter14.xml"],
+  "action_items": [
+    "LOW: Allocate the invoice serial only after the insert succeeds, so there are no gaps in GST invoice numbering.",
+    "MEDIUM: Resolve manual-service patient_id through the phone-merge alias map in provider_detail, so entries never become hidden but billable when the canonical pkey changes.",
+    "LOW: Block, or audit with a reason, the voiding of PAID invoices."
+  ],
+  "critical_code_review_comments": [
+    "ledger.py is 842 lines, above the 700-line guideline. Split render_invoice_html and the invoice routes into ledger_invoice.py.",
+    "@r.on_event('startup') on an APIRouter is deprecated in recent FastAPI. Verify it actually fires (the index exists now) or move it to the app lifespan.",
+    "The create_invoice pre-check find_one uses status != void, but the index uses active=true. These are consistent today because void sets active=false. Keep both in sync if new statuses are added."
+  ],
+  "updated_files": ["/app/backend/tests/test_provider_ledger.py (Xenon assertions → 1 merged patient)", "/app/backend/tests/test_ledger_fixes_iter14.py (new)"],
+  "success_rate": {"backend": "100% (59/59)", "frontend": "100% of retested UI fixes"},
+  "seed_data_creation": "Ran ledger_probe_fixtures.py cleanup + setup (fresh probe hospitals A and B). Cleaned up at the end with `cleanup`. Mongo ledger_* collections are empty except 1 pre-existing Xenon ledger_files doc (sample_bill.pdf, created 10:04 before this run, not by me). Deleted the test-created ledger_counters inv-2025-11 and inv-2025-12 (no invoices remain for those months). Settings restored to the original (state Uttar Pradesh).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `python ledger_probe_fixtures.py setup` in /app/backend/tests before the suites. The state file is /tmp/ledger_probe_state.json. Stale Mongo invoices from a previous run make the main suite fail on duplicate invoices, so clean up and set up again first. The main suite uses month 2025-12 and the iter14 suite uses 2025-11. Xenon (2d71f195...) has 1 merged patient with 2 PENDING_HOSPITAL consultations, which are not billable. UI login is done by injecting localStorage trata_token/trata_user from /api/auth/me."
+}
