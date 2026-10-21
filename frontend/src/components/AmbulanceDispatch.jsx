@@ -12,7 +12,7 @@ export const AssignVehicle = ({ caseRow, fleet, onDone }) => {
   const [vid, setVid] = useState("");
   const [busy, setBusy] = useState(false);
   if (CLOSED.includes(String(caseRow.status || "").toUpperCase())) return null;
-  const choices = (fleet || []).filter((v) => String(v.status || "").toLowerCase() === "available" || v.id === caseRow.ambulance_id);
+  const choices = (fleet || []).filter((v) => String(v.status || "available").toLowerCase() === "available" && v.id !== caseRow.ambulance_id);
   const assign = async () => {
     setBusy(true);
     try {

@@ -293,6 +293,13 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Tests: backend/tests/test_admin_onboarding_v2.py (16 pass). Report iteration_11.json.
 - Pending: is_demo column (provider team); ambulance assign UI on PC dashboard; discharge form fields (final diagnosis / follow-up) in UI.
 
+## Iter 42 (2026-06) — Dispatch, discharge summary, live updates
+- Ambulance PC dashboard: Assign vehicle per case (only cases with ambulance_provider_id = provider), Dispatches panel (assigned→dispatched→arrived→completed, strict transitions), vehicle status on_trip/available, writes ambulance_allocations + emergency_cases.
+- Hospital discharge form: final diagnosis required, condition + follow-up optional → discharge_summaries row.
+- Live updates: /api/live/stream SSE (shared notifications by users.id + Mongo payouts) → bell unread badge + panel + toasts; dashboard/earnings refetch on events. /api/live/notifications, /read-all.
+- Tests: tests/test_dispatch_discharge_live.py (19 pass, auto-cleans probe rows). Report iteration_12.json.
+- Known gap: most providers have no CRM provider_id → payout events only fire for providers with payouts docs (payouts collection currently empty).
+
 ## Backlog / Next
 
 ### P1

@@ -3580,7 +3580,7 @@ async def provider_earnings(period: str = "30d", current=Depends(get_current_use
         lifetime_gross += d.get("amount", 0) or 0
 
     # Next payout = unpaid period from last paid → next Monday
-    last_paid = await db.payouts.find_one({"provider_id": pid, "status": "paid"}, {"_id": 0}, sort=[("period_end", -1)])
+    last_paid = pid and await db.payouts.find_one({"provider_id": pid, "status": "paid"}, {"_id": 0}, sort=[("period_end", -1)])
     unpaid_since = last_paid["period_end"] if last_paid else (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     unpaid_gross = 0
     async for d in db.activities.find({**base_match, "created_at": {"$gte": unpaid_since}}, {"amount": 1, "_id": 0}):
@@ -3622,6 +3622,8 @@ async def provider_payouts(current=Depends(get_current_user), limit: int = 24):
     if not is_provider(current):
         raise HTTPException(status_code=403, detail="Provider access only")
     pid = current.get("provider_id")
+    if not pid:
+        return {"items": [], "total": 0}
     items = await db.payouts.find({"provider_id": pid}, {"_id": 0}).sort("period_end", -1).limit(limit).to_list(limit)
     return {"items": items, "total": len(items)}
 

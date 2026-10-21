@@ -1,0 +1,57 @@
+{
+  "summary": "Iter 12: tested ambulance vehicle assignment and dispatch, the hospital discharge summary, and live SSE (notifications and payouts) end-to-end on the shared prod DB, using self-created TEST_probe fixtures (phones 9999900011/12/13). I found one blocking bug and fixed it: POST /api/provider/ambulance/allocations/{id}/status returned 500 for every status. asyncpg raised AmbiguousParameterError because $2 was used both as a varchar column value and in a text comparison. I added a $2::varchar cast in supabase_db.update_ambulance_allocation. After the fix: 19/19 backend pytest pass. UI flows pass: assign then Mark dispatched, arrived, completed; the discharge form (diagnosis required) writes a discharge_summaries row; a notification row inserted in the DB raises a toast in about 5s and the badge goes to 1; read-all clears it; a payout insert raises the 'New payout ₹7,777' toast, and a status change raises the 'is now paid' toast. All probe rows were deleted and zero leftovers were confirmed.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/provider/ambulance/allocations/{id}/status", "issue": "FIXED BY TESTING AGENT: 500 Internal Server Error on every call (asyncpg AmbiguousParameterError: inconsistent types deduced for parameter $2, text vs character varying) in supabase_db.update_ambulance_allocation. Fix: `status=$2::varchar` and `CASE WHEN $2::varchar='arrived'`.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/live/stream (payout events)", "issue": "Live payouts never fire for real providers. The stream keys on crm_users.provider_id, but every provider_owner except 7678218261 has provider_id missing or null. That includes the demo accounts and every admin-onboarded provider (admin onboarding inserts provider_id: None). The payouts collection is also empty. To test, I had to set a TEST provider_id on the probe crm_user."},
+      {"endpoint": "GET /api/provider/payouts, /provider/earnings", "issue": "When provider_id is None, the query becomes `{provider_id: None}`. In Mongo that also matches payout docs that have no provider_id field, so payouts could leak across providers. Guard: if not pid, return an empty list."},
+      {"endpoint": "assign_ambulance_to_case / update_ambulance_allocation", "issue": "Vehicle status is never changed. A vehicle stays 'available' after assignment, so the same vehicle can be assigned to several open cases at once, and it is never freed or marked busy. Status transitions are also not validated: a completed allocation can be set back to 'dispatched' through the API."},
+      {"endpoint": "assign (Reassign)", "issue": "Reassigning to the same vehicle is allowed. It creates a new allocation and marks the old one 'reassigned', which leaves a duplicate row in the Dispatches panel."},
+      {"endpoint": "fetch_ambulance_provider_dashboard kpis.active_trips", "issue": "ARRIVED is not counted as an active trip, so the tile shows 0 while a vehicle is on scene."},
+      {"endpoint": "Latency", "issue": "Each assign or allocation-status click takes about 3.8–6.8s end-to-end (Supabase pooler round-trips plus a full dashboard reload)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "LiveBell notifications-panel", "issue": "While the panel is open, a newly arriving notification updates the badge and shows a toast, but it is not added to the open list. The user has to close and reopen the panel.", "selector": "[data-testid='notifications-panel']", "priority": "LOW"},
+      {"component": "LiveBell", "issue": "The bell is wrapped in `hidden md:block`, so mobile users get no unread badge or panel. Toasts still appear.", "selector": "[data-testid='topbar-notifications-btn']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_dispatch_discharge_live.py",
+    "/app/backend/tests/live_probe_fixtures.py",
+    "/app/backend/tests/server_admin_login.py",
+    "/app/test_reports/pytest/dispatch_discharge_live.xml"
+  ],
+  "action_items": [
+    "Review the testing agent's $2::varchar fix in supabase_db.update_ambulance_allocation (it is required: the endpoint was returning 500).",
+    "Populate crm_users.provider_id for provider_owners (admin onboarding and demo seed), or key payouts on supabase_user_id. Otherwise live payout toasts and counters can never fire in production.",
+    "Guard /provider/payouts, /provider/earnings and the live payout_state when provider_id is None.",
+    "Mark the vehicle busy on assign and available on completed (or exclude vehicles with an active allocation from the picker). Validate allocation transitions (assigned→dispatched→arrived→completed only).",
+    "Optional: prepend live notification events to the open panel list; count ARRIVED in active_trips."
+  ],
+  "critical_code_review_comments": [
+    "supabase_db.update_ambulance_allocation: reusing one parameter for a varchar SET and an untyped comparison causes asyncpg type ambiguity. Fixed with explicit casts; watch for the same pattern elsewhere.",
+    "live_stream `since` is the server's clock (datetime.now). The notification filter is `created_at > since` against the DB's now(). Rows written by mobile apps with client-side created_at, or with clock skew, can be silently skipped. Consider tracking seen ids or using `id NOT IN` plus a small look-back window.",
+    "live_stream polls Supabase every 4s per open tab (and Mongo for payouts). With the asyncpg pool max_size=5, many concurrent tabs could exhaust the pool. Consider a shared poller or LISTEN/NOTIFY.",
+    "server.py is 6150+ lines. The live, ambulance and hospital routes should be split into routers.",
+    "Backend hot reload watches /app/backend/tests. Creating test files restarts uvicorn (about 30–60s startup), which kills open SSE streams."
+  ],
+  "updated_files": [
+    "/app/backend/supabase_db.py (update_ambulance_allocation $2::varchar cast)",
+    "/app/backend/tests/test_dispatch_discharge_live.py",
+    "/app/backend/tests/live_probe_fixtures.py",
+    "/app/backend/tests/server_admin_login.py"
+  ],
+  "success_rate": {"backend": "100% (19/19) after fix; 84% (16/19) before fix — 3 allocation-status tests returned 500", "frontend": "95% — assign/dispatch, discharge form, notification badge/toast/read-all, payout toasts all pass; minor: open panel does not live-append"},
+  "test_credentials": "Master admin 9873117605 / OTP 123456 / Master@123. The probe providers are created on the fly by live_probe_fixtures.setup() (password Probe@12345) and deleted by cleanup().",
+  "seed_data_creation": "Created and then DELETED: 3 users, 2 ambulance_providers and 1 hospital_profiles row (phones 9999900011/12/13), 3 ambulances, 5 emergency_cases, ambulance_allocations, 2 patient_admissions, discharge_summaries, admission_notes, notifications, Mongo crm_users/contacts/activities/TEST_probe payouts, and crm_provider_leads. Zero leftovers verified. I also removed 4 stale crm_provider_leads rows (9999900001-04) left behind by the iter-11 tests.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `cd /app/backend/tests && python live_probe_fixtures.py setup` (writes /tmp/live_probe_state.json with tokens and ids), then `python -m pytest test_dispatch_discharge_live.py -v`, then `python live_probe_fixtures.py cleanup`. Delete /tmp/live_probe_state.json before re-running, because the state is consumed: cases become COMPLETED and admissions become discharged. For UI tests, inject the tokens into localStorage (trata_token, plus trata_user with security_setup_required=false), and insert DB rows through a subprocess using /root/.venv/bin/python (asyncpg is not available inside the browser tool).",
+  "rca of the issue": "Allocation status 500: in update_ambulance_allocation the SQL `SET status=$2 ... CASE WHEN $2='arrived'` makes Postgres infer $2 as varchar (from the column) and as text (from the literal comparison). Under asyncpg's extended protocol this raises AmbiguousParameterError. Reproduce: assign a vehicle, then POST /api/provider/ambulance/allocations/{id}/status {status:'dispatched'} → 500. Fix applied: explicit $2::varchar casts. All three transitions now return 200 and update the timestamps, response_time_minutes and emergency_cases.status."
+}

@@ -40,6 +40,11 @@ export const LiveBell = () => {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
   useLiveStream((c) => setUnread(c.unread || 0));
+  useEffect(() => {
+    const onLive = (ev) => { if (ev.detail?.type === "notification") setItems((xs) => [ev.detail.data, ...xs.filter((x) => x.id !== ev.detail.data.id)]); };
+    window.addEventListener("trata:live", onLive);
+    return () => window.removeEventListener("trata:live", onLive);
+  }, []);
 
   const toggle = async () => {
     const next = !open;
@@ -55,13 +60,13 @@ export const LiveBell = () => {
   };
 
   return (
-    <div className="relative hidden md:block">
-      <button onClick={toggle} className="flex items-center gap-2 px-3 py-2 text-sm text-[#42526E] hover:bg-[#F1F2F4] rounded-md" data-testid="topbar-notifications-btn">
-        <Bell className="h-4 w-4" /> Notifications
+    <div className="relative">
+      <button onClick={toggle} className="flex items-center gap-2 px-2 md:px-3 py-2 text-sm text-[#42526E] hover:bg-[#F1F2F4] rounded-md" data-testid="topbar-notifications-btn" aria-label="Notifications">
+        <Bell className="h-4 w-4" /> <span className="hidden md:inline">Notifications</span>
         {unread > 0 && <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#DE350B] text-white text-[10px] font-bold flex items-center justify-center" data-testid="notifications-unread-badge">{unread > 99 ? "99+" : unread}</span>}
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-80 bg-white border border-[#DFE1E6] rounded-md shadow-lg z-50" data-testid="notifications-panel">
+        <div className="absolute right-0 top-full mt-1 w-[min(20rem,calc(100vw-1.5rem))] bg-white border border-[#DFE1E6] rounded-md shadow-lg z-50" data-testid="notifications-panel">
           <div className="px-3 py-2 border-b border-[#DFE1E6] flex items-center justify-between">
             <span className="text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold">Live · shared with your mobile app</span>
             <button onClick={readAll} disabled={!unread} className="text-[11px] text-[#0052CC] disabled:text-[#A5ADBA]" data-testid="notifications-read-all">Mark all read</button>

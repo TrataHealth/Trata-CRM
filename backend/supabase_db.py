@@ -15,6 +15,7 @@ import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
+from datetime import datetime
 
 import asyncpg
 
@@ -349,7 +350,7 @@ async def fetch_ambulance_provider_dashboard(user_id: str) -> Dict[str, Any]:
             """SELECT
                  (SELECT count(*) FROM public.emergency_cases
                     WHERE ambulance_provider_id=$1
-                      AND upper(status) IN ('DISPATCHED','ACTIVE','IN_PROGRESS','AMBULANCE_ASSIGNED','EN_ROUTE')) AS active_trips,
+                      AND upper(status) IN ('DISPATCHED','ACTIVE','IN_PROGRESS','AMBULANCE_ASSIGNED','EN_ROUTE','ARRIVED')) AS active_trips,
                  (SELECT count(*) FROM public.emergency_cases
                     WHERE ambulance_provider_id=$1 AND created_at >= now() - interval '1 day') AS trips_today,
                  (SELECT count(*) FROM public.emergency_cases
@@ -415,6 +416,7 @@ async def fetch_ambulance_provider_dashboard(user_id: str) -> Dict[str, Any]:
 _CLOSED_CASE_STATUSES = {"COMPLETED", "CANCELLED", "AUTO_CLOSED", "CLOSED", "REJECTED"}
 _ALLOC_CASE_STATUS = {"assigned": "AMBULANCE_ASSIGNED", "dispatched": "EN_ROUTE",
                       "arrived": "ARRIVED", "completed": "COMPLETED"}
+_ALLOC_NEXT = {"assigned": "dispatched", "dispatched": "arrived", "arrived": "completed"}
 _ALLOC_TS_COL = {"dispatched": "dispatched_at", "arrived": "arrived_at", "completed": "completed_at"}
 
 
@@ -434,13 +436,23 @@ async def assign_ambulance_to_case(user_id: str, case_id: str, ambulance_id: str
             return {"success": False, "reason": "case_not_sent_to_you"}
         if (case["status"] or "").upper() in _CLOSED_CASE_STATUSES:
             return {"success": False, "reason": "case_closed"}
-        if not await conn.fetchval("SELECT 1 FROM public.ambulances WHERE id=$1 AND provider_id=$2", ambulance_id, pid):
+        veh = await conn.fetchrow("SELECT id, status FROM public.ambulances WHERE id=$1 AND provider_id=$2", ambulance_id, pid)
+        if not veh:
             return {"success": False, "reason": "ambulance_not_in_fleet"}
+        current = await conn.fetchrow("""
+            SELECT id, ambulance_id FROM public.ambulance_allocations
+             WHERE case_id=$1 AND status IN ('assigned','dispatched','arrived')
+             ORDER BY allocated_at DESC LIMIT 1""", case_id)
+        if current and current["ambulance_id"] == ambulance_id:
+            return {"success": False, "reason": "vehicle_already_assigned_to_this_case"}
+        if (veh["status"] or "available").lower() != "available":
+            return {"success": False, "reason": "vehicle_busy"}
         alloc_id = str(_uuid.uuid4())
         async with conn.transaction():
-            await conn.execute("""
-                UPDATE public.ambulance_allocations SET status='reassigned'
-                 WHERE case_id=$1 AND status IN ('assigned','dispatched')""", case_id)
+            if current:
+                await conn.execute("UPDATE public.ambulance_allocations SET status='reassigned' WHERE id=$1", current["id"])
+                await conn.execute("UPDATE public.ambulances SET status='available' WHERE id=$1", current["ambulance_id"])
+            await conn.execute("UPDATE public.ambulances SET status='on_trip' WHERE id=$1", ambulance_id)
             await conn.execute("""
                 INSERT INTO public.ambulance_allocations
                   (id, case_id, ambulance_provider_id, ambulance_id, status, assigned_by, allocated_at, created_at)
@@ -459,20 +471,24 @@ async def update_ambulance_allocation(user_id: str, allocation_id: str, status: 
     pool = await get_pool()
     async with pool.acquire() as conn:
         pid = await conn.fetchval("SELECT id FROM public.ambulance_providers WHERE user_id=$1", user_id)
-        a = await conn.fetchrow("SELECT id, case_id, allocated_at FROM public.ambulance_allocations WHERE id=$1 AND ambulance_provider_id=$2",
-                                allocation_id, pid)
+        a = await conn.fetchrow("""SELECT id, case_id, ambulance_id, status FROM public.ambulance_allocations
+                                    WHERE id=$1 AND ambulance_provider_id=$2""", allocation_id, pid)
         if not a:
             return {"success": False, "reason": "allocation_not_found"}
+        if _ALLOC_NEXT.get(a["status"]) != status:
+            return {"success": False, "reason": f"cannot_go_from_{a['status']}_to_{status}"}
         col = _ALLOC_TS_COL[status]
         async with conn.transaction():
             await conn.execute(f"""
-                UPDATE public.ambulance_allocations SET status=$2, {col}=now(),
-                       response_time_minutes = CASE WHEN $2='arrived'
+                UPDATE public.ambulance_allocations SET status=$2::varchar, {col}=now(),
+                       response_time_minutes = CASE WHEN $2::varchar='arrived'
                          THEN (extract(epoch FROM now() - allocated_at)/60)::int ELSE response_time_minutes END
                  WHERE id=$1""", allocation_id, status)
             if a["case_id"]:
                 await conn.execute("UPDATE public.emergency_cases SET status=$2, updated_at=now() WHERE id=$1",
                                    a["case_id"], _ALLOC_CASE_STATUS[status])
+            if status == "completed" and a["ambulance_id"]:
+                await conn.execute("UPDATE public.ambulances SET status='available' WHERE id=$1", a["ambulance_id"])
     return {"success": True, "allocation_id": allocation_id, "status": status}
 
 
