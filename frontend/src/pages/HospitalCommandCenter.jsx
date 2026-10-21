@@ -209,7 +209,10 @@ function ActiveCard({ c, beds, onAdmit, onOpenChat, chatOpenFor, chatMessages, o
 // ── Admissions table with discharge ─────────────────────────────────────────
 function AdmissionsTable({ admissions, onDischarge, dischargeBusy }) {
   const [openDischarge, setOpenDischarge] = useState(null);
-  const [notes, setNotes] = useState("");
+  const EMPTY = { final_diagnosis: "", condition_at_discharge: "", follow_up_instructions: "", notes: "" };
+  const [form, setForm] = useState(EMPTY);
+  const setF = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const field = "text-xs px-2 py-1.5 bg-white border border-[#DFE1E6] rounded w-full";
   return (
     <section className={T.card} data-testid="hcc-admissions">
       <div className={T.sectionHead}>
@@ -242,20 +245,32 @@ function AdmissionsTable({ admissions, onDischarge, dischargeBusy }) {
                     <td className="px-3 py-2 max-w-[280px] truncate">{a.chief_complaint || "—"}</td>
                     <td className="px-3 py-2">{a.admission_time ? relativeTime(a.admission_time) : "—"}</td>
                     <td className="px-3 py-2 text-right">
-                      <button className={T.btnDanger} onClick={() => { setOpenDischarge(openDischarge === a.id ? null : a.id); setNotes(""); }} data-testid={`hcc-discharge-toggle-${a.id}`}>
+                      <button className={T.btnDanger} onClick={() => { setOpenDischarge(openDischarge === a.id ? null : a.id); setForm(EMPTY); }} data-testid={`hcc-discharge-toggle-${a.id}`}>
                         Discharge
                       </button>
                     </td>
                   </tr>
                   {openDischarge === a.id && (
                     <tr className="bg-[#F4F5F7]"><td colSpan={7} className="p-3">
-                      <div className="flex flex-col gap-2">
-                        <textarea rows={2} className="text-xs px-2 py-1.5 bg-white border border-[#DFE1E6] rounded" placeholder="Discharge notes (added to admission_notes as note_type=discharge)" value={notes} onChange={(e) => setNotes(e.target.value)} data-testid={`hcc-discharge-notes-${a.id}`} />
+                      <div className="flex flex-col gap-2" data-testid={`hcc-discharge-form-${a.id}`}>
+                        <div className="text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold">Discharge summary · shared with the patient app</div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                          <label className="md:col-span-2 text-[11px] text-[#42526E]">Final diagnosis *
+                            <input className={field} value={form.final_diagnosis} onChange={setF("final_diagnosis")} placeholder="e.g. Acute gastroenteritis, resolved" data-testid={`hcc-discharge-diagnosis-${a.id}`} />
+                          </label>
+                          <label className="text-[11px] text-[#42526E]">Condition at discharge
+                            <select className={field} value={form.condition_at_discharge} onChange={setF("condition_at_discharge")} data-testid={`hcc-discharge-condition-${a.id}`}>
+                              <option value="">—</option>
+                              {["Stable", "Improved", "Recovered", "Referred", "Against medical advice"].map((c) => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          </label>
+                        </div>
+                        <textarea rows={2} className={field} placeholder="Follow-up instructions (medicines, next visit, warning signs)" value={form.follow_up_instructions} onChange={setF("follow_up_instructions")} data-testid={`hcc-discharge-followup-${a.id}`} />
+                        <textarea rows={2} className={field} placeholder="Treatment given / internal notes" value={form.notes} onChange={setF("notes")} data-testid={`hcc-discharge-notes-${a.id}`} />
                         <div className="flex justify-end gap-2">
-                          <button className={T.btnGhost} onClick={() => setOpenDischarge(null)}>Cancel</button>
-                          <button className={T.btnDanger} disabled={dischargeBusy} onClick={async () => {
-                            await onDischarge(a.id, notes);
-                            setOpenDischarge(null); setNotes("");
+                          <button className={T.btnGhost} onClick={() => setOpenDischarge(null)} data-testid={`hcc-discharge-cancel-${a.id}`}>Cancel</button>
+                          <button className={T.btnDanger} disabled={dischargeBusy || !form.final_diagnosis.trim()} onClick={async () => {
+                            if (await onDischarge(a.id, form)) { setOpenDischarge(null); setForm(EMPTY); }
                           }} data-testid={`hcc-discharge-confirm-${a.id}`}>Confirm discharge</button>
                         </div>
                       </div>
@@ -378,13 +393,14 @@ export default function HospitalCommandCenter() {
       await load();
     } catch (e) { toast.error(e?.response?.data?.detail || "Admit failed"); throw e; }
   };
-  const doDischarge = async (admissionId, notes) => {
+  const doDischarge = async (admissionId, form) => {
     setBusy(true);
     try {
-      await api.post(`/hospital/admissions/${admissionId}/discharge`, { outcome: "discharged", notes });
-      toast.success("Patient discharged");
+      await api.post(`/hospital/admissions/${admissionId}/discharge`, { outcome: "discharged", ...form });
+      toast.success("Patient discharged · summary shared");
       await load();
-    } catch (e) { toast.error(e?.response?.data?.detail || "Discharge failed"); } finally { setBusy(false); }
+      return true;
+    } catch (e) { toast.error(e?.response?.data?.detail || "Discharge failed"); return false; } finally { setBusy(false); }
   };
   const doSendChat = async (caseId, content) => {
     setChatSending(true);

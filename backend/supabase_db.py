@@ -68,6 +68,29 @@ _PATIENT_ROLES = ("patient", "customer")
 _PATIENT_ROLE_SQL = "({a}role IN ('patient','customer') OR {a}role IS NULL OR {a}user_type = 'patient')"
 
 
+async def fetch_notifications(user_id: str, since: Optional[datetime] = None, limit: int = 20) -> Dict[str, Any]:
+    """Shared `notifications` rows for one users.id (same feed the mobile apps use)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, title, message, notification_type, is_read, created_at
+              FROM public.notifications
+             WHERE user_id=$1 AND ($2::timestamptz IS NULL OR created_at > $2)
+             ORDER BY created_at DESC LIMIT $3""", user_id, since, limit)
+        unread = await conn.fetchval(
+            "SELECT count(*) FROM public.notifications WHERE user_id=$1 AND NOT coalesce(is_read, FALSE)", user_id)
+    return {"items": _rows(rows), "unread": int(unread or 0)}
+
+
+async def mark_notifications_read(user_id: str) -> int:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        r = await conn.execute("""
+            UPDATE public.notifications SET is_read=TRUE, read_at=now()
+             WHERE user_id=$1 AND NOT coalesce(is_read, FALSE)""", user_id)
+    return int(r.rsplit(" ", 1)[-1] or 0)
+
+
 def _row(r: Optional[asyncpg.Record]) -> Optional[Dict[str, Any]]:
     if r is None:
         return None
@@ -342,7 +365,7 @@ async def fetch_ambulance_provider_dashboard(user_id: str) -> Dict[str, Any]:
                     WHERE user_id=$2 AND lower(coalesce(status,'')) IN ('','pending','submitted','uploaded')) AS kyc_pending
             """, pid, user_id)
         recent = await conn.fetch(
-            """SELECT id, case_type, status, priority, customer_phone,
+            """SELECT id, case_type, status, priority, customer_phone, ambulance_id,
                       created_at, patient_profile::text AS patient_profile_json,
                       distance
                  FROM public.emergency_cases
@@ -389,6 +412,7 @@ async def fetch_ambulance_provider_dashboard(user_id: str) -> Dict[str, Any]:
     }
 
 
+_CLOSED_CASE_STATUSES = {"COMPLETED", "CANCELLED", "AUTO_CLOSED", "CLOSED", "REJECTED"}
 _ALLOC_CASE_STATUS = {"assigned": "AMBULANCE_ASSIGNED", "dispatched": "EN_ROUTE",
                       "arrived": "ARRIVED", "completed": "COMPLETED"}
 _ALLOC_TS_COL = {"dispatched": "dispatched_at", "arrived": "arrived_at", "completed": "completed_at"}
@@ -406,8 +430,10 @@ async def assign_ambulance_to_case(user_id: str, case_id: str, ambulance_id: str
         case = await conn.fetchrow("SELECT id, ambulance_provider_id, status FROM public.emergency_cases WHERE id=$1", case_id)
         if not case:
             return {"success": False, "reason": "case_not_found"}
-        if case["ambulance_provider_id"] and case["ambulance_provider_id"] != pid:
-            return {"success": False, "reason": "case_assigned_to_other_provider"}
+        if case["ambulance_provider_id"] != pid:
+            return {"success": False, "reason": "case_not_sent_to_you"}
+        if (case["status"] or "").upper() in _CLOSED_CASE_STATUSES:
+            return {"success": False, "reason": "case_closed"}
         if not await conn.fetchval("SELECT 1 FROM public.ambulances WHERE id=$1 AND provider_id=$2", ambulance_id, pid):
             return {"success": False, "reason": "ambulance_not_in_fleet"}
         alloc_id = str(_uuid.uuid4())

@@ -24,8 +24,8 @@ export default function ProviderEarnings() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    (async () => {
-      setLoading(true);
+    const load = async (silent) => {
+      if (!silent) setLoading(true);
       const [e, p] = await Promise.all([
         api.get("/provider/earnings", { params: { period } }),
         api.get("/provider/payouts"),
@@ -33,7 +33,11 @@ export default function ProviderEarnings() {
       setData(e.data);
       setPayouts(p.data.items);
       setLoading(false);
-    })();
+    };
+    load();
+    const onLive = (ev) => { if (ev.detail?.type === "payout") load(true); };
+    window.addEventListener("trata:live", onLive);
+    return () => window.removeEventListener("trata:live", onLive);
   }, [period]);
 
   const downloadInvoice = (id) => {

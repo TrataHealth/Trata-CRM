@@ -10,6 +10,7 @@ import {
 import { useAuth } from "../lib/auth";
 import api from "../lib/api";
 import { relativeTime } from "../lib/constants";
+import { LiveBell } from "./LiveUpdates";
 
 const ADMIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
@@ -261,13 +262,7 @@ export default function Layout({ children }) {
           >
             <Search className="h-5 w-5" />
           </button>
-          <button
-            onClick={() => navigate("/activities")}
-            className="hidden md:flex items-center gap-2 px-3 py-2 text-sm text-[#42526E] hover:bg-[#F1F2F4] rounded-md"
-            data-testid="topbar-notifications-btn"
-          >
-            <Bell className="h-4 w-4" /> Notifications
-          </button>
+          <LiveBell />
           <DataSourceBadge sync={sync} syncing={syncing} onSync={runSync} hidden={isProvider} />
           <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-[#0052CC] to-[#00B8D9] text-white rounded-md text-xs font-semibold">
             <Sparkles className="h-3.5 w-3.5" /> AI Insights Active

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { relativeTime } from "../lib/constants";
+import { AssignVehicle, AllocationsPanel } from "../components/AmbulanceDispatch";
 import {
   Ambulance, Activity, ShieldCheck, Clock,
   MapPin, Loader2, AlertTriangle, Star,
@@ -37,16 +38,20 @@ export default function ProviderDashboard() {
   const { user } = useAuth();
   const [state, setState] = useState({ loading: true, data: null, err: "" });
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const { data } = await api.get("/provider/pc-dashboard");
-        setState({ loading: false, data, err: "" });
-      } catch (e) {
-        setState({ loading: false, data: null, err: e?.response?.data?.detail || "Could not load dashboard" });
-      }
-    })();
+  const load = React.useCallback(async () => {
+    try {
+      const { data } = await api.get("/provider/pc-dashboard");
+      setState({ loading: false, data, err: "" });
+    } catch (e) {
+      setState({ loading: false, data: null, err: e?.response?.data?.detail || "Could not load dashboard" });
+    }
   }, []);
+
+  useEffect(() => {
+    load();
+    window.addEventListener("trata:live", load);
+    return () => window.removeEventListener("trata:live", load);
+  }, [load]);
 
   if (state.loading) {
     return <div className="p-8 flex items-center gap-2 text-sm text-[#5E6C84]" data-testid="provider-loading"><Loader2 className="h-4 w-4 animate-spin" /> Loading your dashboard from the shared TrataHealth backend…</div>;
@@ -65,7 +70,8 @@ export default function ProviderDashboard() {
       </div>
     );
   }
-  const { provider, kpis, recent_cases, fleet } = state.data;
+  const { provider, kpis, recent_cases, fleet, allocations } = state.data;
+  const fleetById = Object.fromEntries((fleet || []).map((v) => [v.id, v]));
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6" data-testid="provider-dashboard">
@@ -142,6 +148,8 @@ export default function ProviderDashboard() {
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-[#091E42] truncate">{c.patient_profile?.basicInfo?.fullName || c.customer_phone || "—"}</div>
                 <div className="text-[11px] text-[#5E6C84]">{(c.case_type || "").replace(/_/g, " ")}{c.distance ? ` · ${c.distance}` : ""}</div>
+                {c.ambulance_id && <div className="text-[11px] text-[#0747A6] font-mono flex items-center gap-1" data-testid={`provider-case-vehicle-${c.id}`}><Ambulance className="h-3 w-3" /> {fleetById[c.ambulance_id]?.vehicle_number || "Vehicle assigned"}</div>}
+                {state.data.vertical === "ambulance" && <AssignVehicle caseRow={c} fleet={fleet} onDone={load} />}
               </div>
               <div className="text-right shrink-0 space-y-1">
                 <StatusChip value={c.status} />
@@ -168,6 +176,7 @@ export default function ProviderDashboard() {
             ))}
           </section>
         )}
+        {state.data.vertical === "ambulance" && <AllocationsPanel allocations={allocations} onDone={load} />}
       </div>
     </div>
   );

@@ -5674,6 +5674,8 @@ class DischargeRequest(BaseModel):
 @api.post("/hospital/admissions/{admission_id}/discharge")
 async def hospital_discharge(admission_id: str, body: DischargeRequest, current=Depends(get_current_user)):
     _require_hospital(current)
+    if not (body.final_diagnosis or "").strip():
+        raise HTTPException(status_code=400, detail="Final diagnosis is required to discharge a patient")
     res = await sb.discharge_patient(_hospital_user_id(current), admission_id, body.outcome, body.notes,
                                      body.final_diagnosis, body.follow_up_instructions,
                                      body.condition_at_discharge, current.get("name"))
@@ -5806,6 +5808,96 @@ async def hospital_list_kyc(current=Depends(get_current_user)):
     _require_hospital(current)
     docs = await sb.list_hospital_kyc_documents(_hospital_user_id(current))
     return {"documents": docs, "document_types": list(sb._HOSPITAL_KYC_DOC_TYPES)}
+
+
+# ── Live updates: shared notifications + CRM payouts (SSE) ─────────────────
+def _live_sb_user(current) -> Optional[str]:
+    return current.get("supabase_user_id") or (current["id"] if is_provider(current) else None)
+
+
+@api.get("/live/notifications")
+async def live_notifications(current=Depends(get_current_user)):
+    uid = _live_sb_user(current)
+    if not uid or not _supabase_ready():
+        return {"items": [], "unread": 0}
+    return await sb.fetch_notifications(uid)
+
+
+@api.post("/live/notifications/read-all")
+async def live_notifications_read_all(current=Depends(get_current_user)):
+    uid = _live_sb_user(current)
+    if not uid or not _supabase_ready():
+        return {"updated": 0}
+    return {"updated": await sb.mark_notifications_read(uid)}
+
+
+@api.get("/live/stream")
+async def live_stream(token: Optional[str] = None):
+    """SSE: `counters` on connect/change, `notification` per new shared
+    notification row, `payout` per new/changed payout (providers)."""
+    import asyncio
+    current = await get_current_user_from_query(token)
+    uid = _live_sb_user(current)
+    pid = current.get("provider_id") if is_provider(current) else None
+
+    async def payout_state():
+        if not pid:
+            return {}
+        rows = await db.payouts.find({"provider_id": pid}, {"_id": 0, "id": 1, "status": 1, "net": 1,
+                                                              "period_end": 1, "currency": 1}).to_list(500)
+        return {r["id"]: r for r in rows}
+
+    def sse(event, data):
+        return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+    async def event_stream():
+        since = datetime.now(timezone.utc)
+        unread = 0
+        payouts = await payout_state()
+        if uid and _supabase_ready():
+            try:
+                unread = (await sb.fetch_notifications(uid, limit=1))["unread"]
+            except Exception as e:
+                logger.warning(f"live stream notif init: {e}")
+        yield sse("counters", {"unread": unread, "payouts": len(payouts)})
+        last_beat = asyncio.get_event_loop().time()
+        try:
+            while True:
+                await asyncio.sleep(4.0)
+                changed = False
+                if uid and _supabase_ready():
+                    try:
+                        res = await sb.fetch_notifications(uid, since=since)
+                        for n in reversed(res["items"]):
+                            yield sse("notification", n)
+                        if res["items"]:
+                            since = max(datetime.fromisoformat(str(n["created_at"])) for n in res["items"])
+                        if res["unread"] != unread:
+                            unread, changed = res["unread"], True
+                    except Exception as e:
+                        logger.warning(f"live stream notif poll: {e}")
+                if pid:
+                    cur = await payout_state()
+                    for k, p in cur.items():
+                        old = payouts.get(k)
+                        if not old or old.get("status") != p.get("status"):
+                            yield sse("payout", {**p, "change": "new" if not old else "status"})
+                            changed = True
+                    if len(cur) != len(payouts):
+                        changed = True
+                    payouts = cur
+                now_ts = asyncio.get_event_loop().time()
+                if changed:
+                    last_beat = now_ts
+                    yield sse("counters", {"unread": unread, "payouts": len(payouts)})
+                elif now_ts - last_beat > 20:
+                    last_beat = now_ts
+                    yield ": keepalive\n\n"
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
 
 
 # ── Hospital SSE realtime stream (Phase A) ──────────────────────────────────
