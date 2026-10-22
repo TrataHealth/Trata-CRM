@@ -1,0 +1,38 @@
+{
+  "summary": "ABDM Milestone 1 (ABHA create/verify) tested end-to-end with fake values only (~12 ABDM-hitting calls). Backend 24/25 pytest pass. Gateway token, RSA encryption and the India proxy all work: fake Aadhaar returns 'ABDM: UIDAI Error code : 998 ...', unknown ABHA/ABHA address returns 'ABDM: User not found'. Errors are readable text. Unknown or other-owner txn_id gives 404 on all session endpoints. Records are scoped per owner, admin sees everything, search works, PATCH and card return 404 on bad ids, and card returns 409 when there is no session. No Aadhaar or OTP is stored and no audit row is written for rejected calls. One failure: sales reps are NOT blocked. Frontend /abha works for provider and master admin (status chip, consent gating, digits-only Aadhaar max 12, error toasts, stays on step 1, verify methods with via radios only for ABHA number/address, records empty state and search). Mobile 390px has no horizontal overflow.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "ALL /api/abdm/* (owner_of)", "issue": "Sales reps (Rohan 9000000002) get 200 on /status and /records and can call /enrol/otp (got the 400 consent error, not 403). Root cause: server.py INTERNAL_ROLES includes 'sales_rep', so is_internal() is True and owner_of() maps sales reps to owner 'trata'. They also share the 'trata' record pool with all internal staff. Fix: in abdm.py owner_of, reject is_sales_rep(c) (role=='sales_rep' and not master admin) with 403. Also decide whether 'ops_rep' and the manager roles should have access.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/abdm/enrol/address", "issue": "Uses t['record_id'] without a guard. If called before /enrol/verify on a valid enrol txn, this raises KeyError and returns 500. Use t.get('record_id') and return 400 'Verify Aadhaar OTP first'."},
+      {"endpoint": "POST /api/abdm/enrol/otp", "issue": "ABDM sandbox throttles repeated OTP requests for the same Aadhaar. After one call, the fake Aadhaar 123412341234 returns 'You have requested multiple OTPs ... try again in 30 minutes' instead of the UIDAI 998 message for about 30 minutes. This is expected ABDM behaviour, but test_fake_aadhaar_uidai can be flaky if rerun within 30 minutes."},
+      {"endpoint": "PATCH /api/abdm/records/{id}", "issue": "Master admin can list all owners' records but can only PATCH records owned by 'trata' (no is_master_admin bypass like the card endpoint has). Inconsistent."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/abha records table", "issues": ["When a search returns nothing, abha-records-empty still says 'No ABHAs yet — create or verify one above.' It should say 'No matches' when a search is active."]},
+      {"screen": "/abha header", "issues": ["Subtitle typo: 'Aadhar OTP' should be 'Aadhaar OTP'."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_abdm_m1.py", "/app/test_reports/pytest/abdm_m1.xml"],
+  "action_items": [
+    "Block sales_rep (non-master) in abdm.py owner_of() with 403; INTERNAL_ROLES contains sales_rep",
+    "Guard record_id in /enrol/address",
+    "Optional: master-admin PATCH bypass; empty-search message; fix the 'Aadhar' typo"
+  ],
+  "critical_code_review_comments": [
+    "owner_of() relies on is_internal(), which includes sales_rep, so the stated RBAC is not enforced",
+    "ABDM X-tokens are stored in plaintext in abdm_txns (25-min TTL). Consider a TTL index on abdm_txns to purge expired sessions and tokens.",
+    "abha_records stores the base64 photo inline. /records returns up to 500 rows including photos, so the payload can be large. Exclude photo in the list projection."
+  ],
+  "updated_files": ["/app/backend/tests/test_abdm_m1.py"],
+  "success_rate": {"backend": "96% (24/25)", "frontend": "100%"},
+  "seed_data_creation": "Ran ledger_probe_fixtures setup/cleanup. Temporary TEST_probe abha_records/abdm_txns were inserted and deleted inside the tests. Mongo abdm collections are empty at the end.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run test_abdm_m1.py after ledger_probe_fixtures.py setup. The sales rep token comes from login('9000000002','Trata@123'). The fake Aadhaar is throttled by ABDM for 30 minutes after each use. The real happy path (real OTP) cannot be automated."
+}

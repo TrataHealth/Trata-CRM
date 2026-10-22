@@ -26,7 +26,7 @@ export function AbhaRecords({ refreshKey }) {
             {["Patient", "ABHA number", "ABHA address", "Details", "Last verified", ""].map((h) => <th key={h} className="px-3 py-2 text-left">{h}</th>)}
           </tr></thead>
           <tbody>
-            {rows && rows.length === 0 && <tr><td colSpan={6} className="px-3 py-8 text-center text-[#5E6C84]" data-testid="abha-records-empty">No ABHAs yet — create or verify one above.</td></tr>}
+            {rows && rows.length === 0 && <tr><td colSpan={6} className="px-3 py-8 text-center text-[#5E6C84]" data-testid="abha-records-empty">{q ? "No ABHAs match this search." : "No ABHAs yet — create or verify one above."}</td></tr>}
             {(rows || []).map((r) => (
               <tr key={r.id} className="border-t border-[#DFE1E6]" data-testid={`abha-row-${r.id}`}>
                 <td className="px-3 py-2"><div className="font-semibold flex items-center gap-1">{r.name || "—"}{r.kyc_verified && <BadgeCheck className="h-3.5 w-3.5 text-[#00875A]" />}</div>

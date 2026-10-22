@@ -360,3 +360,14 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - P1: Partial payments / credit notes; PUBLIC_APP_URL env for email links
 - P2: Phase 9 Manager Intelligence; split server.py & ledger.py into routers
 - P3: Patient App webhooks; shared JWT identity
+
+## Iteration 17 — ABDM Milestone 1 (ABHA) (Oct 2026)
+- `backend/abdm.py` router `/api/abdm/*`: gateway session (cached), RSA-OAEP(SHA-1) encryption with ABHA public cert, ABHA creation via Aadhaar OTP (+ comm. mobile verify, address suggestions/creation), ABHA verification by ABHA number / ABHA address / mobile (multi-account pick) / Aadhaar, ABHA card PNG/PDF, per-owner `abha_records`, `abdm_audit` log, `abdm_txns` (server-side X-tokens, 2h TTL index). Aadhaar/OTP never stored.
+- ALL ABDM traffic goes via India egress proxy `ABDM_PROXY_URL` (user's DigitalOcean squid) — ABDM geo-blocks non-Indian IPs. Env: ABDM_CLIENT_ID, ABDM_CLIENT_SECRET, ABDM_GATEWAY_URL, ABDM_ABHA_URL, ABDM_CM_ID=sbx.
+- Access: providers (own records) + Trata internal staff (shared 'trata' pool; master admin sees all). Sales reps 403.
+- Frontend `/abha` page (nav "ABHA (ABDM)" for admin + providers): Create wizard w/ NHA consent text, Verify wizard, records table.
+- Verified against live ABDM sandbox with fake values (UIDAI/ABDM errors returned) — real happy path needs a real Aadhaar/ABHA with OTP (user to test).
+### ABDM backlog
+- P0 after deploy: register bridge URL (PATCH /bridge/url) + add HIP services per facility (HFR IDs) — needed for M2
+- P1: M2 HIP — care-context linking, consent notify, FHIR bundles (discharge summary, diagnostic report, OP consult/prescription, invoice)
+- P2: M3 HIU; scan-and-share (ABHA QR) at front desk

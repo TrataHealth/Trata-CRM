@@ -7,7 +7,7 @@ import os
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 import httpx
@@ -163,8 +163,17 @@ class LinkBody(BaseModel):
 
 def create_abdm_router(db, get_current_user, is_provider, is_internal) -> APIRouter:
     r = APIRouter(prefix="/api/abdm")
+    idx = {"done": False}
+
+    async def ensure_indexes():
+        if not idx["done"]:
+            await db.abdm_txns.create_index("expires_at", expireAfterSeconds=0)
+            await db.abha_records.create_index([("owner", 1), ("abha_number", 1)], unique=True)
+            idx["done"] = True
 
     def owner_of(c) -> str:
+        if c.get("role") == "sales_rep" and not c.get("is_master_admin"):
+            raise HTTPException(status_code=403, detail="ABHA tools are for providers and Trata admin staff")
         if is_provider(c):
             return c.get("supabase_user_id") or c["id"]
         if is_internal(c):
@@ -239,7 +248,8 @@ def create_abdm_router(db, get_current_user, is_provider, is_internal) -> APIRou
         out = await call("POST", "/enrollment/request/otp", json={
             "txnId": "", "scope": ["abha-enrol"], "loginHint": "aadhaar", "loginId": await encrypt(body.aadhaar), "otpSystem": "aadhaar"})
         tid = out["txnId"]
-        await db.abdm_txns.insert_one({"id": tid, "abdm_txn": tid, "kind": "enrol", "owner": owner, "step": "aadhaar_otp_sent",
+        await ensure_indexes()
+        await db.abdm_txns.insert_one({"id": tid, "abdm_txn": tid, "kind": "enrol", "expires_at": datetime.now(timezone.utc) + timedelta(hours=2), "owner": owner, "step": "aadhaar_otp_sent",
                                        "patient_phone": body.patient_phone, "consent_at": _now(), "created_at": _now()})
         await audit(current, "enrol_otp", txn=tid)
         return {"txn_id": tid, "message": out.get("message")}
@@ -291,6 +301,8 @@ def create_abdm_router(db, get_current_user, is_provider, is_internal) -> APIRou
     @r.post("/enrol/address")
     async def enrol_address(body: AddressBody, current=Depends(get_current_user)):
         t = await get_txn(body.txn_id, current, "enrol")
+        if not t.get("record_id"):
+            raise HTTPException(status_code=400, detail="Verify the Aadhaar OTP first")
         out = await call("POST", "/enrollment/enrol/abha-address",
                          json={"txnId": t["abdm_txn"], "abhaAddress": body.address, "preferred": 1})
         addr = out.get("preferredAbhaAddress") or f"{body.address}@sbx"
@@ -321,7 +333,8 @@ def create_abdm_router(db, get_current_user, is_provider, is_internal) -> APIRou
         path = "/phr/web/login/abha/request/otp" if phr else "/profile/login/request/otp"
         out = await call("POST", path, json={"scope": scope, "loginHint": body.method, "loginId": await encrypt(ident), "otpSystem": via})
         tid = out["txnId"]
-        await db.abdm_txns.insert_one({"id": tid, "abdm_txn": tid, "kind": "verify", "owner": owner, "scope": scope, "phr": phr,
+        await ensure_indexes()
+        await db.abdm_txns.insert_one({"id": tid, "abdm_txn": tid, "kind": "verify", "expires_at": datetime.now(timezone.utc) + timedelta(hours=2), "owner": owner, "scope": scope, "phr": phr,
                                        "method": body.method, "patient_phone": body.patient_phone, "created_at": _now()})
         await audit(current, "verify_otp", txn=tid, method=body.method)
         return {"txn_id": tid, "message": out.get("message")}
@@ -381,15 +394,15 @@ def create_abdm_router(db, get_current_user, is_provider, is_internal) -> APIRou
         if q:
             rx = {"$regex": re.escape(q.strip()), "$options": "i"}
             f["$or"] = [{"name": rx}, {"abha_number": rx}, {"abha_address": rx}, {"patient_phone": rx}]
-        rows = await db.abha_records.find(f, {"_id": 0}).sort("updated_at", -1).to_list(500)
+        rows = await db.abha_records.find(f, {"_id": 0, "photo": 0}).sort("updated_at", -1).to_list(500)
         tids = [x.get("card_txn_id") or x.get("last_txn_id") for x in rows]
         live = {t["id"] async for t in db.abdm_txns.find({"id": {"$in": tids}, "x_exp": {"$gt": time.time()}}, {"_id": 0, "id": 1})}
         return {"records": [public(x) | {"card_available": (x.get("card_txn_id") or x.get("last_txn_id")) in live} for x in rows]}
 
     @r.patch("/records/{rid}")
     async def link_record(rid: str, body: LinkBody, current=Depends(get_current_user)):
-        rec = await db.abha_records.find_one({"id": rid, "owner": owner_of(current)}, {"_id": 0})
-        if not rec:
+        rec = await db.abha_records.find_one({"id": rid}, {"_id": 0})
+        if not rec or (rec["owner"] != owner_of(current) and not current.get("is_master_admin")):
             raise HTTPException(status_code=404, detail="ABHA record not found")
         await db.abha_records.update_one({"id": rid}, {"$set": {**body.model_dump(exclude_none=True), "updated_at": _now()}})
         return public(await db.abha_records.find_one({"id": rid}, {"_id": 0}))
