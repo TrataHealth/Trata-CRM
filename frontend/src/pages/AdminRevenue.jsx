@@ -6,6 +6,7 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, Cart
 import api from "../lib/api";
 import { T, money, toastErr } from "../components/ledger/ui";
 import { InvoiceList } from "../components/ledger/InvoiceList";
+import { CollectionsForecast } from "../components/ledger/CollectionsForecast";
 
 const Kpi = ({ label, value, tone = "text-[#091E42]", testid }) => (
   <div className={`${T.card} p-4`} data-testid={testid}>
@@ -64,6 +65,8 @@ export default function AdminRevenue() {
         <Kpi label="Unpaid" value={money(t.unpaid)} tone="text-[#974F0C]" testid="revenue-kpi-unpaid" />
         <Kpi label="Overdue" value={money(t.overdue)} tone="text-[#BF2600]" testid="revenue-kpi-overdue" />
       </div>
+
+      <CollectionsForecast refreshKey={`${t.unpaid}-${t.paid}`} />
 
       <section className={`${T.card} p-4`} data-testid="revenue-chart">
         <div className="text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold mb-2">Month by month</div>

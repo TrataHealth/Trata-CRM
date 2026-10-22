@@ -1,10 +1,12 @@
-import React from "react";
-import { Download, Send, CheckCircle2, Ban, Mail, MailWarning } from "lucide-react";
+import React, { useState } from "react";
+import { Download, Send, CheckCircle2, Ban, Mail, MailWarning, ReceiptText } from "lucide-react";
 import { toast } from "sonner";
 import api from "../../lib/api";
-import { T, money, STATUS_TONE, pretty, downloadInvoice, toastErr } from "./ui";
+import { T, money, STATUS_TONE, pretty, downloadInvoice, downloadReceipt, toastErr } from "./ui";
+import { PaidDialog } from "./PaidDialog";
 
 export function InvoiceList({ invoices, admin, onChanged }) {
+  const [paying, setPaying] = useState(null);
   const act = async (inv, path, msg) => {
     try { await api.post(`/ledger/invoices/${inv.id}/${path}`); toast.success(msg); onChanged(); } catch (e) { toastErr(e); }
   };
@@ -38,7 +40,7 @@ export function InvoiceList({ invoices, admin, onChanged }) {
                 {admin && lastMail(i) && (
                   <div className="text-[10px] font-sans font-normal text-[#5E6C84] flex items-center gap-1" data-testid={`invoice-email-${i.id}`} title={lastMail(i).email || ""}>
                     {lastMail(i).email_status === "sent" ? <Mail className="h-3 w-3 text-[#00875A]" /> : <MailWarning className="h-3 w-3 text-[#FF991F]" />}
-                    {lastMail(i).kind === "reminder" ? `Reminder ${i.reminder_count || 1}×` : "Emailed"} · {lastMail(i).email_status.replace(/_/g, " ")}
+                    {lastMail(i).kind === "reminder" ? `Reminder ${i.reminder_count || 1}×` : lastMail(i).kind === "receipt" ? "Receipt" : "Emailed"} · {lastMail(i).email_status.replace(/_/g, " ")}
                   </div>
                 )}
               </td>
@@ -51,8 +53,9 @@ export function InvoiceList({ invoices, admin, onChanged }) {
               <td className="px-3 py-2">
                 <div className="flex justify-end gap-1.5 flex-wrap">
                   <button className={T.btnGhost} onClick={() => downloadInvoice(i)} data-testid={`invoice-download-${i.id}`}><Download className="h-3.5 w-3.5" /> PDF</button>
+                  {i.status === "paid" && <button className={T.btnGhost} onClick={() => downloadReceipt(i)} data-testid={`invoice-receipt-${i.id}`}><ReceiptText className="h-3.5 w-3.5" /> Receipt</button>}
                   {admin && ["issued", "draft"].includes(i.status) && <button className={T.btn} onClick={() => share(i)} data-testid={`invoice-share-${i.id}`}><Send className="h-3.5 w-3.5" /> {i.status === "draft" ? "Issue & share" : "Share"}</button>}
-                  {admin && ["issued", "shared"].includes(i.status) && <button className={T.btnGhost} onClick={() => act(i, "status?status=paid", "Marked paid")} data-testid={`invoice-paid-${i.id}`}><CheckCircle2 className="h-3.5 w-3.5" /> Paid</button>}
+                  {admin && ["issued", "shared"].includes(i.status) && <button className={T.btnGhost} onClick={() => setPaying(i)} data-testid={`invoice-paid-${i.id}`}><CheckCircle2 className="h-3.5 w-3.5" /> Paid</button>}
                   {admin && !["void", "paid"].includes(i.status) && i.status !== "draft" && <button className={T.btnDanger} onClick={() => window.confirm("Void this invoice? Its items become billable again.") && act(i, "status?status=void", "Invoice voided")} data-testid={`invoice-void-${i.id}`}><Ban className="h-3.5 w-3.5" /> Void</button>}
                   {admin && i.status === "draft" && <button className={T.btnDanger} onClick={() => window.confirm("Discard this draft?") && act(i, "status?status=void", "Draft discarded")} data-testid={`invoice-discard-${i.id}`}><Ban className="h-3.5 w-3.5" /> Discard</button>}
                 </div>
@@ -61,6 +64,7 @@ export function InvoiceList({ invoices, admin, onChanged }) {
           ))}
         </tbody>
       </table>
+      {admin && <PaidDialog invoice={paying} onClose={() => setPaying(null)} onDone={onChanged} />}
     </div>
   );
 }

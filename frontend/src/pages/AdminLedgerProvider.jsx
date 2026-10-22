@@ -8,6 +8,7 @@ import { T, money, thisMonth, pretty, toastErr, INDIAN_STATES } from "../compone
 import { PatientServices } from "../components/ledger/PatientServices";
 import { ServiceForm } from "../components/ledger/ServiceForm";
 import { InvoiceList } from "../components/ledger/InvoiceList";
+import { Statement } from "../components/ledger/Statement";
 
 const FEE_KEYS = ["consultation", "teleconsultation", "admission", "ambulance_ride", "lab_test", "diagnostic_scan", "surgery", "procedure", "icu_stay", "room_charges", "implant", "diagnostics", "pharmacy", "other"];
 
@@ -151,6 +152,7 @@ export default function AdminLedgerProvider() {
         <TabsList data-testid="ledger-tabs">
           <TabsTrigger value="patients" data-testid="tab-patients"><Users className="h-3.5 w-3.5 mr-1" /> Patients & services</TabsTrigger>
           <TabsTrigger value="invoices" data-testid="tab-invoices">Invoices ({invoices.length})</TabsTrigger>
+          <TabsTrigger value="statement" data-testid="tab-statement">Statement</TabsTrigger>
           <TabsTrigger value="promotions" data-testid="tab-promotions">Promotions</TabsTrigger>
           <TabsTrigger value="billing" data-testid="tab-billing">Billing terms</TabsTrigger>
         </TabsList>
@@ -158,6 +160,7 @@ export default function AdminLedgerProvider() {
           <PatientServices patients={patients} onAdd={(k) => setForm({ open: true, patient: k })} onChanged={load} canDelete={() => true} />
         </TabsContent>
         <TabsContent value="invoices" className="mt-4"><InvoiceTab uid={uid} invoices={invoices} onChanged={load} /></TabsContent>
+        <TabsContent value="statement" className="mt-4"><Statement uid={uid} key={invoices.map((i) => i.status).join()} /></TabsContent>
         <TabsContent value="promotions" className="mt-4"><Promotions uid={uid} promos={promotions} onChanged={load} /></TabsContent>
         <TabsContent value="billing" className="mt-4"><BillingTerms uid={uid} bp={billing_profile} onChanged={load} /></TabsContent>
       </Tabs>

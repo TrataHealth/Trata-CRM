@@ -6,6 +6,7 @@ import { T, toastErr } from "../components/ledger/ui";
 import { PatientServices } from "../components/ledger/PatientServices";
 import { ServiceForm } from "../components/ledger/ServiceForm";
 import { InvoiceList } from "../components/ledger/InvoiceList";
+import { Statement } from "../components/ledger/Statement";
 
 export default function ProviderLedger() {
   const [state, setState] = useState({ loading: true, data: null });
@@ -37,12 +38,14 @@ export default function ProviderLedger() {
         <TabsList>
           <TabsTrigger value="patients" data-testid="provider-tab-patients">Patients ({patients.length})</TabsTrigger>
           <TabsTrigger value="invoices" data-testid="provider-tab-invoices">Invoices from Trata ({invoices.length})</TabsTrigger>
+          <TabsTrigger value="statement" data-testid="provider-tab-statement">Statement</TabsTrigger>
         </TabsList>
         <TabsContent value="patients" className="mt-4">
           <PatientServices patients={patients} onAdd={(k) => setForm({ open: true, patient: k })} onChanged={load}
             canDelete={(s) => s.status !== "approved"} />
         </TabsContent>
         <TabsContent value="invoices" className="mt-4"><section className={T.card}><InvoiceList invoices={invoices} admin={false} onChanged={load} /></section></TabsContent>
+        <TabsContent value="statement" className="mt-4"><Statement key={invoices.map((i) => i.status).join()} /></TabsContent>
       </Tabs>
       <ServiceForm open={form.open} onClose={() => setForm({ open: false, patient: "" })} mode="provider"
         patients={patients} defaultPatient={form.patient} categories={categories} onSaved={load} />

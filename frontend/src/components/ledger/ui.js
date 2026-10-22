@@ -46,12 +46,17 @@ export async function openFile(fid) {
   } catch (e) { toastErr(e, "Could not open document"); }
 }
 
-export async function downloadInvoice(inv) {
+export async function downloadPdf(path, filename, params) {
   try {
-    const { data } = await api.get(`/ledger/invoices/${inv.id}/pdf`, { responseType: "blob" });
+    const { data } = await api.get(path, { responseType: "blob", params });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(data);
-    a.download = `${inv.number.replace(/\//g, "-")}.pdf`;
+    a.download = filename;
     a.click();
   } catch (e) { toastErr(e, "Download failed"); }
 }
+
+export const downloadInvoice = (inv) => downloadPdf(`/ledger/invoices/${inv.id}/pdf`, `${(inv.number || "DRAFT").replace(/\//g, "-")}.pdf`);
+export const downloadReceipt = (inv) => downloadPdf(`/ledger/invoices/${inv.id}/receipt`, `RCPT-${(inv.number || "").replace(/\//g, "-")}.pdf`);
+
+export const PAY_MODES = { bank_transfer: "Bank transfer", upi: "UPI", cheque: "Cheque", cash: "Cash", other: "Other" };

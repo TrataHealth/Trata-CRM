@@ -26,6 +26,7 @@ from fastapi.responses import Response
 from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, Field
 
+import ledger_docs as docs
 import ledger_sb as lsb
 import supabase_db as sb
 
@@ -188,6 +189,13 @@ class InvoiceBody(BaseModel):
     sac_code: str
     notes: Optional[str] = None
     due_days: Optional[int] = None
+
+
+class PaymentBody(BaseModel):
+    paid_on: Optional[str] = None  # YYYY-MM-DD
+    mode: str = "bank_transfer"
+    reference: Optional[str] = Field(None, max_length=120)
+    note: Optional[str] = Field(None, max_length=300)
 
 
 DEFAULT_SETTINGS = {
@@ -763,11 +771,18 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
 
     async def notify_provider(inv: Dict[str, Any], kind: str) -> Dict[str, Any]:
         """CRM (shared notifications) + email. Never raises; returns delivery log entry."""
-        overdue = kind == "reminder"
-        title = (f"Payment reminder: invoice {inv['number']} is overdue" if overdue
-                 else f"Invoice {inv['number']} from Trata Health")
-        msg = (f"Your {inv['month']} invoice of ₹{inv['grand_total']:,.2f} was due on {inv['due_date']}. Please arrange payment."
-               if overdue else f"Your {inv['month']} invoice of ₹{inv['grand_total']:,.2f} is ready. Due {inv['due_date']}.")
+        overdue, receipt = kind == "reminder", kind == "receipt"
+        if receipt:
+            p = inv["payment"]
+            title = f"Payment received — receipt {p['receipt_no']} for invoice {inv['number']}"
+            msg = f"We received ₹{p['amount']:,.2f} on {p['paid_on']} against invoice {inv['number']}. Thank you!"
+            body = docs.receipt_email_html(inv, inv.get("app_url"))
+        else:
+            title = (f"Payment reminder: invoice {inv['number']} is overdue" if overdue
+                     else f"Invoice {inv['number']} from Trata Health")
+            msg = (f"Your {inv['month']} invoice of ₹{inv['grand_total']:,.2f} was due on {inv['due_date']}. Please arrange payment."
+                   if overdue else f"Your {inv['month']} invoice of ₹{inv['grand_total']:,.2f} is ready. Due {inv['due_date']}.")
+            body = invoice_email_html(inv, overdue, inv.get("app_url"))
         log = {"kind": kind, "at": _now(), "crm": False, "email": None, "email_status": "skipped"}
         try:
             pool = await sb.get_pool()
@@ -776,7 +791,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
                     INSERT INTO public.notifications (id, user_id, title, message, notification_type, data, is_read, created_at)
                     VALUES ($1, $2, $3, $4, $5, $6::json, FALSE, now())""",
                     str(uuid.uuid4()), inv["provider_user_id"], title, msg,
-                    "invoice_reminder" if overdue else "invoice",
+                    "invoice_receipt" if receipt else "invoice_reminder" if overdue else "invoice",
                     __import__("json").dumps({"invoice_id": inv["id"], "number": inv["number"]}))
             log["crm"] = True
         except Exception as e:
@@ -788,7 +803,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             log["email"] = to
             try:
                 import emailer
-                await emailer.send_email(to=to, subject=title, html=invoice_email_html(inv, overdue, inv.get("app_url")))
+                await emailer.send_email(to=to, subject=title, html=body)
                 log["email_status"] = "sent"
             except Exception as e:
                 log["email_status"] = f"failed:{e}"
@@ -957,25 +972,147 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
         return {"success": True, "status": new_status, "number": inv["number"], "delivery": log}
 
     @r.post("/ledger/invoices/{iid}/status")
-    async def invoice_status(iid: str, status: str = Query(...), current=Depends(get_current_user)):
+    async def invoice_status(iid: str, request: Request, status: str = Query(...), body: Optional[PaymentBody] = None,
+                             current=Depends(get_current_user)):
         require_admin(current)
         inv = await _invoice_for(iid, current)
         if status not in ("paid", "void"):
             raise HTTPException(status_code=400, detail="status must be paid or void")
         if inv["status"] == "void":
             raise HTTPException(status_code=400, detail="Invoice already void")
+        if inv["status"] == "paid":
+            raise HTTPException(status_code=400, detail="Invoice already paid" if status == "paid"
+                                else "Paid invoices can't be voided — issue a credit note instead")
         if status == "paid" and inv["status"] == "draft":
             raise HTTPException(status_code=400, detail="Share the draft before marking it paid")
-        if status == "void" and inv["status"] == "paid":
-            raise HTTPException(status_code=400, detail="Paid invoices can't be voided — issue a credit note instead")
         upd = {"status": status, f"{status}_at": _now()}
         if status == "void":
             upd["active"] = False
+        else:
+            body = body or PaymentBody()
+            today = datetime.now(IST).date().isoformat()
+            paid_on = body.paid_on or today
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", paid_on) or paid_on > today:
+                raise HTTPException(status_code=400, detail="paid_on must be a past date (YYYY-MM-DD)")
+            if body.mode not in docs.MODES:
+                raise HTTPException(status_code=400, detail="Unknown payment mode")
+            origin = request.headers.get("origin") or ""
+            upd["app_url"] = origin if origin.startswith("https://") else inv.get("app_url")
+            upd["payment"] = {"paid_on": paid_on, "mode": body.mode, "reference": (body.reference or "").strip() or None,
+                              "note": (body.note or "").strip() or None, "amount": inv["grand_total"],
+                              "amount_words": _inr_words(inv["grand_total"]),
+                              "receipt_no": "RCPT/" + (inv.get("number") or iid[:8]).replace("/", "-"),
+                              "recorded_by": actor(current), "recorded_at": _now()}
         await db.ledger_invoices.update_one({"id": iid}, {"$set": upd})
         if status == "void":
             await db.ledger_services.update_many({"invoice_id": iid}, {"$set": {"invoice_id": None}})
             await db.ledger_promotions.update_many({"invoice_id": iid}, {"$set": {"invoice_id": None}})
-        return {"success": True, "status": status}
+            return {"success": True, "status": status}
+        inv.update(upd)
+        log = await notify_provider(inv, "receipt")
+        return {"success": True, "status": status, "receipt_no": upd["payment"]["receipt_no"], "delivery": log}
+
+    async def _pdf_user(authorization: Optional[str], token: Optional[str]):
+        return await (get_current_user(authorization) if authorization else get_current_user_from_query(token))
+
+    def _pdf(content: bytes, fname: str) -> Response:
+        return Response(content=content, media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+    @r.get("/ledger/invoices/{iid}/receipt")
+    async def receipt_pdf(iid: str, authorization: Optional[str] = Header(None), token: Optional[str] = Query(None)):
+        inv = await _invoice_for(iid, await _pdf_user(authorization, token))
+        if inv["status"] != "paid":
+            raise HTTPException(status_code=400, detail="Receipt is available once the invoice is paid")
+        inv.setdefault("payment", {"paid_on": (inv.get("paid_at") or "")[:10], "mode": "other", "amount": inv["grand_total"],
+                                   "amount_words": _inr_words(inv["grand_total"]),
+                                   "receipt_no": "RCPT/" + (inv.get("number") or iid[:8]).replace("/", "-")})
+        content = await asyncio.to_thread(docs.pdf_bytes, docs.render_receipt_html(inv))
+        return _pdf(content, inv["payment"]["receipt_no"].replace("/", "-") + ".pdf")
+
+    @r.get("/ledger/forecast")
+    async def forecast(days: int = 30, current=Depends(get_current_user)):
+        require_admin(current)
+        days = max(7, min(days, 90))
+        today = datetime.now(IST).date()
+        end = (today + timedelta(days=days - 1)).isoformat()
+        daily = {(today + timedelta(days=d)).isoformat(): {"amount": 0.0, "count": 0} for d in range(days)}
+        overdue, later, items = {"amount": 0.0, "count": 0}, {"amount": 0.0, "count": 0}, []
+        async for i in db.ledger_invoices.find({"status": {"$in": ["issued", "shared"]}}, {"_id": 0, "lines": 0}):
+            due, amt = i.get("due_date") or "", float(i.get("grand_total") or 0)
+            bucket = overdue if due < today.isoformat() else daily.get(due) or later
+            bucket["amount"] += amt
+            bucket["count"] += 1
+            if due <= end:
+                items.append({k: i.get(k) for k in ("id", "number", "provider_user_id", "provider_name", "month", "due_date", "grand_total", "status")}
+                             | {"overdue": due < today.isoformat()})
+        day_rows = [{"date": d, "amount": _r2(v["amount"]), "count": v["count"]} for d, v in daily.items()]
+        weeks = []
+        for w in range(0, days, 7):
+            chunk = day_rows[w:w + 7]
+            weeks.append({"label": "This week" if w == 0 else "Next week" if w == 7 else f"Days {w + 1}–{w + len(chunk)}",
+                          "from": chunk[0]["date"], "to": chunk[-1]["date"],
+                          "amount": _r2(sum(c["amount"] for c in chunk)), "count": sum(c["count"] for c in chunk)})
+        upcoming = _r2(sum(d["amount"] for d in day_rows))
+        return {"days": days, "from": today.isoformat(), "to": end,
+                "overdue": {"amount": _r2(overdue["amount"]), "count": overdue["count"]},
+                "upcoming": {"amount": upcoming, "count": sum(d["count"] for d in day_rows)},
+                "expected_total": _r2(upcoming + overdue["amount"]),
+                "beyond": {"amount": _r2(later["amount"]), "count": later["count"]},
+                "daily": day_rows, "weekly": weeks, "items": sorted(items, key=lambda x: x["due_date"] or "")}
+
+    async def build_statement(uid: str, frm: Optional[str], to: Optional[str]) -> Dict[str, Any]:
+        for d in (frm, to):
+            if d and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+                raise HTTPException(status_code=400, detail="Dates must be YYYY-MM-DD")
+        raw = []
+        async for i in db.ledger_invoices.find({"provider_user_id": uid, "status": {"$in": ["shared", "paid"]}},
+                                               {"_id": 0, "lines": 0}):
+            raw.append({"date": i.get("issue_date") or "", "type": "invoice", "ref": i.get("number"), "invoice_id": i["id"],
+                        "description": f"Trata fees for {i['month']} · due {i.get('due_date')}", "debit": i["grand_total"], "credit": 0.0})
+            if i["status"] == "paid":
+                p = i.get("payment") or {}
+                raw.append({"date": p.get("paid_on") or (i.get("paid_at") or "")[:10], "type": "payment",
+                            "ref": p.get("receipt_no") or f"Payment for {i.get('number')}", "invoice_id": i["id"],
+                            "description": " · ".join(filter(None, [docs.MODES.get(p.get("mode")), p.get("reference")])) or f"Against {i.get('number')}",
+                            "debit": 0.0, "credit": i["grand_total"]})
+        raw.sort(key=lambda x: (x["date"], x["type"] != "invoice"))
+        opening = _r2(sum(x["debit"] - x["credit"] for x in raw if frm and x["date"] < frm))
+        bal, entries = opening, []
+        for x in raw:
+            if (frm and x["date"] < frm) or (to and x["date"] > to):
+                continue
+            bal = _r2(bal + x["debit"] - x["credit"])
+            entries.append({**x, "balance": bal})
+        bp = await billing_profile(uid)
+        prov = next((p for p in await lsb.list_providers() if p["id"] == uid), {}) or {}
+        st = await settings()
+        return {"provider_user_id": uid, "provider_name": bp.get("legal_name") or prov.get("display_name") or await _sb_name(uid),
+                "provider_city": prov.get("city"), "provider_gstin": bp.get("gstin"), "from": frm, "to": to,
+                "generated_on": datetime.now(IST).date().isoformat(), "opening_balance": opening,
+                "total_debit": _r2(sum(x["debit"] for x in entries)), "total_credit": _r2(sum(x["credit"] for x in entries)),
+                "closing_balance": bal, "entries": entries,
+                "seller": {k: st.get(k) for k in ("legal_name", "address", "gstin", "pan", "email")}}
+
+    def _stmt_uid(current, uid: Optional[str]) -> str:
+        if uid:
+            require_admin(current)
+            return uid
+        return prov_uid(current)
+
+    @r.get("/ledger/statement")
+    async def statement(uid: Optional[str] = None, date_from: Optional[str] = Query(None, alias="from"),
+                        date_to: Optional[str] = Query(None, alias="to"), current=Depends(get_current_user)):
+        return await build_statement(_stmt_uid(current, uid), date_from, date_to)
+
+    @r.get("/ledger/statement/pdf")
+    async def statement_pdf(uid: Optional[str] = None, date_from: Optional[str] = Query(None, alias="from"),
+                            date_to: Optional[str] = Query(None, alias="to"), authorization: Optional[str] = Header(None),
+                            token: Optional[str] = Query(None)):
+        current = await _pdf_user(authorization, token)
+        st = await build_statement(_stmt_uid(current, uid), date_from, date_to)
+        content = await asyncio.to_thread(docs.pdf_bytes, docs.render_statement_html(st))
+        return _pdf(content, f"Trata-statement-{re.sub(r'[^A-Za-z0-9]+', '-', st['provider_name'] or 'provider')[:40]}-{st['generated_on']}.pdf")
 
     @r.get("/ledger/invoices/{iid}/pdf")
     async def invoice_pdf(iid: str, authorization: Optional[str] = Header(None), token: Optional[str] = Query(None)):
@@ -1009,29 +1146,10 @@ def render_invoice_html(inv: Dict[str, Any]) -> str:
         ("Bank", "bank_name"), ("Account name", "account_name"), ("Account no.", "account_number"),
         ("IFSC", "ifsc"), ("UPI", "upi_id")) if s.get(v))
     status = {"paid": "PAID", "void": "VOID", "draft": "DRAFT"}.get(inv["status"], "TAX INVOICE")
-    return f"""<html><head><meta charset="utf-8"/><style>
-@page {{ size: A4; margin: 14mm 12mm 16mm 12mm; }}
-body {{ font-family: Helvetica; font-size: 8.5pt; color: #091E42; }}
-.band {{ background-color: #0B3D91; color: #FFFFFF; padding: 10px 12px; }}
-.brand {{ font-size: 20pt; font-weight: bold; }} .tag {{ font-size: 7.5pt; color: #BFD4FF; }}
-.accent {{ background-color: #00B8A9; height: 4px; }}
-table {{ width: 100%; border-collapse: collapse; }}
-.box td {{ vertical-align: top; padding: 4px 6px; }}
-.h {{ font-size: 7pt; color: #5E6C84; text-transform: uppercase; letter-spacing: 1px; font-weight: bold; }}
-.items th {{ background-color: #F0F4FA; color: #42526E; font-size: 7pt; text-align: left; padding: 5px 4px; border-bottom: 1px solid #C1C7D0; }}
-.items td {{ padding: 5px 4px; border-bottom: 0.5px solid #DFE1E6; vertical-align: top; }}
-.r {{ text-align: right; }} .c {{ text-align: center; }} .mut {{ color: #6B778C; font-size: 7pt; }}
-.tot td {{ padding: 3px 6px; }} .grand td {{ background-color: #0B3D91; color: #FFFFFF; font-size: 11pt; font-weight: bold; padding: 7px 6px; }}
-.stamp {{ color: #00875A; font-size: 12pt; font-weight: bold; }}
-.foot {{ font-size: 7pt; color: #6B778C; border-top: 0.5px solid #DFE1E6; padding-top: 6px; }}
-</style></head><body>
-<table class="band"><tr>
- <td><span class="brand">Trata Health</span><br/><span class="tag">CONNECTED EMERGENCY &amp; CARE NETWORK</span></td>
- <td class="r"><span style="font-size:13pt;font-weight:bold;">{status}</span><br/>
-   <span class="tag">Invoice # </span><b>{e(inv.get('number') or 'DRAFT — not issued')}</b><br/>
-   <span class="tag">Issued {e(inv['issue_date'])} &#183; Due {e(inv['due_date'])}</span></td>
-</tr></table>
-<div class="accent"></div><br/>
+    sub = (f"<span class='tag'>Invoice # </span><b>{e(inv.get('number') or 'DRAFT — not issued')}</b><br/>"
+           f"<span class='tag'>Issued {e(inv['issue_date'])} &#183; Due {e(inv['due_date'])}</span>")
+    return f"""<html><head><meta charset="utf-8"/><style>{docs.BASE_CSS}</style></head><body>
+{docs.doc_header(status, sub)}
 <table class="box"><tr>
  <td width="50%"><div class="h">From</div><b>{e(s.get('legal_name'))}</b><br/>{e(s.get('address'))}<br/>
    State: {e(s.get('state'))}<br/>GSTIN: <b>{e(s.get('gstin'))}</b> &#183; PAN: {e(s.get('pan'))}<br/>
@@ -1059,7 +1177,7 @@ table {{ width: 100%; border-collapse: collapse; }}
   <tr><td><b>Taxable value</b></td><td class="r"><b>{money(inv['taxable_value'])}</b></td></tr>
   {tax_rows}
   <tr class="grand"><td>Total payable</td><td class="r">{money(inv['grand_total'])}</td></tr>
- </table>{('<br/><div class="stamp r">&#10003; PAID</div>') if inv['status'] == 'paid' else ''}</td></tr></table>
+ </table>{('<br/><div class="stamp r">PAID IN FULL</div>') if inv['status'] == 'paid' else ''}</td></tr></table>
 <br/><br/><div class="foot">{e(s.get('terms'))}<br/>This is a computer-generated invoice from the Trata Health CRM and does not require a physical signature.</div>
 </body></html>"""
 
@@ -1082,16 +1200,10 @@ def invoice_email_html(inv: Dict[str, Any], overdue: bool, app_url: Optional[str
     rows = "".join(f"<tr><td style='padding:4px 0;color:#42526E'>{k}</td><td style='padding:4px 0;text-align:right'>{v}</td></tr>"
                    for k, v in (("Service fees", money(inv["service_fee"])), ("Marketing / promotion fees", money(inv["promotion_fee"])),
                                 (f"GST @ {inv['gst_pct']:.0f}%", money(inv["gst_total"]))))
-    return f"""<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F5F7;padding:24px 0">
-<tr><td align="center"><table role="presentation" width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;font-family:Arial,sans-serif;color:#091E42">
-<tr><td style="background:#0B3D91;color:#ffffff;padding:18px 24px;border-radius:8px 8px 0 0"><div style="font-size:20px;font-weight:bold">Trata Health</div>
-<div style="font-size:11px;color:#BFD4FF;letter-spacing:1px">{'PAYMENT REMINDER' if overdue else 'TAX INVOICE'}</div></td></tr>
-<tr><td style="height:4px;background:#00B8A9"></td></tr>
-<tr><td style="padding:24px"><h2 style="margin:0 0 8px;font-size:18px">{head}</h2>
+    body = f"""<h2 style="margin:0 0 8px;font-size:18px">{head}</h2>
 <p style="font-size:14px;line-height:20px">Hello {e(inv.get('provider_name'))},</p><p style="font-size:14px;line-height:20px">{lead}</p>
 <table role="presentation" width="100%" style="font-size:13px;border-top:1px solid #DFE1E6;border-bottom:1px solid #DFE1E6;margin:12px 0">{rows}
 <tr><td style="padding:8px 0;font-weight:bold">Total payable</td><td style="padding:8px 0;text-align:right;font-weight:bold;font-size:16px">{money(inv['grand_total'])}</td></tr></table>
 <p style="font-size:12px;color:#42526E">Due date: <b>{e(inv['due_date'])}</b> &middot; SAC {e(inv.get('sac_code'))}</p>{link}
-{('<p style="font-size:12px;color:#42526E;margin-bottom:4px"><b>Pay to</b></p><table style="font-size:12px">' + bank + '</table>') if bank else ''}
-<p style="font-size:11px;color:#888;margin-top:24px">Sent by Trata Health billing. We never ask for passwords, OTPs or card details by email.
-Questions? Reply to your Trata relationship manager.</p></td></tr></table></td></tr></table>"""
+{('<p style="font-size:12px;color:#42526E;margin-bottom:4px"><b>Pay to</b></p><table style="font-size:12px">' + bank + '</table>') if bank else ''}"""
+    return docs.email_shell(app_url, "PAYMENT REMINDER" if overdue else "TAX INVOICE", body)
