@@ -6166,6 +6166,8 @@ app.include_router(api)
 import ledger as _ledger  # noqa: E402
 app.include_router(_ledger.create_ledger_router(db, get_current_user, get_current_user_from_query,
                                                 is_provider, EMERGENT_LLM_KEY, _parse_ai_json))
+import abdm as _abdm  # noqa: E402
+app.include_router(_abdm.create_abdm_router(db, get_current_user, is_provider, is_internal))
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

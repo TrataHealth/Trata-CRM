@@ -38,6 +38,7 @@ import AdminLedgerReview from "./pages/AdminLedgerReview";
 import AdminRevenue from "./pages/AdminRevenue";
 import ProviderLedger from "./pages/ProviderLedger";
 import Patients from "./pages/Patients";
+import Abha from "./pages/Abha";
 import PatientDetail from "./pages/PatientDetail";
 import Network from "./pages/Network";
 import { Toaster } from "sonner";
@@ -88,6 +89,7 @@ function App() {
           <Route path="/forgot" element={<ForgotPassword />} />
           <Route path="/security-setup" element={<SecuritySetupRoute />} />
           <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
+          <Route path="/abha" element={<RequireAuth><Abha /></RequireAuth>} />
 
           {/* Admin / internal routes */}
           <Route path="/" element={<RequireAuth><RoleRoot /></RequireAuth>} />
