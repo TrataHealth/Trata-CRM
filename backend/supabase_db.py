@@ -1391,15 +1391,15 @@ async def create_provider_from_admin(phone: str, name: str, vertical: str,
                     INSERT INTO public.{tbl}
                       (id, user_id, name, phone, address, city, state, latitude, longitude,
                        is_active, is_verified, is_demo, created_at, updated_at)
-                    SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE, FALSE, FALSE, now(), now()
-                     WHERE NOT EXISTS (SELECT 1 FROM public.{tbl} WHERE user_id = $2)
+                    SELECT $1::text, $2::text, $3, $4, $5, $6, $7, $8, $9, TRUE, FALSE, FALSE, now(), now()
+                     WHERE NOT EXISTS (SELECT 1 FROM public.{tbl} WHERE user_id = $2::text)
                 """, prof_id, user_id, name, phone, address, city, state, flat, flng)
-                pid = await conn.fetchval(f"SELECT id FROM public.{tbl} WHERE user_id=$1", user_id)
+                pid = await conn.fetchval(f"SELECT id FROM public.{tbl} WHERE user_id=$1::text", user_id)
                 await conn.execute(f"""
                     INSERT INTO public.{btbl} (id, {fk}, name, phone, address, city, state, latitude, longitude,
                                                is_active, is_verified, created_at, updated_at)
-                    SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE, FALSE, now(), now()
-                     WHERE NOT EXISTS (SELECT 1 FROM public.{btbl} WHERE {fk} = $2)
+                    SELECT $1::text, $2::text, $3, $4, $5, $6, $7, $8, $9, FALSE, FALSE, now(), now()
+                     WHERE NOT EXISTS (SELECT 1 FROM public.{btbl} WHERE {fk} = $2::text)
                 """, str(_uuid.uuid4()), pid, name, phone, address, city, state, flat, flng)
             elif vertical == "pathology":
                 await conn.execute("""

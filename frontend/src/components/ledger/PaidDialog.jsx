@@ -33,7 +33,7 @@ export function PaidDialog({ invoice, onClose, onDone }) {
         {invoice && <div className="space-y-3">
           <div className="text-xs text-[#42526E]"><b className="font-mono">{invoice.number}</b> · {invoice.provider_name} · <b>{money(invoice.grand_total)}</b></div>
           <div className="grid grid-cols-2 gap-3">
-            <label className={T.label}>Received on<input type="date" max={today()} className={T.input} value={f.paid_on} onChange={set("paid_on")} data-testid="paid-date" /></label>
+            <label className={T.label}>Received on<input type="date" min={invoice.issue_date} max={today()} className={T.input} value={f.paid_on} onChange={set("paid_on")} data-testid="paid-date" /></label>
             <label className={T.label}>Mode<select className={T.input} value={f.mode} onChange={set("mode")} data-testid="paid-mode">
               {Object.entries(PAY_MODES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
           </div>

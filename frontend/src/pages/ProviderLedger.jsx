@@ -45,7 +45,7 @@ export default function ProviderLedger() {
             canDelete={(s) => s.status !== "approved"} />
         </TabsContent>
         <TabsContent value="invoices" className="mt-4"><section className={T.card}><InvoiceList invoices={invoices} admin={false} onChanged={load} /></section></TabsContent>
-        <TabsContent value="statement" className="mt-4"><Statement key={invoices.map((i) => i.status).join()} /></TabsContent>
+        <TabsContent value="statement" className="mt-4"><Statement refreshKey={invoices.map((i) => i.status).join()} /></TabsContent>
       </Tabs>
       <ServiceForm open={form.open} onClose={() => setForm({ open: false, patient: "" })} mode="provider"
         patients={patients} defaultPatient={form.patient} categories={categories} onSaved={load} />

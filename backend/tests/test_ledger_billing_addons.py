@@ -75,6 +75,11 @@ def teardown_module_data():
     if ids:
         sbrun("DELETE FROM public.labs WHERE pathologist_profile_id IN (SELECT id FROM public.pathologists WHERE user_id = ANY($1::text[]))", ids, fetch=False)
         sbrun("DELETE FROM public.pathologists WHERE user_id = ANY($1::text[])", ids, fetch=False)
+        for tbl, btbl, fk in (("path_lab_profiles", "path_lab_branches", "path_lab_profile_id"),
+                              ("diagnostic_centre_profiles", "diagnostic_centre_branches", "diagnostic_centre_profile_id")):
+            if sbrun("SELECT to_regclass($1) AS t", f"public.{tbl}")[0]["t"]:
+                sbrun(f"DELETE FROM public.{btbl} WHERE {fk} IN (SELECT id FROM public.{tbl} WHERE user_id = ANY($1::text[]))", ids, fetch=False)
+                sbrun(f"DELETE FROM public.{tbl} WHERE user_id = ANY($1::text[])", ids, fetch=False)
         sbrun("DELETE FROM public.notifications WHERE user_id = ANY($1::text[])", ids, fetch=False)
         sbrun("DELETE FROM public.kyc_documents WHERE user_id = ANY($1::text[])", ids, fetch=False)
         sbrun("DELETE FROM public.users WHERE id = ANY($1::text[])", ids, fetch=False)
@@ -315,6 +320,11 @@ class TestLabOnboarding:
                                                       "name": f"TEST_probe Lab {kind}"})
         assert r.status_code == 200, r.text
         uid = r.json()["user_id"]
-        rows = sbrun("""SELECT l.lab_type FROM public.pathologists p JOIN public.labs l ON l.pathologist_profile_id = p.id
-                        WHERE p.user_id=$1""", uid)
-        assert [x["lab_type"] for x in rows] == [kind]
+        tbl = {"path_lab": "path_lab_profiles", "diagnostic_centre": "diagnostic_centre_profiles"}[kind]
+        if sbrun("SELECT to_regclass($1) AS t", f"public.{tbl}")[0]["t"]:
+            rows = sbrun(f"SELECT id FROM public.{tbl} WHERE user_id=$1", uid)
+            assert len(rows) == 1
+        else:
+            rows = sbrun("""SELECT l.lab_type FROM public.pathologists p JOIN public.labs l ON l.pathologist_profile_id = p.id
+                            WHERE p.user_id=$1""", uid)
+            assert [x["lab_type"] for x in rows] == [kind]

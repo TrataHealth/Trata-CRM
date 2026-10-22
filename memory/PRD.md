@@ -347,3 +347,16 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Sales Agent (Rohan) `9000000002` · `Trata@123`
 - Ops Rep — see test_credentials.md
 - Real provider: Abhishek Ambulance `7678218261` (no CRM login — comes from upstream admin app)
+
+## Iteration 16 — Receipts, Collections Forecast, Statements (Oct 2026)
+- Mark paid → Record-payment dialog (date ≥ invoice date & ≤ today, mode, UTR ref, note). Stores `invoice.payment` (receipt_no `RCPT/<inv no>`), auto-sends branded receipt email (Resend) + CRM notification (`invoice_receipt`). Receipt PDF: `GET /api/ledger/invoices/{id}/receipt`.
+- Official Trata Health logo (`backend/assets/trata-logo.png`, web copy `/brand/trata-doc-logo.png`) on invoice, receipt and statement PDFs + all billing emails (`ledger_docs.py`).
+- Revenue dashboard: Collections forecast (`GET /api/ledger/forecast?days=30`) with Weekly / Day-by-day / Total toggle + overdue.
+- Statement (`GET /api/ledger/statement[?uid=&from=&to=]`, `/statement/pdf`): running balance, opening/closing, date filter, PDF; provider console tab + admin per-provider tab.
+- Fixed: split-lab onboarding 500 (asyncpg param casts in `supabase_db.create_provider_from_admin`).
+- Tests: `tests/test_ledger_receipts_statement.py` (21/21), addons suite updated for split lab tables.
+
+### Backlog
+- P1: Partial payments / credit notes; PUBLIC_APP_URL env for email links
+- P2: Phase 9 Manager Intelligence; split server.py & ledger.py into routers
+- P3: Patient App webhooks; shared JWT identity

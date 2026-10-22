@@ -32,7 +32,7 @@ def _is_test(name: Optional[str]) -> bool:
     return bool(name) and (bool(sb._TEST_RX.search(name)) or name in sb._TEST_EXACT)
 
 
-async def list_providers() -> List[Dict[str, Any]]:
+async def list_providers(uid: Optional[str] = None) -> List[Dict[str, Any]]:
     pool = await sb.get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -45,12 +45,14 @@ async def list_providers() -> List[Dict[str, Any]]:
          LEFT JOIN public.pathologists pa ON pa.user_id = u.id
          LEFT JOIN public.doctors d ON d.user_id = u.id
              WHERE u.role = ANY($1::text[]) AND coalesce(u.is_archived, FALSE) = FALSE
-             ORDER BY u.created_at DESC NULLS LAST""", list(LEDGER_ROLES))
+               AND ($2::text IS NULL OR u.id = $2::text)
+             ORDER BY u.created_at DESC NULLS LAST""", list(LEDGER_ROLES), uid)
     split = {}
     if await sb.lab_split_live():
         async with pool.acquire() as conn:
             for kind, (tbl, _b, _fk) in sb.LAB_KINDS.items():
-                for x in await conn.fetch(f"SELECT user_id::text AS uid, name, city FROM public.{tbl} WHERE coalesce(is_demo, FALSE) = FALSE"):
+                for x in await conn.fetch(f"SELECT user_id::text AS uid, name, city FROM public.{tbl} WHERE coalesce(is_demo, FALSE) = FALSE"
+                                          " AND ($1::text IS NULL OR user_id::text = $1::text)", uid):
                     split[x["uid"]] = (kind, x["name"], x["city"])
     out = []
     for r in rows:

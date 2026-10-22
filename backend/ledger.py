@@ -210,6 +210,7 @@ DEFAULT_SETTINGS = {
 
 IST = timezone(timedelta(hours=5, minutes=30))
 _BG_TASKS: set = set()
+_prov_cache: Dict[str, tuple] = {}
 
 
 def _spawn(coro) -> None:
@@ -234,6 +235,13 @@ async def _sb_name(uid: str) -> Optional[str]:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _date_ok(d: str) -> bool:
+    try:
+        return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", d)) and bool(datetime.strptime(d, "%Y-%m-%d"))
+    except ValueError:
+        return False
 
 
 def _month_ok(m: str) -> bool:
@@ -992,8 +1000,10 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             body = body or PaymentBody()
             today = datetime.now(IST).date().isoformat()
             paid_on = body.paid_on or today
-            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", paid_on) or paid_on > today:
-                raise HTTPException(status_code=400, detail="paid_on must be a past date (YYYY-MM-DD)")
+            if not _date_ok(paid_on) or paid_on > today:
+                raise HTTPException(status_code=400, detail="paid_on must be a valid past date (YYYY-MM-DD)")
+            if inv.get("issue_date") and paid_on < inv["issue_date"]:
+                raise HTTPException(status_code=400, detail=f"paid_on can't be before the invoice date ({inv['issue_date']})")
             if body.mode not in docs.MODES:
                 raise HTTPException(status_code=400, detail="Unknown payment mode")
             origin = request.headers.get("origin") or ""
@@ -1063,8 +1073,8 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
 
     async def build_statement(uid: str, frm: Optional[str], to: Optional[str]) -> Dict[str, Any]:
         for d in (frm, to):
-            if d and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
-                raise HTTPException(status_code=400, detail="Dates must be YYYY-MM-DD")
+            if d and not _date_ok(d):
+                raise HTTPException(status_code=400, detail="Dates must be valid YYYY-MM-DD")
         raw = []
         async for i in db.ledger_invoices.find({"provider_user_id": uid, "status": {"$in": ["shared", "paid"]}},
                                                {"_id": 0, "lines": 0}):
@@ -1085,10 +1095,13 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
             bal = _r2(bal + x["debit"] - x["credit"])
             entries.append({**x, "balance": bal})
         bp = await billing_profile(uid)
-        prov = next((p for p in await lsb.list_providers() if p["id"] == uid), {}) or {}
+        hit = _prov_cache.get(uid)
+        if not hit or hit[0] < time.time() - 600:
+            prov = next(iter(await lsb.list_providers(uid)), {})
+            hit = _prov_cache[uid] = (time.time(), prov.get("display_name") or await _sb_name(uid), prov.get("city"))
         st = await settings()
-        return {"provider_user_id": uid, "provider_name": bp.get("legal_name") or prov.get("display_name") or await _sb_name(uid),
-                "provider_city": prov.get("city"), "provider_gstin": bp.get("gstin"), "from": frm, "to": to,
+        return {"provider_user_id": uid, "provider_name": bp.get("legal_name") or hit[1],
+                "provider_city": hit[2], "provider_gstin": bp.get("gstin"), "from": frm, "to": to,
                 "generated_on": datetime.now(IST).date().isoformat(), "opening_balance": opening,
                 "total_debit": _r2(sum(x["debit"] for x in entries)), "total_credit": _r2(sum(x["credit"] for x in entries)),
                 "closing_balance": bal, "entries": entries,

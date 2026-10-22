@@ -160,7 +160,7 @@ export default function AdminLedgerProvider() {
           <PatientServices patients={patients} onAdd={(k) => setForm({ open: true, patient: k })} onChanged={load} canDelete={() => true} />
         </TabsContent>
         <TabsContent value="invoices" className="mt-4"><InvoiceTab uid={uid} invoices={invoices} onChanged={load} /></TabsContent>
-        <TabsContent value="statement" className="mt-4"><Statement uid={uid} key={invoices.map((i) => i.status).join()} /></TabsContent>
+        <TabsContent value="statement" className="mt-4"><Statement uid={uid} refreshKey={invoices.map((i) => i.status).join()} /></TabsContent>
         <TabsContent value="promotions" className="mt-4"><Promotions uid={uid} promos={promotions} onChanged={load} /></TabsContent>
         <TabsContent value="billing" className="mt-4"><BillingTerms uid={uid} bp={billing_profile} onChanged={load} /></TabsContent>
       </Tabs>
