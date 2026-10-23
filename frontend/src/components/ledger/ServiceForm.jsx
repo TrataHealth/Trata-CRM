@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import api from "../../lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { T, pretty, toastErr, openFile } from "./ui";
+import { AbhaQrScanner } from "../abdm/AbhaQrScanner";
 
 const EMPTY = { category: "surgery", title: "", service_date: new Date().toISOString().slice(0, 10), amount: "", notes: "", line_items: [] };
 
@@ -38,6 +39,15 @@ function LineItems({ items, onChange }) {
 // mode: "admin" (uid required) | "provider"
 export function ServiceForm({ open, onClose, mode, uid, patients, defaultPatient, categories, onSaved }) {
   const [patientId, setPatientId] = useState(defaultPatient || "");
+  const onAbha = ({ record, profile }) => {
+    const ten = (v) => (v || "").replace(/\D/g, "").slice(-10);
+    const first = (record.name || "").toLowerCase().split(" ")[0];
+    const hit = patients.find((p) => (ten(p.phone) && ten(p.phone) === ten(profile.mobile)) || (first && (p.name || "").toLowerCase().includes(first)));
+    if (!hit) return toast.warning(`ABHA saved for ${record.name || "patient"}, but no matching Trata patient in your list`);
+    setPatientId(hit.key);
+    if (hit.patient_id) api.post("/abdm/patients/attach", { record_id: record.id, patient_user_id: hit.patient_id }).catch(() => {});
+    toast.success(`Selected ${hit.name || hit.phone} from ABHA card`);
+  };
   const [form, setForm] = useState(EMPTY);
   const [proofs, setProofs] = useState([]);
   const [busy, setBusy] = useState("");
@@ -126,7 +136,8 @@ export function ServiceForm({ open, onClose, mode, uid, patients, defaultPatient
         {proofs.length > 0 && <div className="flex flex-wrap gap-1.5" data-testid="service-proofs">{proofs.map((f) => <FileChip key={f.id} f={f} onRemove={() => setProofs(proofs.filter((x) => x.id !== f.id))} />)}</div>}
         {ai && <div className="text-[11px] bg-[#FFFAE6] border border-[#FFE380] rounded px-2 py-1.5 text-[#974F0C]" data-testid="service-ai-banner">AI-filled{ai.confidence != null ? ` · confidence ${Math.round(ai.confidence * 100)}%` : ""}{ai.patient_name ? ` · bill patient: ${ai.patient_name}` : ""}. Check every field before saving.</div>}
         <div className="grid sm:grid-cols-2 gap-3">
-          <label className={T.label}>Patient (came via Trata app) *
+          <label className={T.label}><span className="flex items-center justify-between">Patient (came via Trata app) *
+            <AbhaQrScanner label="Scan ABHA" testid="service-abha-scan" className="text-[11px] text-[#0052CC] font-semibold inline-flex items-center gap-1" onResult={onAbha} /></span>
             <select className={T.input} value={patientId} onChange={(e) => setPatientId(e.target.value)} data-testid="service-patient">
               <option value="">Select patient…</option>
               {patients.map((p) => <option key={p.key} value={p.key}>{p.name || p.phone || p.key.slice(0, 8)}</option>)}

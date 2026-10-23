@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import api from "../lib/api";
+import { AbhaBadge, useAbhaLookup } from "../components/abdm/AbhaBadge";
+import { AbhaQrScanner } from "../components/abdm/AbhaQrScanner";
 import { useAuth } from "../lib/auth";
 import { relativeTime } from "../lib/constants";
 import { toast } from "sonner";
@@ -98,6 +100,7 @@ function IncomingCard({ c, onAccept, onDecline, busy }) {
 
 // ── Active card + inline chat + admit ───────────────────────────────────────
 function ActiveCard({ c, beds, onAdmit, onOpenChat, chatOpenFor, chatMessages, onSendChat, sending, onCloseChat }) {
+  const [abhaDone, setAbhaDone] = useState(null);
   const [chief, setChief] = useState("");
   const [bedId, setBedId] = useState("");
   const [priority, setPriority] = useState("medium");
@@ -153,6 +156,9 @@ function ActiveCard({ c, beds, onAdmit, onOpenChat, chatOpenFor, chatMessages, o
               </select>
             </label>
           </div>
+          {(c.patient_id || c.customer_id) && <div className="flex items-center gap-2 text-[11px] text-[#42526E]" data-testid={`hcc-admit-abha-${c.id}`}>
+            {abhaDone ? <AbhaBadge abha={abhaDone} /> : <><AbhaQrScanner patientUserId={c.patient_id || c.customer_id} patientPhone={c.customer_phone} onResult={(d) => setAbhaDone(d.record)} label="Scan ABHA card" testid={`hcc-admit-abha-scan-${c.id}`} /> links the patient's ABHA so their discharge summary reaches it</>}
+          </div>}
           <label className="text-xs text-[#42526E] block">Chief complaint
             <textarea rows={2} className="w-full mt-1 text-xs px-2 py-1.5 bg-white border border-[#DFE1E6] rounded" value={chief} onChange={(e) => setChief(e.target.value)} placeholder="e.g. chest pain, road traffic accident, breathlessness…" />
           </label>
@@ -208,6 +214,7 @@ function ActiveCard({ c, beds, onAdmit, onOpenChat, chatOpenFor, chatMessages, o
 
 // ── Admissions table with discharge ─────────────────────────────────────────
 function AdmissionsTable({ admissions, onDischarge, dischargeBusy }) {
+  const [abha, refreshAbha] = useAbhaLookup(admissions.map((a) => a.patient_id));
   const [openDischarge, setOpenDischarge] = useState(null);
   const EMPTY = { final_diagnosis: "", condition_at_discharge: "", follow_up_instructions: "", notes: "" };
   const [form, setForm] = useState(EMPTY);
@@ -231,6 +238,7 @@ function AdmissionsTable({ admissions, onDischarge, dischargeBusy }) {
                 <th className="px-3 py-2 text-left">Priority</th>
                 <th className="px-3 py-2 text-left">Chief complaint</th>
                 <th className="px-3 py-2 text-left">Admitted</th>
+                <th className="px-3 py-2 text-left">ABHA</th>
                 <th className="px-3 py-2 text-right">Action</th>
               </tr>
             </thead>
@@ -244,6 +252,8 @@ function AdmissionsTable({ admissions, onDischarge, dischargeBusy }) {
                     <td className="px-3 py-2"><PriorityChip value={a.triage_priority} /></td>
                     <td className="px-3 py-2 max-w-[280px] truncate">{a.chief_complaint || "—"}</td>
                     <td className="px-3 py-2">{a.admission_time ? relativeTime(a.admission_time) : "—"}</td>
+                    <td className="px-3 py-2" data-testid={`hcc-admission-abha-${a.id}`}>{abha[a.patient_id] ? <AbhaBadge abha={abha[a.patient_id]} testid={`hcc-abha-badge-${a.id}`} />
+                      : a.patient_id ? <AbhaQrScanner patientUserId={a.patient_id} onResult={refreshAbha} label="Scan" testid={`hcc-abha-scan-${a.id}`} /> : "—"}</td>
                     <td className="px-3 py-2 text-right">
                       <button className={T.btnDanger} onClick={() => { setOpenDischarge(openDischarge === a.id ? null : a.id); setForm(EMPTY); }} data-testid={`hcc-discharge-toggle-${a.id}`}>
                         Discharge
@@ -251,7 +261,7 @@ function AdmissionsTable({ admissions, onDischarge, dischargeBusy }) {
                     </td>
                   </tr>
                   {openDischarge === a.id && (
-                    <tr className="bg-[#F4F5F7]"><td colSpan={7} className="p-3">
+                    <tr className="bg-[#F4F5F7]"><td colSpan={8} className="p-3">
                       <div className="flex flex-col gap-2" data-testid={`hcc-discharge-form-${a.id}`}>
                         <div className="text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold">Discharge summary · shared with the patient app</div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">

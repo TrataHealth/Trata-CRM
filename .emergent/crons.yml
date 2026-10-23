@@ -14,3 +14,10 @@ crons:
     method: POST
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     enabled: true
+  - name: abdm-care-context-sync
+    description: "Every 15 min: find new discharge summaries, lab reports, OPD notes, prescriptions and bills for ABHA-linked patients and link them on ABDM"
+    cron: "*/15 * * * *"
+    endpoint: "{{BASE_URL}}/api/abdm/cron/sync"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

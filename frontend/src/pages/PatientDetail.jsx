@@ -1,5 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
+import { AbhaBadge, useAbhaLookup } from "../components/abdm/AbhaBadge";
+import { AbhaQrScanner } from "../components/abdm/AbhaQrScanner";
+import { HealthRecordsPanel } from "../components/abdm/HealthRecordsPanel";
 import api from "../lib/api";
 import { relativeTime } from "../lib/constants";
 import {
@@ -44,6 +47,7 @@ function LabelValue({ icon: Icon, label, value, mono = false }) {
 /** Shared patient detail. mode="admin" → /admin/patients/:id · mode="provider" → /provider/patients/:id */
 export default function PatientDetail({ mode = "admin" }) {
   const { userId } = useParams();
+  const [abha, refreshAbha] = useAbhaLookup([userId]);
   const nav = useNavigate();
   const basePath = mode === "provider" ? "/provider/patients" : "/admin/patients";
   const listPath = mode === "provider" ? "/provider/patients" : "/admin/patients";
@@ -98,8 +102,15 @@ export default function PatientDetail({ mode = "admin" }) {
             {patient?.email && <span className="flex items-center gap-1"><Mail className="h-3.5 w-3.5" /> {patient.email}</span>}
             {patient?.patient_id && <span className="font-mono text-[10px] bg-[#F4F5F7] px-2 py-0.5 rounded">{patient.patient_id}</span>}
           </div>
+          <div className="mt-2 flex items-center gap-2" data-testid="patient-abha">
+            {abha[userId] ? <AbhaBadge abha={abha[userId]} testid="patient-abha-badge" /> : <span className="text-[11px] text-[#97A0AF]">No ABHA linked</span>}
+            {abha[userId]?.abha_address && <span className="text-[11px] text-[#42526E]">{abha[userId].abha_address}</span>}
+            {!abha[userId] && <AbhaQrScanner patientUserId={userId} patientPhone={patient?.phone || cp.phone} onResult={refreshAbha} label="Scan ABHA" testid="patient-abha-scan" />}
+          </div>
         </div>
       </div>
+
+      {abha[userId] && <HealthRecordsPanel patientUserId={userId} showConsents={false} />}
 
       <section className={T.card} data-testid="patient-clinical">
         <div className={T.head}><span>Clinical profile</span><span className="normal-case text-[10px] text-[#5E6C84] font-normal">Same data as mobile Provider App</span></div>

@@ -1,6 +1,7 @@
 """ABDM Milestone 1 — ABHA creation (Aadhaar OTP) and verification, via an India-based egress proxy."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
@@ -21,6 +22,8 @@ log = logging.getLogger("abdm")
 GW = os.environ["ABDM_GATEWAY_URL"]
 ABHA = os.environ["ABDM_ABHA_URL"]
 CM_ID = os.environ["ABDM_CM_ID"]
+HIECM = os.environ["ABDM_HIECM_URL"]
+HIP_ID = os.environ["ABDM_HIP_ID"]
 X_TOKEN_TTL = 25 * 60
 CONSENT_TEXT = (
     "I, the patient, voluntarily share my Aadhaar number and demographic information with the National Health "
@@ -96,6 +99,31 @@ async def call(method: str, path: str, *, json: Any = None, headers: Optional[Di
     return r if raw else (r.json() if r.content else {})
 
 
+async def hiecm_post(path: str, body: Dict[str, Any], headers: Optional[Dict[str, str]] = None, url: Optional[str] = None,
+                     retries: int = 2) -> httpx.Response:
+    """Gateway (HIE-CM) call stamped with our HIP/HIU id so async callbacks route back via the Trata gateway."""
+    last: Optional[httpx.Response] = None
+    for attempt in range(retries + 1):
+        h = {"Authorization": f"Bearer {await gateway_token()}", "REQUEST-ID": str(uuid.uuid4()), "TIMESTAMP": _ts(),
+             "X-CM-ID": CM_ID, "X-HIP-ID": HIP_ID, "X-HIU-ID": os.environ["ABDM_HIU_ID"], **(headers or {})}
+        async with _client() as c:
+            try:
+                last = await c.post(url or f"{HIECM}{path}", headers=h, json=body)
+            except httpx.HTTPError as ex:
+                log.warning("ABDM %s unreachable: %s", path, type(ex).__name__)
+                last = None
+        if last is not None and last.status_code == 401:
+            _cache["tok"] = None
+        if last is not None and last.status_code < 500 and last.status_code != 401:
+            break
+        await asyncio.sleep(1.5 * (attempt + 1))
+    if last is None:
+        raise HTTPException(status_code=502, detail="ABDM unreachable via India proxy")
+    if last.status_code >= 300:
+        log.warning("ABDM POST %s -> %s %s", path or url, last.status_code, last.text[:300])
+    return last
+
+
 async def encrypt(value: str) -> str:
     if not _cache["key"] or _cache["key_exp"] < time.time():
         cert = await call("GET", "/profile/public/certificate")
@@ -156,12 +184,54 @@ class SelectBody(BaseModel):
     abha_number: str
 
 
+class QrBody(BaseModel):
+    qr: str = Field(..., min_length=10, max_length=4000)
+    patient_user_id: Optional[str] = None
+    patient_phone: Optional[str] = Field(None, pattern=r"^[6-9]\d{9}$")
+
+
+class AttachBody(BaseModel):
+    record_id: str
+    patient_user_id: str
+
+
+def parse_abha_qr(raw: str) -> Dict[str, Any]:
+    import json as _json
+    try:
+        q = _json.loads(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="This QR is not an ABHA card QR")
+    if not isinstance(q, dict):
+        raise HTTPException(status_code=400, detail="This QR is not an ABHA card QR")
+    num = q.get("hidn") or q.get("abhaNumber") or q.get("ABHANumber") or q.get("healthIdNumber")
+    if not num:
+        raise HTTPException(status_code=400, detail="No ABHA number in this QR")
+    dob = q.get("dob") or q.get("dateOfBirth") or ""
+    m = re.match(r"(\d{1,2})[-/](\d{1,2})[-/](\d{4})", dob)
+    return {"ABHANumber": fmt_abha(num), "abhaAddress": q.get("phr") or q.get("hid") or q.get("abhaAddress"),
+            "name": q.get("name"), "gender": q.get("gender") or q.get("gen"),
+            "dateOfBirth": f"{int(m[1]):02d}-{int(m[2]):02d}-{m[3]}" if m else dob or None,
+            "mobile": q.get("mobile") or q.get("mob"), "stateName": q.get("state name") or q.get("stateName"),
+            "districtName": q.get("district_name") or q.get("districtName"), "address": q.get("address")}
+
+
 class LinkBody(BaseModel):
     patient_phone: Optional[str] = Field(None, pattern=r"^[6-9]\d{9}$")
+    patient_user_id: Optional[str] = None
     note: Optional[str] = Field(None, max_length=200)
 
 
-def create_abdm_router(db, get_current_user, is_provider, is_internal) -> APIRouter:
+async def resolve_patient(phone: Optional[str]) -> Optional[str]:
+    if not phone:
+        return None
+    import supabase_db as sb
+    pool = await sb.get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval("SELECT id::text FROM public.users WHERE phone = ANY($1::text[]) AND coalesce(role,'patient') IN ('patient','user','customer') "
+                                   "ORDER BY created_at LIMIT 1", [phone, f"+91{phone}", f"91{phone}"])
+
+
+def create_abdm_router(db, get_current_user, is_provider, is_internal, on_linked=None) -> APIRouter:
     r = APIRouter(prefix="/api/abdm")
     idx = {"done": False}
 
@@ -211,11 +281,25 @@ def create_abdm_router(db, get_current_user, is_provider, is_internal) -> APIRou
                "last_verified_via": via, "last_verified_at": _now(), "last_txn_id": txn["id"], "updated_at": _now()}
         if txn.get("patient_phone"):
             doc["patient_phone"] = txn["patient_phone"]
+        ins: Dict[str, Any] = {}
+        if via == "qr_scan":
+            for k in ("kyc_verified", "last_verified_via", "last_verified_at", "last_txn_id"):
+                doc.pop(k, None)
+            doc = {k: v for k, v in doc.items() if v is not None}
+            doc["qr_scanned_at"] = _now()
+            ins = {"kyc_verified": False, "last_verified_via": "qr_scan (not OTP-verified)"}
+        pid = txn.get("patient_user_id") or await resolve_patient(txn.get("patient_phone"))
+        if pid:
+            doc["patient_user_id"] = pid
+        if p.get("yearOfBirth") or re.search(r"(\d{4})", doc.get("dob") or ""):
+            doc["year_of_birth"] = int(p.get("yearOfBirth") or re.search(r"(\d{4})", doc["dob"])[1])
         await db.abha_records.update_one({"owner": owner, "abha_number": num},
                                          {"$set": doc, "$setOnInsert": {"id": str(uuid.uuid4()), "owner": owner, "created_by": actor(c),
-                                                                       "created_at": _now(), "created_via": via}}, upsert=True)
+                                                                       "created_at": _now(), "created_via": via, **ins}}, upsert=True)
         rec = await db.abha_records.find_one({"owner": owner, "abha_number": num}, {"_id": 0})
         await set_txn(txn["id"], record_id=rec["id"])
+        if rec.get("patient_user_id") and on_linked:
+            on_linked(rec)
         return rec
 
     async def profile_for(t: Dict[str, Any]) -> Dict[str, Any]:
@@ -404,8 +488,45 @@ def create_abdm_router(db, get_current_user, is_provider, is_internal) -> APIRou
         rec = await db.abha_records.find_one({"id": rid}, {"_id": 0})
         if not rec or (rec["owner"] != owner_of(current) and not current.get("is_master_admin")):
             raise HTTPException(status_code=404, detail="ABHA record not found")
-        await db.abha_records.update_one({"id": rid}, {"$set": {**body.model_dump(exclude_none=True), "updated_at": _now()}})
-        return public(await db.abha_records.find_one({"id": rid}, {"_id": 0}))
+        upd = body.model_dump(exclude_none=True)
+        if body.patient_phone and not body.patient_user_id:
+            upd["patient_user_id"] = await resolve_patient(body.patient_phone)
+        await db.abha_records.update_one({"id": rid}, {"$set": {**upd, "updated_at": _now()}})
+        rec = await db.abha_records.find_one({"id": rid}, {"_id": 0})
+        if rec.get("patient_user_id") and on_linked:
+            on_linked(rec)
+        return public(rec)
+
+    @r.post("/records/from-qr")
+    async def from_qr(body: QrBody, current=Depends(get_current_user)):
+        owner_of(current)
+        prof = parse_abha_qr(body.qr)
+        txn = {"id": f"qr-{uuid.uuid4()}", "patient_phone": body.patient_phone, "patient_user_id": body.patient_user_id}
+        await ensure_indexes()
+        rec = await save_record(current, {**prof, "kycVerified": False}, "qr_scan", txn)
+        await audit(current, "qr_scan", record=rec["id"])
+        return {"record": public(rec), "profile": {k: prof.get(k) for k in ("name", "gender", "dateOfBirth", "mobile", "address")}}
+
+    @r.post("/patients/attach")
+    async def attach(body: AttachBody, current=Depends(get_current_user)):
+        rec = await db.abha_records.find_one({"id": body.record_id}, {"_id": 0})
+        if not rec or (rec["owner"] != owner_of(current) and not current.get("is_master_admin")):
+            raise HTTPException(status_code=404, detail="ABHA record not found")
+        await db.abha_records.update_one({"id": rec["id"]}, {"$set": {"patient_user_id": body.patient_user_id, "updated_at": _now()}})
+        rec["patient_user_id"] = body.patient_user_id
+        if on_linked:
+            on_linked(rec)
+        await audit(current, "attach_patient", record=rec["id"])
+        return public(rec)
+
+    @r.post("/patients/lookup")
+    async def lookup(body: Dict[str, List[str]], current=Depends(get_current_user)):
+        owner_of(current)
+        ids = [str(x) for x in (body.get("user_ids") or [])][:200]
+        out: Dict[str, Any] = {}
+        async for x in db.abha_records.find({"patient_user_id": {"$in": ids}}, {"_id": 0, "photo": 0}).sort("updated_at", 1):
+            out[x["patient_user_id"]] = {k: x.get(k) for k in ("id", "abha_number", "abha_address", "name", "kyc_verified", "last_verified_via", "last_verified_at")}
+        return {"abha": out}
 
     @r.get("/records/{rid}/card")
     async def card(rid: str, fmt: Literal["png", "pdf"] = Query("png", alias="format"), current=Depends(get_current_user)):

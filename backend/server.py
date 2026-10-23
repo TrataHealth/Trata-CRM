@@ -3,6 +3,7 @@ TrataHealth Master Admin CRM - Backend
 Comprehensive CRM for managing all users (patients, doctors, hospitals, paramedics, ambulance providers, pathologists),
 their activities (emergency cases, appointments, bookings, KYC), deal pipeline, tasks, and analytics.
 """
+import asyncio
 import os
 import logging
 import time as _time
@@ -5686,7 +5687,22 @@ async def hospital_discharge(admission_id: str, body: DischargeRequest, current=
                                      body.condition_at_discharge, current.get("name"))
     if not res.get("success"):
         raise HTTPException(status_code=400, detail=res.get("reason", "discharge_failed"))
+    _spawn_abdm_discharge(admission_id)
     return res
+
+
+def _spawn_abdm_discharge(admission_id: str):
+    async def run():
+        try:
+            await _hip["on_discharge"](admission_id)
+        except Exception as ex:  # noqa: BLE001 — ABDM linking must never break discharge
+            logger.warning(f"ABDM discharge link failed: {ex}")
+    t = asyncio.create_task(run())
+    _ABDM_TASKS.add(t)
+    t.add_done_callback(_ABDM_TASKS.discard)
+
+
+_ABDM_TASKS: set = set()
 
 
 # ── Hospital staff (mirrors mobile Provider App) ─────────────────────────────
@@ -6167,7 +6183,19 @@ import ledger as _ledger  # noqa: E402
 app.include_router(_ledger.create_ledger_router(db, get_current_user, get_current_user_from_query,
                                                 is_provider, EMERGENT_LLM_KEY, _parse_ai_json))
 import abdm as _abdm  # noqa: E402
-app.include_router(_abdm.create_abdm_router(db, get_current_user, is_provider, is_internal))
+import abdm_hip as _abdm_hip  # noqa: E402
+_hip = _abdm_hip.create_hip_router(db, get_current_user, is_provider, is_internal)
+app.include_router(_abdm.create_abdm_router(db, get_current_user, is_provider, is_internal, on_linked=_hip["on_linked"]))
+app.include_router(_hip["api"])
+app.include_router(_hip["callbacks"])
+
+
+@app.on_event("startup")
+async def _abdm_indexes():
+    try:
+        await _hip["ensure_indexes"]()
+    except Exception as ex:  # noqa: BLE001
+        logger.warning(f"ABDM index setup failed: {ex}")
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

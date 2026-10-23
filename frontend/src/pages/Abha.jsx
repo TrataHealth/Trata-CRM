@@ -6,6 +6,8 @@ import { EnrolWizard } from "../components/abdm/EnrolWizard";
 import { VerifyWizard } from "../components/abdm/VerifyWizard";
 import { AbhaRecords } from "../components/abdm/AbhaRecords";
 import { T } from "../components/ledger/ui";
+import { AbhaQrScanner } from "../components/abdm/AbhaQrScanner";
+import { HealthRecordsPanel } from "../components/abdm/HealthRecordsPanel";
 
 export default function Abha() {
   const [status, setStatus] = useState(null);
@@ -21,10 +23,13 @@ export default function Abha() {
             <h1 className="font-heading text-3xl font-black text-[#091E42] mt-1">ABHA for patients</h1>
             <p className="text-sm text-[#42526E] mt-1">Create a patient's Ayushman Bharat Health Account with Aadhaar OTP, or verify an existing ABHA.</p>
           </div>
+          <div className="flex items-center gap-2">
+          <AbhaQrScanner onResult={saved} className={T.btn} />
           {status && <span className={`${T.chip} gap-1 py-1 px-2.5 ${status.connected ? "bg-[#E3FCEF] text-[#006644]" : "bg-[#FFEBE6] text-[#BF2600]"}`} data-testid="abdm-status" title={status.error || ""}>
             {status.connected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
             {status.connected ? `ABDM ${status.environment} connected` : "ABDM unreachable"}
           </span>}
+          </div>
         </div>
         <section className={`${T.card} p-5`}>
           <Tabs defaultValue="create">
@@ -37,6 +42,7 @@ export default function Abha() {
           </Tabs>
         </section>
         <AbhaRecords refreshKey={tick} />
+        <HealthRecordsPanel refreshKey={tick} />
       </div>
   );
 }
