@@ -274,7 +274,7 @@ def create_abdm_router(db, get_current_user, is_provider, is_internal, on_linked
         name = p.get("name") or p.get("fullName") or " ".join(filter(None, [p.get("firstName"), p.get("middleName"), p.get("lastName")]))
         dob = p.get("dateOfBirth") or p.get("dob") or "-".join(filter(None, [p.get("dayOfBirth"), p.get("monthOfBirth"), p.get("yearOfBirth")]))
         owner = owner_of(c)
-        doc = {"abha_number": num, "abha_address": addr, "name": name.strip() or None, "gender": p.get("gender"),
+        doc: Dict[str, Any] = {"abha_number": num, "abha_address": addr, "name": name.strip() or None, "gender": p.get("gender"),
                "dob": dob or None, "mobile_masked": _mask(p.get("mobile")), "state": p.get("stateName"),
                "district": p.get("districtName"), "kyc_verified": p.get("kycVerified") if p.get("kycVerified") is not None else p.get("kycStatus") == "VERIFIED",
                "abha_status": p.get("abhaStatus") or p.get("status"), "photo": p.get("photo") or p.get("profilePhoto"),
@@ -289,7 +289,8 @@ def create_abdm_router(db, get_current_user, is_provider, is_internal, on_linked
             doc["qr_scanned_at"] = _now()
             ins = {"kyc_verified": False, "last_verified_via": "qr_scan (not OTP-verified)"}
         pid = txn.get("patient_user_id") or await resolve_patient(txn.get("patient_phone"))
-        if pid:
+        existing = await db.abha_records.find_one({"owner": owner_of(c), "abha_number": num}, {"patient_user_id": 1})
+        if pid and not (via == "qr_scan" and existing and existing.get("patient_user_id")):
             doc["patient_user_id"] = pid
         if p.get("yearOfBirth") or re.search(r"(\d{4})", doc.get("dob") or ""):
             doc["year_of_birth"] = int(p.get("yearOfBirth") or re.search(r"(\d{4})", doc["dob"])[1])
@@ -524,7 +525,12 @@ def create_abdm_router(db, get_current_user, is_provider, is_internal, on_linked
         owner_of(current)
         ids = [str(x) for x in (body.get("user_ids") or [])][:200]
         out: Dict[str, Any] = {}
-        async for x in db.abha_records.find({"patient_user_id": {"$in": ids}}, {"_id": 0, "photo": 0}).sort("updated_at", 1):
+        f: Dict[str, Any] = {"patient_user_id": {"$in": ids}}
+        if is_provider(current):
+            me = current.get("supabase_user_id") or current["id"]
+            seen = await db.abdm_care_contexts.distinct("patient_user_id", {"provider_user_id": me, "patient_user_id": {"$in": ids}})
+            f["$or"] = [{"owner": me}, {"patient_user_id": {"$in": seen}}, {"created_by.owner": me}]
+        async for x in db.abha_records.find(f, {"_id": 0, "photo": 0}).sort("updated_at", 1):
             out[x["patient_user_id"]] = {k: x.get(k) for k in ("id", "abha_number", "abha_address", "name", "kyc_verified", "last_verified_via", "last_verified_at")}
         return {"abha": out}
 

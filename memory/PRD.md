@@ -371,3 +371,15 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - P0 after deploy: register bridge URL (PATCH /bridge/url) + add HIP services per facility (HFR IDs) — needed for M2
 - P1: M2 HIP — care-context linking, consent notify, FHIR bundles (discharge summary, diagnostic report, OP consult/prescription, invoice)
 - P2: M3 HIU; scan-and-share (ABHA QR) at front desk
+
+## Iteration 18 — ABDM M2 (HIP) + ABHA QR check-in + ABHA badges (Oct 2026)
+- Option-B architecture (see /app/memory/ABDM_OPTION_B_CRM.md): CRM = facility IN0910034478; callbacks forwarded from api.tratahealth.com to crm.tratahealth.com /api/v3/*; outbound stamped X-HIP-ID/X-HIU-ID via India proxy. Never change bridge URL.
+- `backend/abdm_hip.py`: record sweep from Supabase (discharge_summaries, consultation_bookings COMPLETED, path_lab/diagnostic bookings with reports, prescriptions, paid bills) → `abdm_care_contexts`; HIP-initiated linking (generate-token → on-generate-token → link/carecontext → link/on_carecontext); user-initiated discover/init/confirm (OTP shown to staff — SMS MOCKED); consent notify (stored, on-notify ack); HI request → FHIR bundles (`abdm_fhir.py`, NRCES profiles) encrypted with abdm-ecdh (Fidelius-compatible) → push to dataPushUrl → notify. Consent enforced (status, hiTypes, date ranges, dataEraseAt, patient match). Inbound callbacks verified with ABDM gateway JWT (JWKS cached in Mongo `abdm_meta`).
+- Auto-link: on discharge (hook), on ABHA↔patient link, cron every 15 min (`/api/abdm/cron/sync`), and "Sync now".
+- QR: html5-qrcode camera scanner (`AbhaQrScanner`) on /abha, Hospital Command Center (admit form + admissions ABHA column), provider Add-extended-service form; `/api/abdm/records/from-qr` (not OTP-verified, never downgrades).
+- ABHA badge + per-patient shared-records panel on PatientDetail; admissions table ABHA column.
+- Tests: tests/test_abdm_m2_hip.py (49 pass, signed test JWTs).
+### Blockers / next
+- India proxy 68.183.247.212:3128 currently timing out → no live ABDM round trips; needs CRM proxy user from Trata ABDM admin.
+- Deploy at https://crm.tratahealth.com for gateway forwarding; ask Patient team to send a test callback.
+- SMS provider for patient-initiated link OTP; M3 HIU flows.

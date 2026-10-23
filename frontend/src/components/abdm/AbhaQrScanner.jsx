@@ -6,6 +6,8 @@ import api from "../../lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { T, toastErr } from "../ledger/ui";
 
+const phone10 = (v) => { const d = (v || "").replace(/\D/g, "").slice(-10); return /^[6-9]\d{9}$/.test(d) ? d : null; };
+
 function Viewfinder({ onText }) {
   const ref = useRef(null);
   const [err, setErr] = useState(null);
@@ -33,7 +35,7 @@ export function AbhaQrScanner({ patientUserId, patientPhone, onResult, label = "
   const handle = React.useCallback(async (text) => {
     setBusy(true);
     try {
-      const { data } = await api.post("/abdm/records/from-qr", { qr: text, patient_user_id: patientUserId || null, patient_phone: (patientPhone || "").replace(/\D/g, "").slice(-10) || null });
+      const { data } = await api.post("/abdm/records/from-qr", { qr: text, patient_user_id: patientUserId || null, patient_phone: phone10(patientPhone) });
       toast.success(`ABHA ${data.record.abha_number} captured for ${data.record.name || "patient"}`);
       setOpen(false);
       onResult?.(data);

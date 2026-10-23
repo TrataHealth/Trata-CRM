@@ -41,9 +41,13 @@ export function ServiceForm({ open, onClose, mode, uid, patients, defaultPatient
   const [patientId, setPatientId] = useState(defaultPatient || "");
   const onAbha = ({ record, profile }) => {
     const ten = (v) => (v || "").replace(/\D/g, "").slice(-10);
-    const first = (record.name || "").toLowerCase().split(" ")[0];
-    const hit = patients.find((p) => (ten(p.phone) && ten(p.phone) === ten(profile.mobile)) || (first && (p.name || "").toLowerCase().includes(first)));
-    if (!hit) return toast.warning(`ABHA saved for ${record.name || "patient"}, but no matching Trata patient in your list`);
+    const full = (record.name || "").trim().toLowerCase();
+    let hit = patients.find((p) => ten(p.phone) && ten(p.phone) === ten(profile.mobile));
+    if (!hit && full) {
+      const byName = patients.filter((p) => (p.name || "").trim().toLowerCase() === full);
+      if (byName.length === 1 && window.confirm(`No phone match. Is this ${byName[0].name} (${byName[0].phone || "no phone"})?`)) hit = byName[0];
+    }
+    if (!hit) return toast.warning(`ABHA saved for ${record.name || "patient"}, but no Trata patient in your list matches — pick the patient manually`);
     setPatientId(hit.key);
     if (hit.patient_id) api.post("/abdm/patients/attach", { record_id: record.id, patient_user_id: hit.patient_id }).catch(() => {});
     toast.success(`Selected ${hit.name || hit.phone} from ABHA card`);

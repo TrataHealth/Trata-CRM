@@ -155,7 +155,7 @@ def create_hip_router(db, get_current_user, is_provider, is_internal) -> Dict[st
                  "$setOnInsert": {"id": str(uuid.uuid4()), "status": "new", "created_at": _now(), "attempts": 0}}, upsert=True)
             new += 1 if res.upserted_id else 0
         if rec.get("abha_address"):
-            await link_pending(rec)
+            _spawn(link_pending(rec))
         return {"found": len(found), "new": new}
 
     async def link_token_for(rec: Dict[str, Any]) -> Optional[str]:
@@ -233,6 +233,58 @@ def create_hip_router(db, get_current_user, is_provider, is_internal) -> Dict[st
             await sync_patient(rec)
 
     # ---------- inbound callbacks ----------
+    jwks: Dict[str, Any] = {"keys": None, "at": 0.0}
+
+    async def gateway_keys(force: bool = False):
+        import time as _t
+        if jwks["keys"] and not force and jwks["at"] > _t.time() - 300:
+            return jwks["keys"]
+        saved = await db.abdm_meta.find_one({"_id": "gateway_jwks"})
+        if saved and not force and saved.get("at", 0) > _t.time() - 6 * 3600:
+            jwks.update(keys=saved["keys"], at=_t.time())
+            return jwks["keys"]
+        try:
+            tok = await abdm.gateway_token()
+        except HTTPException:
+            if saved:
+                return saved["keys"]
+            raise HTTPException(status_code=503, detail="Cannot verify ABDM callback right now (gateway keys unavailable)")
+        async with abdm._client() as c:
+            for url in (f"{abdm.GW}/certs", f"{abdm.HIECM}/gateway/v3/certs"):
+                try:
+                    r = await c.get(url, headers={"Authorization": f"Bearer {tok}", "REQUEST-ID": str(uuid.uuid4()), "TIMESTAMP": abdm._ts(), "X-CM-ID": abdm.CM_ID})
+                except httpx.HTTPError:
+                    continue
+                if r.status_code < 300 and (r.json() or {}).get("keys"):
+                    jwks.update(keys=r.json()["keys"], at=_t.time())
+                    await db.abdm_meta.update_one({"_id": "gateway_jwks"}, {"$set": {"keys": jwks["keys"], "at": jwks["at"]}}, upsert=True)
+                    return jwks["keys"]
+        if saved:
+            return saved["keys"]
+        raise HTTPException(status_code=503, detail="Cannot verify ABDM callback right now (gateway keys unavailable)")
+
+    async def verify_gateway_jwt(token: str):
+        import jwt as pyjwt
+        try:
+            kid = pyjwt.get_unverified_header(token).get("kid")
+        except pyjwt.PyJWTError:
+            raise HTTPException(status_code=401, detail="Invalid Authorization token")
+        for force in (False, True):
+            try:
+                keys = await asyncio.wait_for(gateway_keys(force), timeout=2.5)
+            except (HTTPException, asyncio.TimeoutError):
+                _spawn(gateway_keys(True))
+                if force or not jwks["keys"]:
+                    raise HTTPException(status_code=401 if jwks["keys"] else 503, detail="ABDM token signed by unknown key")
+                continue
+            key = next((k for k in keys if not kid or k.get("kid") == kid), None)
+            if key:
+                try:
+                    pyjwt.decode(token, pyjwt.PyJWK(key).key, algorithms=["RS256", "RS512", "PS256"], options={"verify_aud": False})
+                    return
+                except pyjwt.PyJWTError as ex:
+                    raise HTTPException(status_code=401, detail=f"ABDM token rejected: {type(ex).__name__}")
+        raise HTTPException(status_code=401, detail="ABDM token signed by unknown key")
     async def inbound(request: Request, kind: str) -> Dict[str, Any]:
         try:
             body = await request.json()
@@ -240,8 +292,10 @@ def create_hip_router(db, get_current_user, is_provider, is_internal) -> Dict[st
             body = {}
         h = request.headers
         target = h.get("x-hip-id") or h.get("x-hiu-id")
-        if not h.get("authorization"):
+        auth = h.get("authorization") or ""
+        if not auth.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Missing Authorization")
+        await verify_gateway_jwt(auth[7:])
         if target and target not in (HIP_ID, HIU_ID):
             raise HTTPException(status_code=400, detail="Callback is for another facility")
         safe = json.loads(json.dumps(body, default=str))
@@ -297,11 +351,12 @@ def create_hip_router(db, get_current_user, is_provider, is_internal) -> Dict[st
     async def push_data(url: str, body: Dict[str, Any]) -> int:
         if "abdm.gov.in" in url:
             return (await abdm.hiecm_post("", body, url=url)).status_code
-        tok = abdm._cache.get("tok")
+        if not url.startswith("https://"):
+            return 0
         async with httpx.AsyncClient(timeout=40) as c:
             try:
                 r = await c.post(url, json=body, headers={"Content-Type": "application/json", "REQUEST-ID": str(uuid.uuid4()),
-                                                          **({"Authorization": f"Bearer {tok}"} if tok else {})})
+                                                          "TIMESTAMP": abdm._ts()})
                 return r.status_code
             except httpx.HTTPError:
                 return 0
@@ -342,9 +397,10 @@ def create_hip_router(db, get_current_user, is_provider, is_internal) -> Dict[st
     async def do_init(b: Dict[str, Any], rid: str):
         pats = b.get("patient") or []
         refs = [c.get("referenceNumber") for p in pats for c in (p.get("careContexts") or [])]
-        ccs = await db.abdm_care_contexts.find({"reference": {"$in": refs}}, {"_id": 0}).to_list(200)
+        addr = b.get("abhaAddress")
+        ccs = await db.abdm_care_contexts.find({"reference": {"$in": refs}, "abha_address": addr}, {"_id": 0}).to_list(200) if addr else []
         out: Dict[str, Any] = {"transactionId": b.get("transactionId"), "response": {"requestId": rid}}
-        if not ccs:
+        if not ccs or len({c["patient_user_id"] for c in ccs}) != 1:
             out["error"] = {"code": "ABDM-1010", "message": "Care contexts not found"}
         else:
             rec = await db.abha_records.find_one({"patient_user_id": ccs[0]["patient_user_id"]}, {"_id": 0, "photo": 0}) or {}
@@ -409,21 +465,34 @@ def create_hip_router(db, get_current_user, is_provider, is_internal) -> Dict[st
                                                               "response": {"requestId": request.headers.get("request-id")}}))
         return resp(200)
 
+    def consent_allows(consent: Dict[str, Any], c: Dict[str, Any], rng: Dict[str, Any]) -> bool:
+        d = (c.get("record_date") or "")[:10]
+        prng = (consent.get("permission") or {}).get("dateRange") or {}
+        for r in (rng, prng):
+            if r.get("from") and d < r["from"][:10]:
+                return False
+            if r.get("to") and d > r["to"][:10]:
+                return False
+        if consent.get("hi_types") and c["hi_type"] not in consent["hi_types"]:
+            return False
+        pat = consent.get("patient")
+        return not pat or pat in (c.get("abha_address"), c.get("abha_number"))
+
     async def do_hi_request(b: Dict[str, Any], rid: str):
         hr = b.get("hiRequest") or {}
         tx = b.get("transactionId")
         cid = (hr.get("consent") or {}).get("id")
         consent = await db.abdm_consents.find_one({"consent_id": cid}, {"_id": 0}) if cid else None
-        live = bool(consent) and (consent.get("status") or "").upper() == "GRANTED"
+        perm = (consent or {}).get("permission") or {}
+        live = bool(consent) and (consent.get("status") or "").upper() == "GRANTED" and \
+            (not perm.get("dataEraseAt") or perm["dataEraseAt"] > _now()[:19])
         await respond("/data-flow/v3/health-information/hip/on-request", {
             "hiRequest": {"transactionId": tx, "sessionStatus": "ACKNOWLEDGED" if live else "FAILED"},
             "response": {"requestId": rid}, **({} if live else {"error": {"code": "ABDM-1428", "message": "Consent not found or not granted"}})})
         if not live:
             return
-        rng = hr.get("dateRange") or {}
-        ccs = await db.abdm_care_contexts.find({"reference": {"$in": consent.get("care_contexts") or []}}, {"_id": 0}).to_list(500)
-        ccs = [c for c in ccs if (not rng.get("from") or (c.get("record_date") or "") >= rng["from"][:10])
-               and (not rng.get("to") or (c.get("record_date") or "")[:10] <= rng["to"][:10])] or ccs
+        ccs = [c for c in await db.abdm_care_contexts.find({"reference": {"$in": consent.get("care_contexts") or []}}, {"_id": 0}).to_list(500)
+               if consent_allows(consent, c, hr.get("dateRange") or {})]
         km = hr.get("keyMaterial") or {}
         mine = generate_key_material()
         entries, statuses = [], []
@@ -522,10 +591,10 @@ def create_hip_router(db, get_current_user, is_provider, is_internal) -> Dict[st
     async def link_requests(current=Depends(get_current_user)):
         f = scope(current)
         q: Dict[str, Any] = {"status": "otp_sent", "expires_at": {"$gt": datetime.now(timezone.utc)}}
-        if f:
-            mine = [c["patient_user_id"] async for c in db.abdm_care_contexts.find(f, {"patient_user_id": 1})]
-            q["patient_user_id"] = {"$in": list(set(mine))}
         rows = await db.abdm_link_requests.find(q, {"_id": 0, "otp_hash": 0}).sort("created_at", -1).to_list(50)
+        if f:
+            mine = {c["reference"] async for c in db.abdm_care_contexts.find(f, {"reference": 1})}
+            rows = [r for r in rows if r["references"] and set(r["references"]) <= mine]
         return {"link_requests": [{**r, "expires_at": r["expires_at"].isoformat()} for r in rows]}
 
     @api.get("/callbacks")
@@ -550,6 +619,7 @@ def create_hip_router(db, get_current_user, is_provider, is_internal) -> Dict[st
         await db.abdm_callbacks.create_index("expires_at", expireAfterSeconds=0)
         await db.abdm_link_requests.create_index("expires_at", expireAfterSeconds=24 * 3600)
         await db.abdm_consents.create_index("consent_id", unique=True)
+        _spawn(gateway_keys(False))
 
     return {"api": api, "callbacks": cb, "on_linked": on_linked, "on_discharge": on_discharge, "sync_all": sync_all,
             "ensure_indexes": ensure_indexes}

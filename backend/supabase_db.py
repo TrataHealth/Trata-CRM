@@ -1723,13 +1723,15 @@ async def _fetch_patient_associations(user_id: str, hospital_scope_id: Optional[
              WHERE customer_id = $1
              ORDER BY created_at DESC LIMIT 20
         """, user_id)
+        # Must run while the pooled connection is still held (was called after release -> InterfaceError 500).
+        lab_rows = _lab_rows(lab_bookings) if not (await lab_split_live()) or hospital_scope_id \
+            else await _split_lab_rows(conn, user_id)
     return {
         "emergency_cases": _rows(emergencies),
         "appointments":    _rows(appointments),
         "admissions":      _rows(admissions),
         "ambulance_rides": _rows(ambulance_rides),
-        "lab_bookings":    _lab_rows(lab_bookings) if not (await lab_split_live()) or hospital_scope_id
-                           else await _split_lab_rows(conn, user_id),
+        "lab_bookings":    lab_rows,
     }
 
 
