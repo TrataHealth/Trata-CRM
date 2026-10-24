@@ -1,0 +1,44 @@
+{
+  "summary": "Tested Bulk Entity Import + Pending rows end to end. Backend: 12 pytest cases on both prefixes (/api/admin/provider-app/contact-entities and /api/provider/entities); 11 pass. Frontend (Playwright): tested as Rohan on the hospital contact page and as the hospital provider on /provider/entities. Checked the template download, the CSV upload with friendly headers ('Type', 'Entity name', 'Owner name', 'Phone') and type labels ('Hospital branch'), the .xlsx upload, the preview counts, red invalid cells, live re-validation after editing a cell or the type select, duplicate-in-file and already-used-phone flags, the only-bad filter, row remove, the start label, progress/done, new entity rows appearing, and the pending section (fix, save, Save & import, upstream-rejected import, discard). All of these worked. Created 6 TEST entities in total on shared Supabase; all were deleted afterwards and 0 pending rows are left.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST {base}/bulk", "issue": "A row that is not an object (e.g. rows:[\"oops\"]) causes a 500 (AttributeError: 'str' object has no attribute 'items' in _clean). BulkBody.rows/pending are typed as bare `list`. Type them as List[Dict[str, Any]] so this returns 422."},
+      {"endpoint": "POST {base}/bulk (pending list)", "issue": "Rows the client flags only on the frontend (same phone on another row in the file, or a phone already used by an entity) pass the server's _row_errors, so they are saved to Pending with errors=[]. The Pending section then shows them with no reason (seen for TEST UI E/F/G). Check for duplicate phones on the server (within the file and against existing entities), or send the client's error text with each pending row and store it."},
+      {"endpoint": "_row_errors", "issue": "Error text is raw Pydantic output shown to users, e.g. \"dedicated_phone: String should match pattern '^[6-9]\\d{9}$'\" and \"pincode: String should match pattern '^\\d{6}$'\". Map these to friendly messages like the frontend's 'Must be a 10-digit Indian mobile'. Email is not checked on the server (the frontend does check it)."},
+      {"endpoint": "GET {base}/bulk/{job_id}", "issue": "If the backend restarts during a job, the job stays at status 'running' forever (it runs as an in-process asyncio task), and the frontend while-loop polls with no timeout. onboard_status already has a stale-job guard (300s); add the same here."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "BulkImportDialog PreviewRow", "issue": "When the file has a type that is not allowed (e.g. 'Blood bank'), the type select shows 'Select…' and the original value from the file is lost from view. The reason only appears in a hover tooltip (title). Row and cell errors are only in title attributes, with no visible inline error text, so the user cannot tell what is wrong without hovering.", "selector": "[data-testid^=bulk-cell-][data-testid$=-entity_kind], [data-testid^=bulk-row-err-]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Preview -> Pending", "issue": "Duplicate or already-used-phone rows reach Pending with no error message (see the backend minor issue above).", "affected_selectors": ["pending-errors-{id}"]}
+    ],
+    "design_issues": [
+      {"screen": "Bulk template", "issues": ["The template's Entities sheet has a sample data row (phone 9876543210) that passes validation as 'ready'. If the user keeps it, the import tries to create a real entity. Consider putting the example on a separate sheet, or marking it so it is skipped."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_entity_bulk_import.py", "/app/test_reports/pytest/pytest_bulk_import.xml"],
+  "action_items": [
+    "Type BulkBody.rows/pending as List[Dict[str, Any]] so non-object rows return 422 instead of 500",
+    "Check duplicate phones on the server (within the file and against existing entities) when saving to pending, or keep the client's error text, so pending rows always show why they are pending",
+    "Turn the raw Pydantic regex errors into friendly messages; add an email check on the server",
+    "Add a stale-job timeout to bulk_status, and a maximum poll time in BulkImportDialog.start",
+    "Show visible inline error text in the preview (not just a title tooltip), and keep the original disallowed type value visible"
+  ],
+  "critical_code_review_comments": [
+    "BulkBody uses an untyped `list`, so any JSON element is accepted (this caused the 500 above)",
+    "create_one sends _clean(row) raw instead of EntityBody(**row).model_dump(), so values are not coerced (e.g. dispatch_radius_km arrives as a string if a client sends one)",
+    "existingPhones is a new Set on every EntitiesPanel render, so the preview's useMemo recalculates every render (only a performance issue)",
+    "If one poll request fails, the frontend catch sets job=null and shows 'Import failed' even though the backend job keeps creating entities"
+  ],
+  "updated_files": ["/app/backend/tests/test_entity_bulk_import.py"],
+  "success_rate": {"backend": "92% (11/12)", "frontend": "100% of specified flows working; minor UX gaps"},
+  "seed_data_creation": "None kept. 6 TEST entities were created over the run (4 by backend tests, 2 by the UI) and all were deleted; all pending rows were discarded (entity_import_pending count = 0). Test files: /tmp/bulk/test.csv, /tmp/bulk/test.xlsx.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: pytest /app/backend/tests/test_entity_bulk_import.py (creates up to 3 entities and deletes them at teardown). For cross-org 404, use master admin with the pharmacy contact b2e36653-6fa1-4052-afe5-70aaa191f1a7 (9000020004 is not a hospital/pharmacy org in Supabase and returns 403; HFR 9310018056 is not registered). Existing entity phone 9692832188 triggers the upstream 'A user with this phone already exists' error. UI login can be skipped by setting localStorage trata_token and trata_user.",
+  "rca of the issue": "Pending rows with empty errors: the frontend withChecks() adds duplicate-in-file and existing-phone checks that the server's _row_errors() does not have. bulk_import saves body.pending rows with _row_errors(...), which is [] for those rows, so the reason is lost. 500 on a non-dict row: _clean() calls row.items() on the raw list element."
+}

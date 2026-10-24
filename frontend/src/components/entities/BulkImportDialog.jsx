@@ -11,7 +11,8 @@ function downloadTemplate(kinds) {
   const wb = XLSX.utils.book_new();
   const ex = { entity_kind: kinds[0], name: "Sunrise Branch – Andheri", contact_person: "Dr. A. Mehta", dedicated_phone: "9876543210", email: "andheri@example.com",
     address: "12 Link Road, Andheri West", city: "Mumbai", state: "Maharashtra", pincode: "400053", license_number: "", gst_number: "", dispatch_radius_km: "" };
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([ex], { header: COLUMNS }), "Entities");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([COLUMNS]), "Entities");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([ex], { header: COLUMNS }), "Example (not imported)");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(kinds.map((k) => ({ entity_kind: k, meaning: KIND_LABEL[k] }))), "Allowed types");
   XLSX.writeFile(wb, "trata-entities-template.xlsx");
 }
@@ -32,9 +33,10 @@ function PreviewRow({ i, row, kinds, onChange, onRemove }) {
     <tr className={row.ok ? "" : "bg-[#FFF4E5]/60"} data-testid={`bulk-row-${i}`}>
       <td className="px-2 py-1 text-xs whitespace-nowrap">{row.ok ? <CheckCircle2 className="h-4 w-4 text-[#36B37E]" data-testid={`bulk-row-ok-${i}`} />
         : <span title={Object.values(row.e).join("\n")} data-testid={`bulk-row-err-${i}`}><AlertTriangle className="h-4 w-4 text-[#FF8B00]" /></span>}</td>
+      <td className="px-2 py-1 text-[11px] text-[#BF2600] min-w-[180px] max-w-[240px]" data-testid={`bulk-row-problems-${i}`}>{Object.values(row.e).join(" · ")}</td>
       {COLUMNS.map((k) => <td key={k} className="px-1 py-1">
         {k === "entity_kind" ? <select className={`${cell} bg-white ${row.e[k] ? "border-[#FF5630]" : "border-[#DFE1E6]"}`} value={row.r[k] || ""} title={row.e[k] || ""}
-          onChange={(ev) => onChange(i, k, ev.target.value)} data-testid={`bulk-cell-${i}-${k}`}><option value="">Select…</option>{kinds.map((x) => <option key={x} value={x}>{KIND_LABEL[x]}</option>)}</select>
+          onChange={(ev) => onChange(i, k, ev.target.value)} data-testid={`bulk-cell-${i}-${k}`}><option value="">Select…</option>{row.r[k] && !kinds.includes(row.r[k]) && <option value={row.r[k]}>{row.r[k]} (not allowed)</option>}{kinds.map((x) => <option key={x} value={x}>{KIND_LABEL[x]}</option>)}</select>
           : <input className={`${cell} ${row.e[k] ? "border-[#FF5630] bg-white" : "border-[#DFE1E6]"}`} value={row.r[k] || ""} title={row.e[k] || ""}
             onChange={(ev) => onChange(i, k, ev.target.value)} data-testid={`bulk-cell-${i}-${k}`} />}
       </td>)}
@@ -54,6 +56,7 @@ function Progress({ job, onClose }) {
         <li><b data-testid="bulk-created">{job.created}</b> created</li>
         <li><b data-testid="bulk-pending-saved">{job.pending_saved + job.failed}</b> saved to Pending to fix later{job.failed ? ` (${job.failed} rejected by the Provider app)` : ""}</li>
       </ul>
+      {job.interrupted && <p className="text-sm text-[#974F0C]" data-testid="bulk-interrupted">The import was interrupted. Rows not created yet were not saved; please re-upload them.</p>}
       {finished && <button onClick={onClose} className="px-3 py-2 text-sm bg-[#0052CC] text-white rounded-md" data-testid="bulk-done">Done</button>}
     </div>
   );
@@ -80,7 +83,7 @@ export default function BulkImportDialog({ base, params, kinds, existingPhones, 
     try {
       const { data } = await api.post(`${base}/bulk`, { rows: good.map((x) => toPayload(x.r)), pending: bad.map((x) => toPayload(x.r)) }, { params });
       let j = { status: "running", total: data.total, done: 0, created: 0, failed: 0, pending_saved: data.pending_saved }; setJob(j);
-      while (j.status !== "done") { await new Promise((res) => setTimeout(res, 1500)); j = (await api.get(`${base}/bulk/${data.job_id}`, { params })).data; setJob(j); }
+      for (let n = 0; j.status !== "done" && n < 1500; n++) { await new Promise((res) => setTimeout(res, 1500)); j = (await api.get(`${base}/bulk/${data.job_id}`, { params })).data; setJob(j); }
       onFinished();
     } catch (e) { setErr(e?.response?.data?.detail || "Import failed"); setJob(null); } finally { setBusy(false); }
   };
@@ -107,7 +110,7 @@ export default function BulkImportDialog({ base, params, kinds, existingPhones, 
                 <span className="text-xs text-[#5E6C84]">Fix highlighted cells here, or import now and fix them later from Pending.</span>
               </div>
               <div className="overflow-auto border border-[#DFE1E6] rounded-md max-h-[50vh]">
-                <table className="text-left"><thead className="bg-[#F4F5F7] sticky top-0"><tr><th className="px-2 py-2" />{COLUMNS.map((k) => <th key={k} className="px-2 py-2 text-[10px] font-bold uppercase tracking-wider text-[#5E6C84] whitespace-nowrap">{LABEL[k]}</th>)}<th /></tr></thead>
+                <table className="text-left"><thead className="bg-[#F4F5F7] sticky top-0"><tr><th className="px-2 py-2" /><th className="px-2 py-2 text-[10px] font-bold uppercase tracking-wider text-[#5E6C84]">Problems</th>{COLUMNS.map((k) => <th key={k} className="px-2 py-2 text-[10px] font-bold uppercase tracking-wider text-[#5E6C84] whitespace-nowrap">{LABEL[k]}</th>)}<th /></tr></thead>
                   <tbody>{shown.map(([x, i]) => <PreviewRow key={i} i={i} row={x} kinds={kinds} onChange={change} onRemove={(n) => setRows((p) => p.filter((_, j) => j !== n))} />)}</tbody></table>
               </div>
             </>}

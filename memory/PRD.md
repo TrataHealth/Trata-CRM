@@ -398,3 +398,9 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Internal entities: `EntitiesPanel.jsx` on ContactDetail (master admin + assigned agent; `/api/admin/provider-app/contact-entities?contact_id=`) and provider portal "My Entities" (`/provider/entities`, `/api/provider/entities`). Proxies Provider app `/api/org/*`; org lookups cached in memory.
 - Tested: iteration_20.json (backend 16/16, frontend pass); minor follow-ups fixed (remove busy/error state, task refs + stale-job timeout, business-name contacts, "Pharmacie" label).
 - Backlog unchanged: Phase 9 Manager Intelligence (P2), Patient App webhooks (P3), shared JWT identity (P3), split server.py.
+
+## Iteration 21 — Bulk Entity Import (Jun 2026)
+- "Bulk import" on EntitiesPanel (contact page for master admin/assigned agent + provider "My Entities"). Excel/CSV parsed in-browser (SheetJS 0.20.3 from cdn.sheetjs.com), template download (headers sheet + separate example sheet), friendly header/type aliases.
+- Editable preview with live validation (required fields, phone, pincode, email, allowed types, duplicate phones in file / already used), visible Problems column; "Import N ready, save M to Pending".
+- Backend (`provider_onboard.py` `_entity_routes`): `POST {base}/bulk` (re-validates + dupes server-side, background job), `GET {base}/bulk/{job_id}` (stale guard 180s), Pending CRUD `GET/PUT/DELETE {base}/pending[/{id}]`, `POST {base}/pending/{id}/import`. Mongo: `entity_import_jobs`, `entity_import_pending`. Upstream-rejected rows auto-go to Pending.
+- Tested: iteration_21.json; all follow-ups fixed (422 on bad rows, server dupe checks, friendly errors, inline problems, template example separated).

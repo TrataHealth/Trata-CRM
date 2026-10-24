@@ -5,7 +5,8 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 import asyncio
 import html as _html
@@ -122,15 +123,36 @@ REQUIRED = ("entity_kind", "name", "contact_person", "dedicated_phone", "address
 MAX_ROWS = 500
 
 
+FRIENDLY = {"dedicated_phone": "Dedicated phone must be a 10-digit Indian mobile", "pincode": "Pincode must be 6 digits",
+            "dispatch_radius_km": "Dispatch radius must be 0 to 200 km", "latitude": "Latitude must be a number", "longitude": "Longitude must be a number"}
+
+
 def _row_errors(row: Dict[str, Any], root: str) -> list:
-    errs = [f"{k.replace('_', ' ')} is required" for k in REQUIRED if not str(row.get(k) or "").strip()]
+    errs = [f"{k.replace('_', ' ').capitalize()} is required" for k in REQUIRED if not str(row.get(k) or "").strip()]
     if row.get("entity_kind") and row["entity_kind"] not in ALLOWED_CHILDREN.get(root, set()):
-        errs.append(f"type '{row['entity_kind']}' is not allowed here")
+        errs.append(f"Type '{row['entity_kind']}' is not allowed here")
+    if row.get("email") and not re.match(r"^\S+@\S+\.\S+$", str(row["email"])):
+        errs.append("Email looks invalid")
     try:
         EntityBody(**row)
     except ValidationError as ex:
-        errs += [f"{'.'.join(str(x) for x in e['loc'])}: {e['msg']}" for e in ex.errors()]
-    return errs
+        for e in ex.errors():
+            f = str(e["loc"][0]) if e["loc"] else ""
+            errs.append(FRIENDLY.get(f) or f"{f.replace('_', ' ').capitalize()}: {e['msg']}")
+    return list(dict.fromkeys(errs))
+
+
+def _dupe_errors(rows: list, existing: set) -> list:
+    count: Dict[str, int] = {}
+    for r in rows:
+        p = str(r.get("dedicated_phone") or "")
+        count[p] = count.get(p, 0) + 1
+    out = []
+    for r in rows:
+        p = str(r.get("dedicated_phone") or "")
+        out.append(["An entity already uses this phone"] if p and p in existing else
+                   ["Same phone is used on another row of the file"] if p and count[p] > 1 else [])
+    return out
 
 
 def _clean(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -139,8 +161,8 @@ def _clean(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 class BulkBody(BaseModel):
-    rows: list = Field(default_factory=list)
-    pending: list = Field(default_factory=list)
+    rows: List[Dict[str, Any]] = Field(default_factory=list)
+    pending: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class PendingBody(BaseModel):
@@ -167,6 +189,7 @@ def _entity_routes(r: APIRouter, prefix: str, resolve, db):
             if err:
                 await save_pending(org, current, row, [err], "import_failed")
             await db.entity_import_jobs.update_one({"id": job_id}, {"$inc": {"done": 1, "failed" if err else "created": 1},
+                                                                  "$set": {"updated_at": datetime.now(timezone.utc).isoformat()},
                                                                   "$push": {"results": {"row": i, "name": row.get("name"), "error": err}}})
         await db.entity_import_jobs.update_one({"id": job_id}, {"$set": {"status": "done", "finished_at": datetime.now(timezone.utc).isoformat()}})
 
@@ -175,11 +198,15 @@ def _entity_routes(r: APIRouter, prefix: str, resolve, db):
         org = await resolve(current, contact_id)
         if len(body.rows) + len(body.pending) > MAX_ROWS:
             raise HTTPException(status_code=400, detail=f"Up to {MAX_ROWS} rows per file")
-        good, bad = [], list(body.pending)
-        for row in body.rows:
-            (bad if _row_errors(_clean(row), org["root_kind"]) else good).append(row)
-        for row in bad:
-            await save_pending(org, current, row, _row_errors(_clean(row), org["root_kind"]), "needs_fix")
+        existing = {e.get("dedicated_phone") for e in (await _call("GET", f"/api/org/{org['id']}/entities")).get("entities", [])
+                    if e.get("is_active") is not False}
+        rows = [_clean(x) for x in body.rows + body.pending]
+        good, bad = [], []
+        for row, dupes in zip(rows, _dupe_errors(rows, existing)):
+            errs = _row_errors(row, org["root_kind"]) + dupes
+            (bad.append((row, errs)) if errs else good.append(row))
+        for row, errs in bad:
+            await save_pending(org, current, row, errs, "needs_fix")
         job_id = uuid.uuid4().hex
         await db.entity_import_jobs.insert_one({"id": job_id, "org_id": org["id"], "by": current["id"], "status": "running", "total": len(good),
                                                 "done": 0, "created": 0, "failed": 0, "pending_saved": len(bad), "results": [],
@@ -195,6 +222,11 @@ def _entity_routes(r: APIRouter, prefix: str, resolve, db):
         j = await db.entity_import_jobs.find_one({"id": job_id, "org_id": org["id"]}, {"_id": 0})
         if not j:
             raise HTTPException(status_code=404, detail="Import not found")
+        last = datetime.fromisoformat(j.get("updated_at") or j["created_at"])
+        if j["status"] == "running" and (datetime.now(timezone.utc) - last).total_seconds() > 180:
+            j["status"] = "done"
+            j["interrupted"] = True
+            await db.entity_import_jobs.update_one({"id": job_id}, {"$set": {"status": "done", "interrupted": True}})
         return j
 
     @r.get(prefix + "/pending")
