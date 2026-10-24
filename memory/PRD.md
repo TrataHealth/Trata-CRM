@@ -391,3 +391,10 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Network page merged into Activities (Live chips: Emergency cases, Patients, KYC manager, Network stats; admin only); /network redirects.
 - Header badge now shows LIVE · shared DB (was misleading "DEMO DATA" tied to unused legacy Admin-App REST sync).
 - Tests: tests/test_user_admin_bulk.py (27 pass), test_user_admin_erase_cron.py.
+
+## Iteration 20 — Unified Provider-app onboarding + Internal Entities (Jun 2026)
+- New dropdown onboarding modal (`ProviderAppOnboardModal.jsx`) replaces the old one on Contacts AND Agent Leads; all Provider-app roles with their own sign-up forms.
+- `provider_onboard.py`: onboarding runs as a background job (`POST /api/admin/provider-app/onboard` → poll `GET .../onboard/{job_id}`) because hospital sign-ups take ~50s upstream. Any CRM staff can onboard; sales agents get auto-assigned. Account = Pending KYC (Provider app self-signup). Welcome email via Resend when an email is given. Contact name = business name, `contact_person` = person.
+- Internal entities: `EntitiesPanel.jsx` on ContactDetail (master admin + assigned agent; `/api/admin/provider-app/contact-entities?contact_id=`) and provider portal "My Entities" (`/provider/entities`, `/api/provider/entities`). Proxies Provider app `/api/org/*`; org lookups cached in memory.
+- Tested: iteration_20.json (backend 16/16, frontend pass); minor follow-ups fixed (remove busy/error state, task refs + stale-job timeout, business-name contacts, "Pharmacie" label).
+- Backlog unchanged: Phase 9 Manager Intelligence (P2), Patient App webhooks (P3), shared JWT identity (P3), split server.py.

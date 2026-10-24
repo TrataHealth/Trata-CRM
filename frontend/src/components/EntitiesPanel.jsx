@@ -45,7 +45,7 @@ function AddForm({ kinds, onSave, onCancel }) {
   );
 }
 
-function EntityRow({ e, onRemove }) {
+function EntityRow({ e, onRemove, busy }) {
   return (
     <div className="flex items-center justify-between gap-3 py-3 border-b border-[#F4F5F7] last:border-0" data-testid={`entity-row-${e.id}`}>
       <div className="min-w-0">
@@ -53,7 +53,7 @@ function EntityRow({ e, onRemove }) {
         <div className="text-xs text-[#5E6C84] truncate">{e.contact_person} · {e.dedicated_phone} · {e.city}</div>
       </div>
       {e.is_active === false ? <span className="text-xs text-[#97A0AF]">Removed</span>
-        : <button onClick={() => onRemove(e)} className="p-1.5 rounded hover:bg-[#FFEBE6] text-[#BF2600]" title="Remove entity" data-testid={`entity-remove-${e.id}`}><X className="h-4 w-4" /></button>}
+        : <button onClick={() => onRemove(e)} disabled={busy} className="p-1.5 rounded hover:bg-[#FFEBE6] text-[#BF2600] disabled:opacity-60" title="Remove entity" data-testid={`entity-remove-${e.id}`}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}</button>}
     </div>
   );
 }
@@ -63,7 +63,13 @@ export default function EntitiesPanel({ base, params }) {
   const load = () => api.get(base, { params }).then((r) => { setState(r.data); setErr(""); }).catch((e) => setErr(e?.response?.data?.detail || "Could not load entities"));
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [base, JSON.stringify(params)]);
   const add = async (body) => { await api.post(base, body, { params }); setAdding(false); load(); };
-  const remove = async (e) => { if (window.confirm(`Remove ${e.name}?`)) { await api.delete(`${base}/${e.id}`, { params }); load(); } };
+  const [removing, setRemoving] = useState(null);
+  const remove = async (e) => {
+    if (!window.confirm(`Remove ${e.name}?`)) return;
+    setRemoving(e.id); setErr("");
+    try { await api.delete(`${base}/${e.id}`, { params }); await load(); }
+    catch (x) { setErr(x?.response?.data?.detail || "Could not remove entity"); } finally { setRemoving(null); }
+  };
   const kinds = ALLOWED[state?.root_kind] || [];
   const active = (state?.entities || []).filter((e) => e.is_active !== false);
   return (
@@ -76,7 +82,7 @@ export default function EntitiesPanel({ base, params }) {
       {err && <div className="text-sm text-[#BF2600] bg-[#FFEBE6] rounded px-3 py-2" data-testid="entities-error">{err}</div>}
       {!state && !err && <div className="text-sm text-[#5E6C84] flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>}
       {adding && <AddForm kinds={kinds} onSave={add} onCancel={() => setAdding(false)} />}
-      {state && (state.entities.length ? <div className="mt-2">{state.entities.map((e) => <EntityRow key={e.id} e={e} onRemove={remove} />)}</div>
+      {state && (state.entities.length ? <div className="mt-2">{state.entities.map((e) => <EntityRow key={e.id} e={e} onRemove={remove} busy={removing === e.id} />)}</div>
         : !adding && <div className="text-sm text-[#5E6C84] py-4 flex items-center gap-2" data-testid="entities-empty">No entities yet.</div>)}
     </div>
   );

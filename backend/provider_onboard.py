@@ -91,7 +91,14 @@ async def _call(method: str, path: str, json: Optional[dict] = None):
     return res.json()
 
 
-async def _org_for_uid(uid: str) -> Dict[str, Any]:
+_ORGS: Dict[str, Dict[str, Any]] = {}
+_TASKS: set = set()
+BUSINESS_KEYS = ("name", "businessName", "labName", "clinicName", "bankName", "displayName")
+
+
+async def _org_for_uid(uid: str, org_name: Optional[str] = None) -> Dict[str, Any]:
+    if uid in _ORGS:
+        return _ORGS[uid]
     pool = await sb.get_pool()
     async with pool.acquire() as conn:
         u = await conn.fetchrow("SELECT role, name, organization_name FROM public.users WHERE id::text = $1", uid)
@@ -103,8 +110,9 @@ async def _org_for_uid(uid: str) -> Dict[str, Any]:
         org = (res.json() or {}).get("org") if res.status_code < 300 else None
     if not org:
         org = (await _call("POST", "/api/org/bootstrap", {"master_admin_user_id": uid, "root_kind": root,
-                                                         "org_name": u["organization_name"] or u["name"] or "My Organisation"})).get("org")
-    return {**org, "root_kind": root}
+                                                         "org_name": org_name or u["organization_name"] or u["name"] or "My Organisation"})).get("org")
+    _ORGS[uid] = {**org, "root_kind": root}
+    return _ORGS[uid]
 
 
 def _entity_routes(r: APIRouter, prefix: str, resolve):
@@ -178,7 +186,9 @@ def create_provider_onboard_router(db, get_current_user, is_internal) -> APIRout
         job_id = uuid.uuid4().hex
         await db.onboard_jobs.insert_one({"id": job_id, "by": current["id"], "role_id": body.role_id, "phone": body.phone,
                                           "status": "running", "created_at": datetime.now(timezone.utc).isoformat()})
-        asyncio.create_task(run_job(job_id, body, request.headers.get("origin") or "", current))
+        t = asyncio.create_task(run_job(job_id, body, request.headers.get("origin") or "", current))
+        _TASKS.add(t)
+        t.add_done_callback(_TASKS.discard)
         return {"job_id": job_id, "status": "running"}
 
     @r.get("/onboard/{job_id}")
@@ -187,6 +197,9 @@ def create_provider_onboard_router(db, get_current_user, is_internal) -> APIRout
         j = await db.onboard_jobs.find_one({"id": job_id}, {"_id": 0})
         if not j or (j["by"] != current["id"] and not current.get("is_master_admin")):
             raise HTTPException(status_code=404, detail="Job not found")
+        if j["status"] == "running" and (datetime.now(timezone.utc) - datetime.fromisoformat(j["created_at"])).total_seconds() > 300:
+            j.update(status="failed", error="Onboarding was interrupted. Check Contacts, then try again if the provider is missing.")
+            await db.onboard_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": j["error"]}})
         return j
 
     async def do_onboard(body: OnboardBody, origin: str, current):
@@ -220,12 +233,13 @@ def create_provider_onboard_router(db, get_current_user, is_internal) -> APIRout
         u = await find_user()
         uid = u["id"] if u else None
         now = datetime.now(timezone.utc).isoformat()
-        name = (u and u["name"]) or payload.get("name") or payload.get("businessName") or payload.get("fullName") or payload.get("ownerName")
+        person = payload.get("fullName") or payload.get("ownerName") or payload.get("inchargeName") or payload.get("organiserName")
+        name = next((payload[k] for k in BUSINESS_KEYS if payload.get(k)), None) or (u and u["name"]) or person
         agent = {"assigned_agent_id": current["id"], "assigned_agent_name": current.get("name")} if current.get("role") == "sales_rep" else {}
         contact = await db.contacts.find_one_and_update(
             {"$or": [{"supabase_user_id": uid}, {"phone": body.phone}]} if uid else {"phone": body.phone},
             {"$set": {"supabase_user_id": uid, "name": name, "phone": body.phone, "email": payload.get("email"),
-                      "city": payload.get("city"), "state": payload.get("state"), "address": payload.get("address"),
+                      "contact_person": person, "city": payload.get("city"), "state": payload.get("state"), "address": payload.get("address"),
                       "type": CONTACT_TYPE.get(body.role_id, body.role_id), "provider_type": (u and u["role"]) or role,
                       "provider_app_role": body.role_id, "pipeline_stage": "contacted", "kyc_status": "pending",
                       "is_verified": False, "onboarded_via": "crm", "onboarded_by": current.get("name"), "onboarded_at": now,
@@ -247,14 +261,14 @@ def create_provider_onboard_router(db, get_current_user, is_internal) -> APIRout
 
     async def contact_org(current, contact_id: str):
         require_staff(current)
-        c = await db.contacts.find_one({"id": contact_id}, {"_id": 0, "supabase_user_id": 1, "assigned_agent_id": 1})
+        c = await db.contacts.find_one({"id": contact_id}, {"_id": 0, "supabase_user_id": 1, "assigned_agent_id": 1, "name": 1})
         if not c:
             raise HTTPException(status_code=404, detail="Contact not found")
         if not current.get("is_master_admin") and c.get("assigned_agent_id") != current["id"]:
             raise HTTPException(status_code=403, detail="Only the master admin or the assigned sales agent can manage entities")
         if not c.get("supabase_user_id"):
             raise HTTPException(status_code=400, detail="This provider is not linked to the Trata network yet")
-        return await _org_for_uid(c["supabase_user_id"])
+        return await _org_for_uid(c["supabase_user_id"], c.get("name"))
     contact_org.dep = get_current_user
     _entity_routes(r, "/contact-entities", contact_org)
     return r

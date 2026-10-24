@@ -1,0 +1,39 @@
+{
+  "summary": "Tested Provider-app onboarding (async job + poll) and internal entities (CRM contact panel + provider 'My Entities'), backend and frontend. Backend: 16/16 pytest pass. Checked: job running->done; result has pending_kyc, supabase_user_id, contact_id and welcome_email 'sent' for delivered@resend.dev; agent onboarding sets assigned_agent_id, type pharmacy, kyc pending, stage contacted and logs an activity; another staff user gets 404 on the job, master admin can see it; 400/422/403 validation; contact-entities access rules (admin and assigned agent allowed, Priya 403, unlinked contact 400, ambulance root 403, missing fields 400); create/delete entity; provider /api/provider/entities list/create/delete, staff token 403. Frontend: Contacts modal (5 optgroups, a form for each type, submit disabled until required fields + 10-digit phone + valid pincode, done screen shows 'Pending KYC approval' and the email message, Open contact navigates and the entities panel shows for the pharmacy contact). Agent Leads opens the new pa-onboard-modal and the ambulance-service picker returns results. Hospital contact as Rohan: entity add (ambulance with radius) and remove with confirm both work. Priya does not see the panel. Hospital provider login: 'My Entities' nav -> /provider/entities, add path_lab works and the API delete works. Onboardings made on prod Supabase: 2 pharmacies (TEST Pharmacy 3551 / 9184053551 by Rohan via API; TEST UI Pharmacy 0721 / 9240800721 by admin via UI). Every entity I created was removed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/provider-app/onboard", "issue": "Contact name comes from Supabase users.name, which is the person (ownerName/fullName), not the business. Pharmacy 'TEST UI Pharmacy 0721' was saved as contact 'TEST UI Owner'; the hospital contact d256e122 shows 'Test Admin'. The org name shown in the entities panel is also the person's name. Consider using businessName/name/labName/clinicName/bankName as the contact name and keeping the person as contact_person."},
+      {"endpoint": "POST /api/admin/provider-app/onboard", "issue": "asyncio.create_task(run_job(...)) does not keep a reference to the task, so per the Python docs it can be garbage-collected mid-run. Store it in a module-level set. Jobs also stay 'running' forever if the backend restarts mid-job: no stale-job timeout."},
+      {"endpoint": "GET/POST/DELETE /api/admin/provider-app/contact-entities, /api/provider/entities", "issue": "Each call makes 2 upstream requests (by-admin + action), about 2.7s per GET, so a delete followed by a reload takes about 5-6s."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "EntitiesPanel remove()", "issue": "No busy state and no try/catch. After the confirm dialog nothing visible happens for about 5s (DELETE + reload), and a failed DELETE is an unhandled promise rejection with no message to the user. A first UI check 5s after confirm still showed the row; the API delete itself succeeded.", "selector": "[data-testid^='entity-remove-']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "ContactDetail (pharmacy)", "issues": ["Header overline shows 'PHARMACIE' and the AI card says 'Get instant context on this pharmacie'. typeLabel() strips the trailing 's' from 'Pharmacies'. Same kind of problem is likely for other '-ies' labels. Existing issue, not new in this change."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_provider_app_onboard.py", "/app/test_reports/pytest/pytest_provider_app_onboard.xml"],
+  "action_items": [
+    "Use the business/organisation name (not the owner/admin name) as the contact name for onboarded organisations",
+    "Keep a reference to background onboarding tasks; add a stale-job timeout",
+    "EntitiesPanel: add a busy/disabled state and error handling to remove (and an optimistic update)",
+    "Fix the typeLabel singularisation ('Pharmacie')"
+  ],
+  "critical_code_review_comments": [
+    "provider_onboard.py: find_one_and_update matches {$or:[supabase_user_id, phone]}. Onboarding a phone that already belongs to an unrelated contact (e.g. a patient) overwrites that contact's type and stage.",
+    "ContactDetail decides panel visibility from c.type in [hospital, pharmacy, pathologist, diagnostic_centre]; for any other contact type the backend returns 403 anyway, so the two are consistent.",
+    "PATCH entity route exists but has no UI (there is no edit entity option)."
+  ],
+  "updated_files": ["/app/backend/tests/test_provider_app_onboard.py"],
+  "success_rate": {"backend": "100%", "frontend": "100% (1 low-priority UX issue)"},
+  "test_credentials": "Hospital provider 9792832090 password is now TestHosp@123 (set on first login by this test run; recovery email delivered@resend.dev, q1/q4 = trata). Others are as in /app/memory/test_credentials.md.",
+  "seed_data_creation": "Supabase prod: 2 pharmacies onboarded (9184053551 'TEST Pharmacy 3551' assigned to Rohan, contact 449d0d06-448b-441a-b4c8-3b56042989a2; 9240800721 'TEST UI Pharmacy 0721' by master admin, contact c74b5195-c623-4e1d-ab32-10dafebcbbda). Every entity I created was removed. The existing entity 'TEST Branch 9692832188' (from the main agent) was left in place.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run pytest /app/backend/tests/test_provider_app_onboard.py. It creates 1 new pharmacy on prod Supabase per run plus a temporary entity that it deletes. UI login trick: call /api/auth/send-otp, verify-otp {login_as}, login-password through page.request, then set localStorage trata_token and trata_user. Entity GET calls take about 2.7s, so wait at least 8s after delete/add."
+}

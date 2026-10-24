@@ -137,7 +137,7 @@ export function statusColor(s) {
 }
 
 export function typeLabel(t) {
-  return (CONTACT_TYPES.find((x) => x.value === t)?.label || t).replace(/s$/, "");
+  return (CONTACT_TYPES.find((x) => x.value === t)?.label || t).replace(/ies$/, "y").replace(/s$/, "");
 }
 
 export function stageLabel(s) {
