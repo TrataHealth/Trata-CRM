@@ -14,6 +14,7 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (r) => r,
   (err) => {
+    if (err?.response?.status === 423) window.dispatchEvent(new Event("trata:suspended"));
     if (err?.response?.status === 401) {
       localStorage.removeItem("trata_token");
       localStorage.removeItem("trata_user");

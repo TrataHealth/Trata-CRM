@@ -39,8 +39,8 @@ import AdminRevenue from "./pages/AdminRevenue";
 import ProviderLedger from "./pages/ProviderLedger";
 import Patients from "./pages/Patients";
 import Abha from "./pages/Abha";
+import SuspendedScreen from "./components/SuspendedScreen";
 import PatientDetail from "./pages/PatientDetail";
-import Network from "./pages/Network";
 import { Toaster } from "sonner";
 import { registerSW } from "./lib/registerSW";
 
@@ -50,6 +50,7 @@ function RequireAuth({ children, internalOnly = false, providerOnly = false, adm
   const { user, loading, isInternal, isProvider, isAdmin, isSalesRep } = useAuth();
   if (loading) return <div className="p-10 text-sm text-[#5E6C84]">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
+  if (user.suspended && !user.is_master_admin) return <SuspendedScreen />;
   if (!allowSetupGate && user.security_setup_required) return <Navigate to="/security-setup" replace />;
   if (adminOnly && !isAdmin) return <Navigate to={isSalesRep ? "/agent" : "/provider"} replace />;
   if (internalOnly && !isInternal) return <Navigate to="/provider" replace />;
@@ -105,7 +106,7 @@ function App() {
           <Route path="/admin/onboarding/:userId" element={<RequireAuth adminOnly><AdminProviderKyc /></RequireAuth>} />
           <Route path="/admin/patients" element={<RequireAuth adminOnly><Patients mode="admin" /></RequireAuth>} />
           <Route path="/admin/patients/:userId" element={<RequireAuth adminOnly><PatientDetail mode="admin" /></RequireAuth>} />
-          <Route path="/network" element={<RequireAuth adminOnly><Network /></RequireAuth>} />
+          <Route path="/network" element={<Navigate to="/activities?view=cases" replace />} />
           <Route path="/admin/ledger" element={<RequireAuth adminOnly><AdminLedger /></RequireAuth>} />
           <Route path="/admin/ledger/settings" element={<RequireAuth adminOnly><AdminLedgerSettings /></RequireAuth>} />
           <Route path="/admin/ledger/review" element={<RequireAuth adminOnly><AdminLedgerReview /></RequireAuth>} />

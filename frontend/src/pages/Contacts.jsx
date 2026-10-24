@@ -5,6 +5,8 @@ import { useAuth } from "../lib/auth";
 import { CONTACT_TYPES, PIPELINE_STAGES, typeLabel, fmtCurrency, relativeTime } from "../lib/constants";
 import { Filter, Download, CheckCircle2, XCircle, Search, UserPlus, Trash2, Loader2 } from "lucide-react";
 import OnboardProviderModal from "../components/OnboardProviderModal";
+import { BulkBar, BulkActionDialog } from "../components/users/BulkActions";
+import { Ban, Archive } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Contacts() {
@@ -22,6 +24,12 @@ export default function Contacts() {
   const canOnboard = !!(user?.is_master_admin || ["admin", "manager", "national_manager", "regional_manager", "zonal_manager", "area_manager"].includes(user?.role));
   const canPurge = !!user?.is_master_admin;
   const [purging, setPurging] = useState(false);
+  const [sel, setSel] = useState(new Set());
+  const [bulk, setBulk] = useState(null);
+  const archivedView = params.get("view") === "deleted";
+  const toggle = (id) => setSel((s0) => { const n = new Set(s0); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allOn = list.length > 0 && list.every((c) => sel.has(c.id));
+  const toggleAll = () => setSel(allOn ? new Set() : new Set(list.map((c) => c.id)));
 
   const purgeTestUsers = async () => {
     // Two-step confirm: dry-run preview first, then actual purge.
@@ -53,6 +61,12 @@ export default function Contacts() {
 
   const fetch = async () => {
     setLoading(true);
+    setSel(new Set());
+    if (archivedView) {
+      const { data } = await api.get("/admin/users/archived");
+      setList(data.items); setTotal(data.total); setLoading(false);
+      return;
+    }
     const { data } = await api.get("/contacts", {
       params: {
         type: type || undefined,
@@ -65,7 +79,7 @@ export default function Contacts() {
     setList(data.items); setTotal(data.total); setLoading(false);
   };
 
-  useEffect(() => { fetch(); /* eslint-disable-next-line */ }, [type, stage, verified, q]);
+  useEffect(() => { fetch(); /* eslint-disable-next-line */ }, [type, stage, verified, q, archivedView]);
 
   const setParam = (k, v) => {
     const p = new URLSearchParams(params);
@@ -90,9 +104,9 @@ export default function Contacts() {
         <div>
           <div className="overline">User Directory</div>
           <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
-            Trata Users <span className="text-[#5E6C84] font-medium">/ {total.toLocaleString()}</span>
+            {archivedView ? "Deleted users" : "Trata Users"} <span className="text-[#5E6C84] font-medium">/ {total.toLocaleString()}</span>
           </h1>
-          <p className="text-sm text-[#5E6C84] mt-1">All users on the Trata network — providers, prospects, and partners.</p>
+          <p className="text-sm text-[#5E6C84] mt-1">{archivedView ? "Restore within 30 days — after that they're erased permanently from every Trata app." : "All users on the Trata network — providers, prospects, and partners."}</p>
         </div>
         <div className="flex items-center gap-2">
           {canOnboard && (
@@ -111,6 +125,12 @@ export default function Contacts() {
           >
             <Download className="h-4 w-4" /> Export CSV
           </button>
+          {canPurge && (
+            <button data-testid="contacts-deleted-toggle" onClick={() => setParams(archivedView ? {} : { view: "deleted" })}
+              className="flex items-center gap-2 px-3 py-2 text-sm border border-[#DFE1E6] rounded-md hover:bg-[#F8F9FA]">
+              <Archive className="h-4 w-4" /> {archivedView ? "Back to all users" : "Deleted users"}
+            </button>
+          )}
           {canPurge && (
             <button
               data-testid="contacts-purge-test-btn"
@@ -137,8 +157,11 @@ export default function Contacts() {
         />
       )}
 
+      <BulkBar count={sel.size} archivedView={archivedView} onAction={setBulk} onClear={() => setSel(new Set())} />
+      <BulkActionDialog action={bulk} ids={[...sel]} onClose={() => setBulk(null)} onDone={() => { setBulk(null); fetch(); }} />
+
       {/* Type tabs */}
-      <div className="flex flex-nowrap overflow-x-auto scrollbar-thin gap-1.5 border-b border-[#DFE1E6] pb-3 -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="contacts-type-tabs">
+      {!archivedView && <><div className="flex flex-nowrap overflow-x-auto scrollbar-thin gap-1.5 border-b border-[#DFE1E6] pb-3 -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="contacts-type-tabs">
         <TypeTab label="All" value="" active={!type} onClick={() => setParam("type", "")} />
         {CONTACT_TYPES.map((c) => (
           <TypeTab key={c.value} label={c.label} value={c.value} active={type === c.value} onClick={() => setParam("type", c.value)} />
@@ -172,6 +195,7 @@ export default function Contacts() {
           testid="contacts-status-filter"
         />
       </div>
+      </>}
 
       {/* Table */}
       <div className="bg-white border border-[#DFE1E6] rounded-md overflow-hidden">
@@ -179,25 +203,28 @@ export default function Contacts() {
           <table className="w-full text-sm" data-testid="contacts-table">
             <thead className="bg-[#F8F9FA] border-b border-[#DFE1E6]">
               <tr className="text-left">
+                {canPurge && <th className="pl-3 py-2.5 w-8"><input type="checkbox" checked={allOn} onChange={toggleAll} data-testid="contacts-select-all" aria-label="Select all" /></th>}
                 <Th>Name</Th><Th>Type</Th><Th>Phone</Th><Th>City</Th>
                 <Th>Stage</Th><Th>Status</Th><Th align="right">Deal Value</Th>
-                <Th>Joined</Th>
+                <Th>{archivedView ? "Erased in" : "Joined"}</Th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={8} className="py-10 text-center text-sm text-[#5E6C84]">Loading…</td></tr>
+                <tr><td colSpan={canPurge ? 9 : 8} className="py-10 text-center text-sm text-[#5E6C84]">Loading…</td></tr>
               )}
               {!loading && list.length === 0 && (
-                <tr><td colSpan={8} className="py-10 text-center text-sm text-[#5E6C84]">No contacts match these filters.</td></tr>
+                <tr><td colSpan={canPurge ? 9 : 8} className="py-10 text-center text-sm text-[#5E6C84]">No contacts match these filters.</td></tr>
               )}
               {list.map((c) => (
                 <tr
                   key={c.id}
-                  onClick={() => navigate(`/contacts/${c.id}`)}
-                  className="border-b border-[#F1F2F4] last:border-0 hover:bg-[#F8F9FA] cursor-pointer"
+                  onClick={() => (archivedView ? toggle(c.id) : navigate(`/contacts/${c.id}`))}
+                  className={`border-b border-[#F1F2F4] last:border-0 hover:bg-[#F8F9FA] cursor-pointer ${sel.has(c.id) ? "bg-[#DEEBFF]/50" : ""}`}
                   data-testid={`contact-row-${c.id}`}
                 >
+                  {canPurge && <td className="pl-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} data-testid={`contact-select-${c.id}`} aria-label={`Select ${c.name}`} /></td>}
                   <Td>
                     <div className="flex items-center gap-3 min-w-0">
                       <Avatar name={c.name} src={c.avatar} />
@@ -212,14 +239,16 @@ export default function Contacts() {
                   <Td>{c.city || "—"}</Td>
                   <Td><StagePill stage={c.pipeline_stage} /></Td>
                   <Td>
-                    {c.is_verified ? (
+                    {c.suspended ? (
+                      <span className="inline-flex items-center gap-1 text-[#BF2600] text-xs font-semibold" title={c.suspended_reason || ""} data-testid={`contact-suspended-${c.id}`}><Ban className="h-3.5 w-3.5" /> Suspended</span>
+                    ) : c.is_verified ? (
                       <span className="inline-flex items-center gap-1 text-[#36B37E] text-xs font-semibold"><CheckCircle2 className="h-3.5 w-3.5" /> Verified</span>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-[#FFAB00] text-xs font-semibold"><XCircle className="h-3.5 w-3.5" /> Pending</span>
                     )}
                   </Td>
                   <Td align="right" className="font-mono">{c.deal_value ? fmtCurrency(c.deal_value) : "—"}</Td>
-                  <Td className="text-xs text-[#5E6C84]">{relativeTime(c.created_at)}</Td>
+                  <Td className="text-xs text-[#5E6C84]">{archivedView ? `${c.days_left ?? "—"} days` : relativeTime(c.created_at)}</Td>
                 </tr>
               ))}
             </tbody>

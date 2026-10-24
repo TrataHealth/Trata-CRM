@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api from "../lib/api";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import api from "../../lib/api";
+import { useNavigate } from "react-router-dom";
 import {
   Activity, Users as UsersIcon, ShieldCheck, BarChart3, Ambulance, MapPin,
   AlertTriangle, CheckCircle2, XCircle, Clock, ChevronRight, Search, RefreshCw,
   Loader2, Phone, FileText, ExternalLink, Sparkles, Database, Cloud,
 } from "lucide-react";
-import { relativeTime } from "../lib/constants";
+import { relativeTime } from "../../lib/constants";
 
 const TABS = [
   { value: "cases",    label: "Emergency cases", icon: Activity },
@@ -23,12 +23,7 @@ const SOURCES = {
   restapi:  { label: "Admin App REST",       prefix: "/upstream", icon: Cloud,    tone: "text-[#5E6C84]" },
 };
 
-export default function Network() {
-  const [params, setParams] = useSearchParams();
-  const tab = params.get("tab") || "cases";
-  const setTab = (t) => { const p = new URLSearchParams(params); p.set("tab", t); setParams(p); };
-
-  // Persist selected data source across refreshes / tab changes
+export function useNetworkSource() {
   const [source, setSource] = useState(() => localStorage.getItem("trata.network.source") || "supabase");
   useEffect(() => { localStorage.setItem("trata.network.source", source); }, [source]);
   const [supaStatus, setSupaStatus] = useState(null);
@@ -37,78 +32,39 @@ export default function Network() {
       try {
         const { data } = await api.get("/supabase/status");
         setSupaStatus(data);
-        if (!data.connected) setSource("restapi");   // graceful fallback
+        if (!data.connected) setSource("restapi");
       } catch { setSupaStatus({ connected: false }); }
     })();
   }, []);
-  const prefix = SOURCES[source].prefix;
+  return { source, setSource, supaStatus, prefix: SOURCES[source].prefix };
+}
 
+export function SourceToggle({ source, setSource, supaStatus }) {
   return (
-    <div className="p-4 sm:p-6 lg:p-8 space-y-6" data-testid="network-page">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <div className="overline">Live from Trata Admin App</div>
-          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">Network</h1>
-          <p className="text-sm text-[#5E6C84] mt-1">Real-time view of every emergency case, patient and KYC across the TrataHealth platform — synced directly from the Provider App backend.</p>
-        </div>
-
-        {/* Data-source toggle */}
-        <div className="inline-flex items-center bg-white border border-[#DFE1E6] rounded-full p-0.5 shadow-sm" data-testid="network-source-toggle" title="Switch between the shared Supabase DB and the Admin App REST proxy">
-          {Object.entries(SOURCES).map(([k, s]) => {
-            const I = s.icon;
-            const selected = source === k;
-            const disabled = k === "supabase" && supaStatus && !supaStatus.connected;
-            return (
-              <button
-                key={k}
-                onClick={() => !disabled && setSource(k)}
-                disabled={disabled}
-                data-testid={`network-source-${k}`}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-full transition-colors ${
-                  selected ? "bg-[#091E42] text-white" : "text-[#42526E] hover:text-[#091E42] hover:bg-[#F4F5F7]"
-                } ${disabled ? "opacity-40 cursor-not-allowed" : ""}`}
-              >
-                <I className={`h-3.5 w-3.5 ${selected ? "text-white" : s.tone}`} /> {s.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="border-b border-[#DFE1E6] flex gap-1 overflow-x-auto" data-testid="network-tabs">
-        {TABS.map((t) => {
-          const I = t.icon;
-          const active = tab === t.value;
-          return (
-            <button
-              key={t.value}
-              onClick={() => setTab(t.value)}
-              data-testid={`network-tab-${t.value}`}
-              className={`relative px-3 py-2.5 text-sm font-semibold flex items-center gap-2 whitespace-nowrap transition-colors ${
-                active ? "text-[#0052CC]" : "text-[#5E6C84] hover:text-[#091E42]"
-              }`}
-            >
-              <I className="h-4 w-4" /> {t.label}
-              {active && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#0052CC]" />}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Tab content */}
-      {tab === "cases" && <CasesTab prefix={prefix} />}
-      {tab === "patients" && <PatientsTab prefix={prefix} />}
-      {tab === "kyc" && <KycTab prefix={prefix} />}
-      {tab === "network" && <NetworkStatsTab prefix={prefix} />}
+    <div className="inline-flex items-center bg-white border border-[#DFE1E6] rounded-full p-0.5 shadow-sm" data-testid="network-source-toggle" title="Switch between the shared Supabase DB and the Admin App REST proxy">
+      {Object.entries(SOURCES).map(([k, s]) => {
+        const I = s.icon;
+        const selected = source === k;
+        const disabled = k === "supabase" && supaStatus && !supaStatus.connected;
+        return (
+          <button key={k} onClick={() => !disabled && setSource(k)} disabled={disabled} data-testid={`network-source-${k}`}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-full transition-colors ${
+              selected ? "bg-[#091E42] text-white" : "text-[#42526E] hover:text-[#091E42] hover:bg-[#F4F5F7]"
+            } ${disabled ? "opacity-40 cursor-not-allowed" : ""}`}>
+            <I className={`h-3.5 w-3.5 ${selected ? "text-white" : s.tone}`} /> {s.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
+export const LIVE_VIEWS = TABS;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Emergency Cases
 // ─────────────────────────────────────────────────────────────────────────────
-function CasesTab({ prefix }) {
+export function CasesTab({ prefix }) {
   const [state, setState] = useState({ loading: true, items: [], counts: {}, total: 0, upstream: true });
   const [filter, setFilter] = useState({ status: "", case_type: "" });
   const [detail, setDetail] = useState(null);
@@ -254,7 +210,7 @@ function CaseDetailDrawer({ caseObj, onClose }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Patients
 // ─────────────────────────────────────────────────────────────────────────────
-function PatientsTab({ prefix }) {
+export function PatientsTab({ prefix }) {
   const [state, setState] = useState({ loading: true, items: [], total: 0, upstream: true });
   const [q, setQ] = useState("");
   const load = async () => {
@@ -308,7 +264,7 @@ function PatientsTab({ prefix }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // KYC manager
 // ─────────────────────────────────────────────────────────────────────────────
-function KycTab({ prefix }) {
+export function KycTab({ prefix }) {
   const navigate = useNavigate();
   const [state, setState] = useState({ loading: true, items: [], total: 0, upstream: true });
   const load = async () => {
@@ -376,7 +332,7 @@ function KycTab({ prefix }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Network stats
 // ─────────────────────────────────────────────────────────────────────────────
-function NetworkStatsTab({ prefix }) {
+export function NetworkStatsTab({ prefix }) {
   const [state, setState] = useState({ loading: true, stats: null, upstream: true });
   useEffect(() => {
     (async () => {

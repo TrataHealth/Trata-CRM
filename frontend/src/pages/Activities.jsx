@@ -2,13 +2,19 @@ import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../lib/api";
 import { ACTIVITY_CATEGORIES, statusColor, relativeTime, fmtCurrency } from "../lib/constants";
-import { Search } from "lucide-react";
+import { Search, Radio } from "lucide-react";
+import { useAuth } from "../lib/auth";
+import { CasesTab, PatientsTab, KycTab, NetworkStatsTab, LIVE_VIEWS, useNetworkSource, SourceToggle } from "../components/network/LiveViews";
 
-export default function Activities() {
+const LIVE = { cases: CasesTab, patients: PatientsTab, kyc: KycTab, network: NetworkStatsTab };
+
+function Activities() {
   const [params, setParams] = useSearchParams();
   const category = params.get("category") || "";
   const status = params.get("status") || "";
   const q = params.get("q") || "";
+  const { isAdmin } = useAuth();
+  const view = isAdmin && LIVE[params.get("view")] ? params.get("view") : "";
   const [list, setList] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -21,7 +27,7 @@ export default function Activities() {
     });
     setList(data.items); setTotal(data.total); setLoading(false);
   };
-  useEffect(() => { fetch(); /* eslint-disable-next-line */ }, [category, status, q]);
+  useEffect(() => { if (!view) fetch(); /* eslint-disable-next-line */ }, [category, status, q, view]);
 
   const setParam = (k, v) => {
     const p = new URLSearchParams(params);
@@ -29,29 +35,49 @@ export default function Activities() {
     setParams(p);
   };
 
+  const pick = (k, v) => {
+    const p = new URLSearchParams();
+    if (v) p.set(k, v);
+    setParams(p);
+  };
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-5 lg:space-y-6" data-testid="activities-page">
-      <div>
-        <div className="overline">Live Operations</div>
-        <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
-          Activities <span className="text-[#5E6C84] font-medium">/ {total.toLocaleString()}</span>
-        </h1>
-        <p className="text-sm text-[#5E6C84] mt-1">Emergency cases, appointments, bookings and KYC events.</p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="overline">Live Operations</div>
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
+            Activities {!view && <span className="text-[#5E6C84] font-medium">/ {total.toLocaleString()}</span>}
+          </h1>
+          <p className="text-sm text-[#5E6C84] mt-1">
+            {view ? "Live from the shared Trata network — what is happening across the platform right now." : "Activity log — emergency cases, appointments, bookings and KYC events tied to your contacts."}
+          </p>
+        </div>
+        {view && <LiveSource />}
       </div>
 
       <div className="flex flex-nowrap overflow-x-auto scrollbar-thin gap-1.5 border-b border-[#DFE1E6] pb-3 -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="category-tabs">
-        <CategoryChip label="All" active={!category} onClick={() => setParam("category", "")} testid="cat-all" />
+        <CategoryChip label="All" active={!view && !category} onClick={() => pick("category", "")} testid="cat-all" />
         {ACTIVITY_CATEGORIES.map((c) => (
           <CategoryChip
             key={c.value}
             label={c.label}
             color={c.color}
-            active={category === c.value}
-            onClick={() => setParam("category", c.value)}
+            active={!view && category === c.value}
+            onClick={() => pick("category", c.value)}
             testid={`cat-${c.value}`}
           />
         ))}
+        {isAdmin && <>
+          <span className="mx-1.5 self-center h-5 w-px bg-[#DFE1E6] shrink-0" />
+          <span className="self-center text-[10px] font-bold uppercase tracking-wider text-[#00875A] flex items-center gap-1 shrink-0 pr-1"><Radio className="h-3 w-3" /> Live</span>
+          {LIVE_VIEWS.map((t) => (
+            <CategoryChip key={t.value} label={t.label} active={view === t.value} onClick={() => pick("view", t.value)} testid={`live-${t.value}`} />
+          ))}
+        </>}
       </div>
+
+      {view ? <LiveView view={view} /> : <>
 
       <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#5E6C84]" />
@@ -112,8 +138,27 @@ export default function Activities() {
           </table>
         </div>
       </div>
+      </>}
     </div>
   );
+}
+
+const sourceCtx = React.createContext(null);
+
+function LiveSource() {
+  const ctx = React.useContext(sourceCtx);
+  return ctx ? <SourceToggle {...ctx} /> : null;
+}
+
+function LiveView({ view }) {
+  const Tab = LIVE[view];
+  const ctx = React.useContext(sourceCtx);
+  return <Tab prefix={ctx.prefix} />;
+}
+
+export function ActivitiesWithSource() {
+  const src = useNetworkSource();
+  return <sourceCtx.Provider value={src}><Activities /></sourceCtx.Provider>;
 }
 
 function CategoryChip({ label, color, active, onClick, testid }) {
@@ -130,3 +175,5 @@ function CategoryChip({ label, color, active, onClick, testid }) {
     </button>
   );
 }
+
+export default ActivitiesWithSource;

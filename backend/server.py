@@ -221,7 +221,15 @@ def decode_token(token: str, expected_type: Optional[str] = None) -> dict:
     return payload
 
 
-async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
+def _block_if_suspended(user: dict, path: str):
+    if user.get("disabled") and not user.get("is_master_admin"):
+        raise HTTPException(status_code=401, detail="This account has been deleted")
+    if user.get("suspended") and not user.get("is_master_admin") and path not in ("/api/auth/me", "/api/auth/logout", "/api/auth/refresh"):
+        raise HTTPException(status_code=423, detail={"code": "account_suspended", "reason": user.get("suspended_reason"),
+                                                     "message": "Your account has been suspended."})
+
+
+async def get_current_user(authorization: Optional[str] = Header(None), request: Request = None) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing token")
     token = authorization.split(" ", 1)[1]
@@ -232,6 +240,7 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     user = await db.crm_users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    _block_if_suspended(user, request.url.path if request else "")
     return user
 
 
@@ -248,6 +257,7 @@ async def get_current_user_from_query(token: Optional[str] = None) -> dict:
     user = await db.crm_users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    _block_if_suspended(user, "")
     return user
 
 
@@ -1239,7 +1249,7 @@ async def list_contacts(
     qry["name"] = {"$not": {"$regex": r"(test|probe|it84|demo hospital|dr\s*test)", "$options": "i"}}
     qry["name_not_in"] = None  # placeholder removed below
     del qry["name_not_in"]
-    qry["$and"] = [{"name": {"$nin": ["Sunrise Care Hospital", "Metro Ambulance Ltd", "UI Tester"]}}]
+    qry["$and"] = [{"name": {"$nin": ["Sunrise Care Hospital", "Metro Ambulance Ltd", "UI Tester"]}}, {"archived": {"$ne": True}}]
     if type:
         qry["type"] = type
     if pipeline_stage:
@@ -6182,6 +6192,19 @@ app.include_router(api)
 import ledger as _ledger  # noqa: E402
 app.include_router(_ledger.create_ledger_router(db, get_current_user, get_current_user_from_query,
                                                 is_provider, EMERGENT_LLM_KEY, _parse_ai_json))
+import user_admin as _user_admin  # noqa: E402
+_uadm = _user_admin.create_user_admin_router(db, get_current_user, set(MASTER_ADMIN_PHONES))
+app.include_router(_uadm["router"])
+
+
+@app.on_event("startup")
+async def _suspension_schema():
+    try:
+        await _uadm["ensure_schema"]()
+    except Exception as ex:  # noqa: BLE001
+        logger.warning(f"suspension schema setup failed: {ex}")
+
+
 import abdm as _abdm  # noqa: E402
 import abdm_hip as _abdm_hip  # noqa: E402
 _hip = _abdm_hip.create_hip_router(db, get_current_user, is_provider, is_internal)

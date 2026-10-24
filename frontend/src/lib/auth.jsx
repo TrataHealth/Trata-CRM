@@ -14,6 +14,13 @@ export function AuthProvider({ children }) {
       try { setUser(JSON.parse(stored)); } catch {}
     }
     setLoading(false);
+    const refresh = () => {
+      if (!localStorage.getItem("trata_token")) return;
+      api.get("/auth/me").then(({ data }) => { localStorage.setItem("trata_user", JSON.stringify(data.user)); setUser(data.user); }).catch(() => {});
+    };
+    if (token) refresh();
+    window.addEventListener("trata:suspended", refresh);
+    return () => window.removeEventListener("trata:suspended", refresh);
   }, []);
 
   const sendOtp = async (phone, loginAs = null) => {
