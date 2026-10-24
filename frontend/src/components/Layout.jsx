@@ -41,6 +41,7 @@ const PROVIDER_NAV = [
   { to: "/provider/beds", label: "Beds", icon: BedDouble, hospitalOnly: true },
   { to: "/provider/staff", label: "Staff", icon: UserCog, hospitalOnly: true },
   { to: "/provider/patients", label: "Patients", icon: HeartPulse, hospitalOnly: true },
+  { to: "/provider/entities", label: "My Entities", icon: Building2, entitiesOnly: true },
   { to: "/provider/activities", label: "My Activities", icon: Activity },
   { to: "/provider/earnings", label: "Earnings & Payouts", icon: Wallet },
   { to: "/provider/ledger", label: "Trata Patients & Billing", icon: Receipt },
@@ -53,8 +54,9 @@ const PROVIDER_NAV = [
 export default function Layout({ children }) {
   const { user, logout, isProvider, isSalesRep, isAdmin } = useAuth();
   const isHospital = user?.provider_type === "hospital";
+  const hasEntities = ["hospital", "pharmacy", "pathologist", "path_lab", "diagnostic_centre"].includes(user?.provider_type);
   const NAV = (isProvider ? PROVIDER_NAV : isSalesRep ? SALES_NAV : ADMIN_NAV).filter(
-    (n) => !n.hospitalOnly || isHospital
+    (n) => (!n.hospitalOnly || isHospital) && (!n.entitiesOnly || hasEntities)
   );
   const navigate = useNavigate();
   const [query, setQuery] = React.useState("");

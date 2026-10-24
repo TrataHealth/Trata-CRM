@@ -10,10 +10,13 @@ import {
   PIPELINE_STAGES, ACTIVITY_CATEGORIES, statusColor, typeLabel, fmtCurrency, relativeTime, stageLabel,
 } from "../lib/constants";
 import KycMirrorCard from "../components/KycMirrorCard";
+import EntitiesPanel from "../components/EntitiesPanel";
+import { useAuth } from "../lib/auth";
 
 export default function ContactDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [tab, setTab] = useState("activity");
   const [aiText, setAiText] = useState("");
@@ -138,6 +141,10 @@ export default function ContactDetail() {
 
       {/* KYC Mirror (Phase 6) — only for ambulance providers */}
       {c.type === "ambulance_provider" && <KycMirrorCard contactId={c.id} />}
+
+      {c.supabase_user_id && ["hospital", "pharmacy", "pathologist", "diagnostic_centre"].includes(c.type) && (user?.is_master_admin || c.assigned_agent_id === user?.id) && (
+        <EntitiesPanel base="/admin/provider-app/contact-entities" params={{ contact_id: c.id }} />
+      )}
 
       {/* Tabs */}
       <div>

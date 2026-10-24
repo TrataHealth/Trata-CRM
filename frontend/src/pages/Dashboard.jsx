@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
+import { ScanSearch, Pill, Droplet, Truck, HeartPulse, Smile, Apple, Brain, PawPrint, Tent } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {
   Users, Activity, Briefcase, AlertTriangle, TrendingUp,
   Stethoscope, Building2, Ambulance, FlaskConical, Cross, User as UserIcon,
   Sparkles, Loader2, X,
 } from "lucide-react";
-import { fmtCurrency, relativeTime, ACTIVITY_CATEGORIES, statusColor, typeLabel } from "../lib/constants";
+import { fmtCurrency, relativeTime, ACTIVITY_CATEGORIES, statusColor, typeLabel, CONTACT_TYPES } from "../lib/constants";
 import { renderInsightsMarkdown, RANGE_OPTIONS } from "../lib/insights";
 import WebhookBridgePanel from "../components/WebhookBridgePanel";
 import AdminBridgePanel from "../components/AdminBridgePanel";
@@ -17,7 +18,9 @@ import {
 
 const TYPE_ICONS = {
   patient: UserIcon, doctor: Stethoscope, hospital: Building2,
-  paramedic: Cross, ambulance_provider: Ambulance, pathologist: FlaskConical,
+  paramedic: Cross, ambulance_provider: Ambulance, pathologist: FlaskConical, diagnostic_centre: ScanSearch,
+  pharmacy: Pill, blood_bank: Droplet, ambulance_driver: Truck, nurse: HeartPulse, dental: Smile,
+  nutritionist: Apple, wellness: Brain, vet: PawPrint, wellness_event: Tent,
 };
 
 export default function Dashboard() {
@@ -145,7 +148,7 @@ export default function Dashboard() {
       {/* User type breakdown */}
       <div>
         <div className="overline mb-3">Users by Role</div>
-        <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-6 gap-2 lg:gap-3" data-testid="user-type-grid">
+        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 xl:grid-cols-8 gap-2 lg:gap-3" data-testid="user-type-grid">
           {userTypes.map(([t, n]) => {
             const Icon = TYPE_ICONS[t] || UserIcon;
             return (
@@ -157,7 +160,7 @@ export default function Dashboard() {
               >
                 <Icon className="h-5 w-5 text-[#0052CC]" strokeWidth={1.75} />
                 <div className="mt-2 lg:mt-3 font-heading text-xl lg:text-2xl font-bold text-[#091E42]">{n}</div>
-                <div className="text-[10px] lg:text-xs text-[#5E6C84] uppercase tracking-wider font-semibold mt-0.5 truncate">{typeLabel(t)}s</div>
+                <div className="text-[10px] lg:text-xs text-[#5E6C84] uppercase tracking-wider font-semibold mt-0.5 leading-tight min-h-[2rem]" title={CONTACT_TYPES.find((x) => x.value === t)?.label}>{CONTACT_TYPES.find((x) => x.value === t)?.label || typeLabel(t)}</div>
               </button>
             );
           })}

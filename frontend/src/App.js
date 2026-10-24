@@ -37,6 +37,7 @@ import AdminLedgerSettings from "./pages/AdminLedgerSettings";
 import AdminLedgerReview from "./pages/AdminLedgerReview";
 import AdminRevenue from "./pages/AdminRevenue";
 import ProviderLedger from "./pages/ProviderLedger";
+import ProviderEntities from "./pages/ProviderEntities";
 import Patients from "./pages/Patients";
 import Abha from "./pages/Abha";
 import SuspendedScreen from "./components/SuspendedScreen";
@@ -132,6 +133,7 @@ function App() {
           <Route path="/provider/activities" element={<RequireAuth providerOnly><ProviderActivities /></RequireAuth>} />
           <Route path="/provider/earnings" element={<RequireAuth providerOnly><ProviderEarnings /></RequireAuth>} />
           <Route path="/provider/ledger" element={<RequireAuth providerOnly><ProviderLedger /></RequireAuth>} />
+          <Route path="/provider/entities" element={<RequireAuth providerOnly><ProviderEntities /></RequireAuth>} />
           <Route path="/provider/profile" element={<RequireAuth providerOnly><ProviderProfile /></RequireAuth>} />
 
           <Route path="*" element={<Navigate to="/" replace />} />

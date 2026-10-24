@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Avatar } from "./Contacts";
 import { PIPELINE_STAGES, CONTACT_TYPES, relativeTime, fmtCurrency, typeLabel } from "../lib/constants";
 import { Search, Phone, UserPlus } from "lucide-react";
-import OnboardProviderModal from "../components/OnboardProviderModal";
+import ProviderAppOnboardModal from "../components/ProviderAppOnboardModal";
 
 const STAGE_COLOR = Object.fromEntries(PIPELINE_STAGES.map((s) => [s.value, s.color]));
 const STAGE_LABEL = Object.fromEntries(PIPELINE_STAGES.map((s) => [s.value, s.label]));
@@ -54,13 +54,10 @@ export default function AgentLeads() {
       </div>
 
       {onboardOpen && (
-        <OnboardProviderModal
+        <ProviderAppOnboardModal
           onClose={() => setOnboardOpen(false)}
-          onCreated={(created) => {
-            setOnboardOpen(false);
-            setBump((b) => b + 1);
-            if (created?.contact?.id) navigate(`/contacts/${created.contact.id}`);
-          }}
+          onCreated={() => setBump((b) => b + 1)}
+          onOpen={(cid) => { setOnboardOpen(false); navigate(`/contacts/${cid}`); }}
         />
       )}
 

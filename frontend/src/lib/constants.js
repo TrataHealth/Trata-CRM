@@ -6,6 +6,15 @@ export const CONTACT_TYPES = [
   { value: "ambulance_provider", label: "Ambulance", icon: "Ambulance" },
   { value: "pathologist", label: "Pathology Labs", icon: "FlaskConical" },
   { value: "diagnostic_centre", label: "Diagnostic Centres", icon: "ScanSearch" },
+  { value: "pharmacy", label: "Pharmacies", icon: "Pill" },
+  { value: "blood_bank", label: "Blood Banks", icon: "Droplet" },
+  { value: "ambulance_driver", label: "Ambulance Drivers", icon: "Truck" },
+  { value: "nurse", label: "Nurses", icon: "HeartPulse" },
+  { value: "dental", label: "Dental Clinics", icon: "Smile" },
+  { value: "nutritionist", label: "Nutritionists", icon: "Apple" },
+  { value: "wellness", label: "Mental Wellness", icon: "Brain" },
+  { value: "vet", label: "Veterinarians", icon: "PawPrint" },
+  { value: "wellness_event", label: "Health Camps & Retreats", icon: "Tent" },
 ];
 
 export const TEAM_ROLES = [

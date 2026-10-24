@@ -1824,6 +1824,14 @@ _SB_ROLE_TO_CRM_TYPE = {
     "pharmacist":         "pharmacy",
     "lab":                "pathologist",
     "lab_tech":           "pathologist",
+    "dental":             "dental",
+    "nutritionist":       "nutritionist",
+    "wellness":           "wellness",
+    "vet":                "vet",
+    "blood_bank":         "blood_bank",
+    "wellness_event":     "wellness_event",
+    "ambulance_driver":   "ambulance_driver",
+    "nurse":              "nurse",
 }
 
 

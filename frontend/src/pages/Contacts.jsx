@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { CONTACT_TYPES, PIPELINE_STAGES, typeLabel, fmtCurrency, relativeTime } from "../lib/constants";
 import { Filter, Download, CheckCircle2, XCircle, Search, UserPlus, Trash2, Loader2 } from "lucide-react";
-import OnboardProviderModal from "../components/OnboardProviderModal";
+import ProviderAppOnboardModal from "../components/ProviderAppOnboardModal";
 import { BulkBar, BulkActionDialog } from "../components/users/BulkActions";
 import { Ban, Archive } from "lucide-react";
 import { toast } from "sonner";
@@ -147,13 +147,10 @@ export default function Contacts() {
       </div>
 
       {onboardOpen && (
-        <OnboardProviderModal
-          onClose={() => setOnboardOpen(false)}
-          onCreated={(created) => {
-            setOnboardOpen(false);
-            fetch();
-            if (created?.contact?.id) navigate(`/contacts/${created.contact.id}`);
-          }}
+        <ProviderAppOnboardModal
+          onClose={() => { setOnboardOpen(false); fetch(); }}
+          onCreated={() => {}}
+          onOpen={(cid) => navigate(`/contacts/${cid}`)}
         />
       )}
 

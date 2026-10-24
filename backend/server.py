@@ -1026,7 +1026,8 @@ async def dashboard_stats(range_key: str = Query("7d", alias="range"), current=D
 
     total_contacts = await db.contacts.count_documents(_REAL_ONLY)
     by_type = {}
-    for t in ["patient", "doctor", "hospital", "paramedic", "ambulance_provider", "pathologist", "diagnostic_centre"]:
+    for t in ["patient", "doctor", "hospital", "paramedic", "ambulance_provider", "pathologist", "diagnostic_centre",
+              "pharmacy", "blood_bank", "ambulance_driver", "nurse", "dental", "nutritionist", "wellness", "vet", "wellness_event"]:
         by_type[t] = await db.contacts.count_documents({**_REAL_ONLY, "type": t})
 
     verified = await db.contacts.count_documents({**_REAL_ONLY, "is_verified": True})
@@ -6210,6 +6211,9 @@ import ledger as _ledger  # noqa: E402
 app.include_router(_ledger.create_ledger_router(db, get_current_user, get_current_user_from_query,
                                                 is_provider, EMERGENT_LLM_KEY, _parse_ai_json))
 import user_admin as _user_admin  # noqa: E402
+import provider_onboard as _provider_onboard  # noqa: E402
+app.include_router(_provider_onboard.create_provider_onboard_router(db, get_current_user, is_internal))
+app.include_router(_provider_onboard.create_entities_router(db, get_current_user, is_provider))
 _uadm = _user_admin.create_user_admin_router(db, get_current_user, set(MASTER_ADMIN_PHONES))
 app.include_router(_uadm["router"])
 
