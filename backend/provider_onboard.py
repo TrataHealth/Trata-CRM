@@ -12,7 +12,7 @@ import html as _html
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 import emailer
 import ledger_docs as docs
@@ -115,8 +115,130 @@ async def _org_for_uid(uid: str, org_name: Optional[str] = None) -> Dict[str, An
     return _ORGS[uid]
 
 
-def _entity_routes(r: APIRouter, prefix: str, resolve):
-    """Registers list/create/update/delete entity routes; `resolve(current, contact_id)` returns the org."""
+ALLOWED_CHILDREN = {"hospital": {"hospital", "hospital_branch", "pharmacy", "path_lab", "diagnostic_centre", "poly_clinic", "health_centre", "ambulance"},
+                    "pharmacy": {"pharmacy"}, "path_lab": {"path_lab", "diagnostic_centre"},
+                    "diagnostic_centre": {"path_lab", "diagnostic_centre"}, "ambulance": {"ambulance"}}
+REQUIRED = ("entity_kind", "name", "contact_person", "dedicated_phone", "address", "city")
+MAX_ROWS = 500
+
+
+def _row_errors(row: Dict[str, Any], root: str) -> list:
+    errs = [f"{k.replace('_', ' ')} is required" for k in REQUIRED if not str(row.get(k) or "").strip()]
+    if row.get("entity_kind") and row["entity_kind"] not in ALLOWED_CHILDREN.get(root, set()):
+        errs.append(f"type '{row['entity_kind']}' is not allowed here")
+    try:
+        EntityBody(**row)
+    except ValidationError as ex:
+        errs += [f"{'.'.join(str(x) for x in e['loc'])}: {e['msg']}" for e in ex.errors()]
+    return errs
+
+
+def _clean(row: Dict[str, Any]) -> Dict[str, Any]:
+    keep = set(EntityBody.model_fields)
+    return {k: (str(v).strip() if isinstance(v, str) else v) for k, v in row.items() if k in keep and v not in ("", None)}
+
+
+class BulkBody(BaseModel):
+    rows: list = Field(default_factory=list)
+    pending: list = Field(default_factory=list)
+
+
+class PendingBody(BaseModel):
+    data: Dict[str, Any]
+
+
+def _entity_routes(r: APIRouter, prefix: str, resolve, db):
+    """Registers list/create/update/delete/bulk/pending entity routes; `resolve(current, contact_id)` returns the org."""
+    async def save_pending(org, current, row, errors, source):
+        now = datetime.now(timezone.utc).isoformat()
+        await db.entity_import_pending.insert_one({"id": uuid.uuid4().hex, "org_id": org["id"], "data": _clean(row), "errors": errors,
+                                                   "source": source, "by": current["id"], "by_name": current.get("name"), "created_at": now})
+
+    async def create_one(org, row):
+        try:
+            await _call("POST", f"/api/org/{org['id']}/entity", _clean(row))
+            return None
+        except HTTPException as ex:
+            return str(ex.detail)
+
+    async def run_bulk(job_id, org, current, rows):
+        for i, row in enumerate(rows):
+            err = await create_one(org, row)
+            if err:
+                await save_pending(org, current, row, [err], "import_failed")
+            await db.entity_import_jobs.update_one({"id": job_id}, {"$inc": {"done": 1, "failed" if err else "created": 1},
+                                                                  "$push": {"results": {"row": i, "name": row.get("name"), "error": err}}})
+        await db.entity_import_jobs.update_one({"id": job_id}, {"$set": {"status": "done", "finished_at": datetime.now(timezone.utc).isoformat()}})
+
+    @r.post(prefix + "/bulk")
+    async def bulk_import(body: BulkBody, contact_id: str = "", current=Depends(resolve.dep)):
+        org = await resolve(current, contact_id)
+        if len(body.rows) + len(body.pending) > MAX_ROWS:
+            raise HTTPException(status_code=400, detail=f"Up to {MAX_ROWS} rows per file")
+        good, bad = [], list(body.pending)
+        for row in body.rows:
+            (bad if _row_errors(_clean(row), org["root_kind"]) else good).append(row)
+        for row in bad:
+            await save_pending(org, current, row, _row_errors(_clean(row), org["root_kind"]), "needs_fix")
+        job_id = uuid.uuid4().hex
+        await db.entity_import_jobs.insert_one({"id": job_id, "org_id": org["id"], "by": current["id"], "status": "running", "total": len(good),
+                                                "done": 0, "created": 0, "failed": 0, "pending_saved": len(bad), "results": [],
+                                                "created_at": datetime.now(timezone.utc).isoformat()})
+        t = asyncio.create_task(run_bulk(job_id, org, current, good))
+        _TASKS.add(t)
+        t.add_done_callback(_TASKS.discard)
+        return {"job_id": job_id, "total": len(good), "pending_saved": len(bad)}
+
+    @r.get(prefix + "/bulk/{job_id}")
+    async def bulk_status(job_id: str, contact_id: str = "", current=Depends(resolve.dep)):
+        org = await resolve(current, contact_id)
+        j = await db.entity_import_jobs.find_one({"id": job_id, "org_id": org["id"]}, {"_id": 0})
+        if not j:
+            raise HTTPException(status_code=404, detail="Import not found")
+        return j
+
+    @r.get(prefix + "/pending")
+    async def list_pending(contact_id: str = "", current=Depends(resolve.dep)):
+        org = await resolve(current, contact_id)
+        items = await db.entity_import_pending.find({"org_id": org["id"]}, {"_id": 0}).sort("created_at", 1).to_list(MAX_ROWS)
+        return {"items": items}
+
+    async def pending_doc(org, pid):
+        d = await db.entity_import_pending.find_one({"id": pid, "org_id": org["id"]}, {"_id": 0})
+        if not d:
+            raise HTTPException(status_code=404, detail="Pending row not found")
+        return d
+
+    @r.put(prefix + "/pending/{pid}")
+    async def update_pending(pid: str, body: PendingBody, contact_id: str = "", current=Depends(resolve.dep)):
+        org = await resolve(current, contact_id)
+        await pending_doc(org, pid)
+        data = _clean(body.data)
+        errors = _row_errors(data, org["root_kind"])
+        await db.entity_import_pending.update_one({"id": pid}, {"$set": {"data": data, "errors": errors, "updated_at": datetime.now(timezone.utc).isoformat()}})
+        return {"id": pid, "data": data, "errors": errors}
+
+    @r.post(prefix + "/pending/{pid}/import")
+    async def import_pending(pid: str, contact_id: str = "", current=Depends(resolve.dep)):
+        org = await resolve(current, contact_id)
+        d = await pending_doc(org, pid)
+        errors = _row_errors(d["data"], org["root_kind"])
+        if not errors:
+            err = await create_one(org, d["data"])
+            errors = [err] if err else []
+        if errors:
+            await db.entity_import_pending.update_one({"id": pid}, {"$set": {"errors": errors}})
+            raise HTTPException(status_code=400, detail="; ".join(errors))
+        await db.entity_import_pending.delete_one({"id": pid})
+        return {"success": True}
+
+    @r.delete(prefix + "/pending/{pid}")
+    async def discard_pending(pid: str, contact_id: str = "", current=Depends(resolve.dep)):
+        org = await resolve(current, contact_id)
+        await pending_doc(org, pid)
+        await db.entity_import_pending.delete_one({"id": pid})
+        return {"success": True}
+
     @r.get(prefix)
     async def list_entities(contact_id: str = "", current=Depends(resolve.dep)):
         org = await resolve(current, contact_id)
@@ -270,7 +392,7 @@ def create_provider_onboard_router(db, get_current_user, is_internal) -> APIRout
             raise HTTPException(status_code=400, detail="This provider is not linked to the Trata network yet")
         return await _org_for_uid(c["supabase_user_id"], c.get("name"))
     contact_org.dep = get_current_user
-    _entity_routes(r, "/contact-entities", contact_org)
+    _entity_routes(r, "/contact-entities", contact_org, db)
     return r
 
 
@@ -303,5 +425,5 @@ def create_entities_router(db, get_current_user, is_provider) -> APIRouter:
             raise HTTPException(status_code=400, detail="Account not linked to the Trata network yet")
         return await _org_for_uid(current["supabase_user_id"])
     own_org.dep = get_current_user
-    _entity_routes(r, "/entities", own_org)
+    _entity_routes(r, "/entities", own_org, db)
     return r

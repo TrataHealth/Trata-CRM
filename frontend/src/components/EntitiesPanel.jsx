@@ -1,15 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { Building2, Plus, Loader2, X } from "lucide-react";
+import { Building2, Plus, Loader2, X, Upload } from "lucide-react";
 import api from "../lib/api";
 
-// Mirrors ALLOWED_CHILDREN in the Provider app (backend/routes/organisations.py).
-const KIND_LABEL = { hospital: "Hospital", hospital_branch: "Hospital branch", pharmacy: "Pharmacy", path_lab: "Path lab",
-  diagnostic_centre: "Diagnostic centre", poly_clinic: "Poly clinic", health_centre: "Health centre", ambulance: "Ambulance unit" };
-const ALLOWED = { hospital: Object.keys(KIND_LABEL), pharmacy: ["pharmacy"], path_lab: ["path_lab", "diagnostic_centre"],
-  diagnostic_centre: ["path_lab", "diagnostic_centre"], ambulance: ["ambulance"] };
-const FIELDS = [["name", "Entity name", true, true], ["contact_person", "Admin / owner name", true], ["dedicated_phone", "Dedicated login phone", true],
-  ["email", "Email"], ["address", "Address", true, true], ["city", "City", true], ["state", "State"], ["pincode", "Pincode"],
-  ["license_number", "Licence number"], ["gst_number", "GST number"]];
+import { KIND_LABEL, ALLOWED, FIELDS } from "../lib/entityFields";
+import BulkImportDialog from "./entities/BulkImportDialog";
+import PendingRows from "./entities/PendingRows";
+
 const inp = "w-full px-3 py-2 text-sm border border-[#DFE1E6] rounded-md focus:border-[#4C9AFF] outline-none";
 
 function AddForm({ kinds, onSave, onCancel }) {
@@ -60,7 +56,9 @@ function EntityRow({ e, onRemove, busy }) {
 
 export default function EntitiesPanel({ base, params }) {
   const [state, setState] = useState(null); const [err, setErr] = useState(""); const [adding, setAdding] = useState(false);
-  const load = () => api.get(base, { params }).then((r) => { setState(r.data); setErr(""); }).catch((e) => setErr(e?.response?.data?.detail || "Could not load entities"));
+  const [bulk, setBulk] = useState(false); const [pending, setPending] = useState([]);
+  const load = () => Promise.all([api.get(base, { params }), api.get(`${base}/pending`, { params })])
+    .then(([r, p]) => { setState(r.data); setPending(p.data.items); setErr(""); }).catch((e) => setErr(e?.response?.data?.detail || "Could not load entities"));
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [base, JSON.stringify(params)]);
   const add = async (body) => { await api.post(base, body, { params }); setAdding(false); load(); };
   const [removing, setRemoving] = useState(null);
@@ -77,13 +75,18 @@ export default function EntitiesPanel({ base, params }) {
       <div className="flex items-center justify-between gap-3 mb-3">
         <div><div className="font-heading font-bold text-[#091E42] flex items-center gap-2"><Building2 className="h-4 w-4 text-[#0052CC]" /> Internal entities <span className="text-[#5E6C84] font-medium" data-testid="entities-count">/ {active.length}</span></div>
           <p className="text-xs text-[#5E6C84] mt-0.5">{state?.org?.org_name ? `${state.org.org_name} — ` : ""}branches and units, each with its own login.</p></div>
-        {state && !adding && <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-md text-white bg-[#0052CC] hover:bg-[#0747A6]" data-testid="entity-add-btn"><Plus className="h-4 w-4" /> Add entity</button>}
+        {state && !adding && <div className="flex gap-2">
+          <button onClick={() => setBulk(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-md border border-[#DFE1E6] text-[#091E42] hover:bg-[#F8F9FA]" data-testid="entity-bulk-btn"><Upload className="h-4 w-4" /> Bulk import</button>
+          <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-md text-white bg-[#0052CC] hover:bg-[#0747A6]" data-testid="entity-add-btn"><Plus className="h-4 w-4" /> Add entity</button></div>}
       </div>
       {err && <div className="text-sm text-[#BF2600] bg-[#FFEBE6] rounded px-3 py-2" data-testid="entities-error">{err}</div>}
       {!state && !err && <div className="text-sm text-[#5E6C84] flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>}
       {adding && <AddForm kinds={kinds} onSave={add} onCancel={() => setAdding(false)} />}
       {state && (state.entities.length ? <div className="mt-2">{state.entities.map((e) => <EntityRow key={e.id} e={e} onRemove={remove} busy={removing === e.id} />)}</div>
         : !adding && <div className="text-sm text-[#5E6C84] py-4 flex items-center gap-2" data-testid="entities-empty">No entities yet.</div>)}
+      {state && <PendingRows items={pending} kinds={kinds} base={base} params={params} onChanged={load} />}
+      {bulk && <BulkImportDialog base={base} params={params} kinds={kinds} existingPhones={new Set(active.map((e) => e.dedicated_phone))}
+        onClose={() => setBulk(false)} onFinished={load} />}
     </div>
   );
 }
