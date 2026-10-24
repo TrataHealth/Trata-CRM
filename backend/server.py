@@ -577,6 +577,8 @@ async def verify_otp(data: LoginVerifyOTP):
     login_as = (data.login_as or "").strip().lower()  # "provider" | "staff" | ""
 
     existing = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
+    if existing and existing.get("disabled") and not existing.get("is_master_admin"):
+        raise HTTPException(status_code=403, detail="This account was deleted. Contact Trata to restore it.")
 
     # ── Branch 1: explicit "sign in as staff" ────────────────────────────
     if login_as == "staff":
@@ -706,6 +708,8 @@ async def set_password(data: PasswordSet, authorization: Optional[str] = Header(
 @api.post("/auth/login-password")
 async def login_password(data: PasswordLogin, authorization: Optional[str] = Header(None)):
     user = await _user_from_temp(authorization)
+    if user.get("disabled") and not user.get("is_master_admin"):
+        raise HTTPException(status_code=403, detail="This account was deleted. Contact Trata to restore it.")
     if not user.get("password_hash"):
         raise HTTPException(status_code=400, detail="Password not set. Use set-password first.")
     if not verify_password(data.password, user["password_hash"]):
@@ -717,6 +721,19 @@ async def login_password(data: PasswordLogin, authorization: Optional[str] = Hea
 
 @api.get("/auth/me")
 async def me(current=Depends(get_current_user)):
+    if is_provider(current) and current.get("supabase_user_id") and _supabase_ready():
+        try:
+            pool = await sb.get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT is_suspended, suspended_at, suspended_reason FROM public.users WHERE id = $1",
+                                          current["supabase_user_id"])
+            if row and bool(row["is_suspended"]) != bool(current.get("suspended")):
+                patch = {"suspended": bool(row["is_suspended"]), "suspended_reason": row["suspended_reason"],
+                         "suspended_at": row["suspended_at"].isoformat() if row["suspended_at"] else None}
+                await db.crm_users.update_one({"id": current["id"]}, {"$set": patch})
+                current = {**current, **patch}
+        except Exception as e:  # noqa: BLE001 — never fail /me on a Supabase hiccup
+            logger.warning(f"suspension read-back skipped: {e}")
     return {"user": _safe_user(current)}
 
 

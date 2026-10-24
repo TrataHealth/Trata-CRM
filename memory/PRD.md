@@ -383,3 +383,11 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - India proxy 68.183.247.212:3128 currently timing out → no live ABDM round trips; needs CRM proxy user from Trata ABDM admin.
 - Deploy at https://crm.tratahealth.com for gateway forwarding; ask Patient team to send a test callback.
 - SMS provider for patient-initiated link OTP; M3 HIU flows.
+
+## Iteration 19 — Bulk suspend/delete, Network→Activities merge, live badge (Oct 2026)
+- Trata Users (/contacts): master-admin checkboxes + bulk bar (Suspend / Restore access / Delete) with reason dialog; "Deleted users" view with Restore and days-left. Backend `user_admin.py`: POST /api/admin/users/bulk, GET /api/admin/users/archived, cron POST /api/admin/cron/erase-archived (daily; erases 30 days after delete: profile rows removed, users row deleted or anonymised if FK history).
+- Supabase users new columns: is_suspended, suspended_at, suspended_reason, suspended_by, purge_after. Contract for Provider/TrataX: /app/memory/SUSPENSION_CONTRACT.md.
+- CRM enforcement: suspended providers get 423 on every API except /auth/me|logout|refresh; frontend shows full-screen SuspendedScreen (reason, auto-refresh). Deleted users blocked at login with clear message. /auth/me reads back Supabase is_suspended. Emails on suspend/restore (Resend).
+- Network page merged into Activities (Live chips: Emergency cases, Patients, KYC manager, Network stats; admin only); /network redirects.
+- Header badge now shows LIVE · shared DB (was misleading "DEMO DATA" tied to unused legacy Admin-App REST sync).
+- Tests: tests/test_user_admin_bulk.py (27 pass), test_user_admin_erase_cron.py.

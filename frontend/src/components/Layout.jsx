@@ -70,8 +70,11 @@ export default function Layout({ children }) {
   const loadSync = React.useCallback(async () => {
     if (isProvider) return;
     try {
-      const { data } = await api.get("/admin/sync/status");
-      setSync(data);
+      const [up, db] = await Promise.all([
+        api.get("/admin/sync/status").then((r) => r.data).catch(() => ({})),
+        api.get("/supabase/status").then((r) => r.data).catch(() => ({ connected: false })),
+      ]);
+      setSync({ ...up, shared_db: db });
     } catch {}
   }, [isProvider]);
 
@@ -321,11 +324,13 @@ function SearchSection({ title, items, onClick, renderSub }) {
 
 function DataSourceBadge({ sync, syncing, onSync, hidden }) {
   if (hidden) return null;
-  const live = sync?.enabled;
-  const last = sync?.last?.last_synced_at;
-  const tip = live
-    ? `Live · ${sync?.base_url}\nLast sync: ${last ? relativeTime(last) : "never"}`
-    : "Demo mode — set UPSTREAM_API_URL in backend/.env to connect to live Trata-admin backend";
+  if (!sync) return null;
+  const upstream = sync.enabled;
+  const live = upstream || sync.shared_db?.connected;
+  const last = sync.last?.last_synced_at;
+  const tip = upstream
+    ? `Live · ${sync.base_url}\nLast sync: ${last ? relativeTime(last) : "never"}`
+    : live ? "Live · reading the shared Trata database directly (all 4 apps)" : "Shared Trata database unreachable — showing cached CRM data";
   return (
     <div
       data-testid="data-source-badge"
@@ -338,6 +343,7 @@ function DataSourceBadge({ sync, syncing, onSync, hidden }) {
       {live ? (
         <>
           <span>LIVE</span>
+          {upstream ? <>
           <span className="font-normal text-[#42526E] hidden md:inline">· {last ? relativeTime(last) : "syncing…"}</span>
           <button
             onClick={onSync}
@@ -348,9 +354,10 @@ function DataSourceBadge({ sync, syncing, onSync, hidden }) {
             <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
             {syncing ? "Syncing" : "Sync"}
           </button>
+          </> : <span className="font-normal text-[#42526E] hidden md:inline">· shared DB</span>}
         </>
       ) : (
-        <span>DEMO DATA</span>
+        <span>OFFLINE</span>
       )}
     </div>
   );

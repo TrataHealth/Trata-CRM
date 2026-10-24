@@ -1,0 +1,44 @@
+{
+  "summary": "Tested master-admin bulk Suspend/Restore access/Delete/Restore on /contacts, the suspended-provider screen, the erase cron, and the Network page merged into Activities. Backend: 27 pytest cases in test_user_admin_bulk.py; 26 pass, 1 fails (deleted users can still log in). Also 1 cron end-to-end test that erased probe B, passing. Frontend: all requested flows pass after one backend bug fix (below). Every probe or sample row was suspended or archived and then restored, and all were cleaned up afterwards.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/admin/users/bulk", "issue": "FIXED by testing agent. The self-skip check `c.supabase_user_id == current.supabase_user_id` was None == None for the master admin (who has no supabase_user_id), so every Mongo-only contact (leads/prospects) was skipped with the toast 'N skipped (master admin)'. Those contacts could never be suspended or deleted. The check is now guarded with `current.get('supabase_user_id') and ...`. Retested: works.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "/api/auth/send-otp, /auth/verify-otp, /auth/login-password", "issue": "A deleted (archived) user can complete the full phone -> OTP -> password login and is issued an access token. Every later call returns 401 'This account has been deleted', so in the UI the user is silently sent back to /login with no message. Reject at verify-otp/login-password when crm_users.disabled or the contact is archived, with a clear message such as 'This account was deleted. Contact Trata to restore it.'"},
+      {"endpoint": "GET /api/admin/users/archived", "issue": "days_left uses floor (`.days`), so a user deleted just now shows '29 days' instead of 30. Use ceil."},
+      {"endpoint": "erase_due (cron)", "issue": "Works: probe B's contact and crm_user were removed, and the Supabase row was anonymised to 'Deleted user' / phone 'del-<id>' because of an FK from emergency_cases. Anonymised rows keep is_archived=TRUE forever, and test fixture cleanup (by phone) can no longer find them. An older anonymised row ba59ae87-6d85-4e6e-ad41-95d26d79a506 (probably from E1's manual check) is still in the shared Supabase. Please check it and remove it if it is a probe."},
+      {"endpoint": "Suspension sync", "issue": "Supabase users.is_suspended is written but never read back. A suspension set by the Provider/TrataX teams, or a crm_user re-materialised from the Supabase fallback, will not be blocked in the CRM. Consider checking is_suspended in the Supabase fallback login and sync."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Deleted user login", "issue": "After the password step, the user is sent back to /login with no error or toast (see backend minor issue).", "affected_selectors": ["login-password-btn", "login-error"]}
+    ],
+    "design_issues": [
+      {"screen": "/contacts bulk dialog", "issues": ["The skip toast always says 'skipped (master admin)', even when the reason is 'yourself'. Use the reason returned in `skipped[].why`."]},
+      {"screen": "/activities as sales rep", "issues": ["The overline still reads 'LIVE OPERATIONS' and the heading reads 'Activities', while the sidebar says 'My Activity Log'. Cosmetic."]},
+      {"screen": "/contacts?view=deleted", "issues": ["The type tabs and search are hidden, so large archived lists cannot be filtered. Minor."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_user_admin_bulk.py", "/app/backend/tests/test_user_admin_erase_cron.py", "/app/test_reports/pytest/user_admin_bulk.xml"],
+  "action_items": [
+    "Block deleted/archived users at verify-otp/login-password with a clear error message",
+    "Use ceil for days_left in /admin/users/archived",
+    "Show the real skip reason in the bulk toast",
+    "Optional: read Supabase is_suspended back when materialising or syncing crm_users",
+    "Check the anonymised Supabase row ba59ae87-... and delete it if it is a test probe"
+  ],
+  "critical_code_review_comments": [
+    "user_admin.bulk: the self-skip None==None bug (fixed). Prefer comparing current['id'] to the crm_user linked to the contact.",
+    "server._block_if_suspended raises 401 for disabled users, but the login endpoints never check disabled, so tokens are still issued.",
+    "Contacts.jsx fetch() has no try/catch: an API error leaves loading=true forever."
+  ],
+  "updated_files": ["/app/backend/user_admin.py", "/app/backend/tests/test_user_admin_bulk.py", "/app/backend/tests/test_user_admin_erase_cron.py"],
+  "success_rate": {"backend": "96% (26/27 + cron e2e passing)", "frontend": "100% of requested flows after the fix"},
+  "seed_data_creation": "Temporary Mongo-only contacts 'Zeta QA Sample One/Two' (deleted). Probe fixtures were set up and cleaned twice. Probe B was erased by the cron, and its anonymised Supabase row was deleted manually.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `python ledger_probe_fixtures.py setup` before test_user_admin_bulk.py; its module teardown restores and unsuspends. test_user_admin_erase_cron.py DESTROYS probe B: run it only when no other archived contacts exist (it has a guard), and afterwards delete the 'del-<uid>' Supabase row by id. UI login can be skipped by setting localStorage trata_token/trata_user. Probe names are hidden in /contacts, so use Mongo-only sample contacts for bulk-bar UI tests. The Admin App REST source is unreachable in preview (external)."
+}

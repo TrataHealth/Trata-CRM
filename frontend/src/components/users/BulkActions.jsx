@@ -26,7 +26,7 @@ export function BulkActionDialog({ action, ids, onClose, onDone }) {
     try {
       const { data } = await api.post("/admin/users/bulk", { contact_ids: ids, action, reason: reason.trim() || null });
       const sent = Object.values(data.emails || {}).filter((v) => v === "sent").length;
-      toast.success(`${c.verb}: ${data.updated} user${data.updated === 1 ? "" : "s"}${sent ? ` · ${sent} emailed` : ""}${data.skipped.length ? ` · ${data.skipped.length} skipped (master admin)` : ""}`);
+      toast.success(`${c.verb}: ${data.updated} user${data.updated === 1 ? "" : "s"}${sent ? ` · ${sent} emailed` : ""}${data.skipped.length ? ` · skipped: ${data.skipped.map((x) => `${x.name || "user"} (${x.why})`).join(", ")}` : ""}`);
       onDone();
     } catch (e) { toast.error(e?.response?.data?.detail || "Action failed"); } finally { setBusy(false); }
   };

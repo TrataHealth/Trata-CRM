@@ -45,7 +45,7 @@ function Activities() {
     <div className="p-4 sm:p-6 lg:p-8 space-y-5 lg:space-y-6" data-testid="activities-page">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="overline">Live Operations</div>
+          <div className="overline">{isAdmin ? "Live Operations" : "My activity log"}</div>
           <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
             Activities {!view && <span className="text-[#5E6C84] font-medium">/ {total.toLocaleString()}</span>}
           </h1>

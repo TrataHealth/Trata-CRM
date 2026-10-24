@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import math
 import html as _html
 import logging
 import os
@@ -90,7 +91,7 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
         contacts = await db.contacts.find(q, {"_id": 0}).to_list(500)
         skipped, done = [], []
         for c in contacts:
-            if (c.get("phone") or "")[-10:] in master_phones or c.get("supabase_user_id") == current.get("supabase_user_id"):
+            if (c.get("phone") or "")[-10:] in master_phones or (current.get("supabase_user_id") and c.get("supabase_user_id") == current.get("supabase_user_id")):
                 skipped.append({"id": c["id"], "name": c.get("name"), "why": "master admin / yourself"})
                 continue
             done.append(c)
@@ -142,7 +143,7 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
         now = datetime.now(timezone.utc)
         for x in rows:
             pa = x.get("purge_after")
-            x["days_left"] = max(0, (datetime.fromisoformat(pa) - now).days) if pa else None
+            x["days_left"] = max(0, math.ceil((datetime.fromisoformat(pa) - now).total_seconds() / 86400)) if pa else None
         return {"items": rows, "total": len(rows)}
 
     async def erase_due() -> Dict[str, int]:
