@@ -338,6 +338,7 @@ export default function HospitalCommandCenter() {
         es.addEventListener("snapshot", (ev) => {
           try {
             const data = JSON.parse(ev.data);
+            if (!data?.hospital_id || !Array.isArray(data.incoming)) return;
             setState({ loading: false, data, err: "" });
             setLastUpdated(Date.now());
           } catch {

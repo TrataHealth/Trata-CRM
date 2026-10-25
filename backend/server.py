@@ -3052,7 +3052,14 @@ async def export_contacts_csv(type: Optional[str] = None, current=Depends(requir
 # ---------- Notifications ----------
 @api.get("/notifications")
 async def list_notifications(limit: int = 30, current=Depends(get_current_user)):
-    items = await db.notifications.find({}, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    if is_provider(current):
+        pid = current.get("provider_id")
+        f = {"$or": [{"user_id": current.get("supabase_user_id") or current["id"]}, *([{"provider_id": pid}] if pid else [])]}
+    elif is_sales_rep(current):
+        f = {"$or": [{"audience": {"$in": [None, "all", "agents"]}}, {"agent_id": current["id"]}]}
+    else:
+        f = {"audience": {"$ne": "provider"}, "user_id": {"$in": [None, current["id"]]}}
+    items = await db.notifications.find(f, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
     return {"items": items}
 
 

@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity, BedDouble, UserCog,
   BarChart3, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
   Building2, ClipboardList, IdCard, Wallet, Compass, Trophy, Settings as SettingsIcon, ShieldCheck,
-  UserPlus, HeartPulse, Receipt, Fingerprint, Pill,
+  UserPlus, HeartPulse, Receipt, Fingerprint, Pill, ShoppingBag, FileText,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import api from "../lib/api";
@@ -16,7 +16,6 @@ const ADMIN_NAV = [
   { to: "/contacts", label: "Trata Users", icon: Users },
   { to: "/pipeline", label: "Pipeline", icon: GitBranch },
   { to: "/admin/onboarding", label: "Onboarding", icon: UserPlus },
-  { to: "/pharmacy", label: "Pharmacies", icon: Pill },
   { to: "/admin/patients", label: "Patients", icon: HeartPulse },
   { to: "/abha", label: "ABHA (ABDM)", icon: Fingerprint },
   { to: "/admin/ledger", label: "Provider Ledger", icon: Receipt },
@@ -38,12 +37,15 @@ const SALES_NAV = [
 
 const PROVIDER_NAV = [
   { to: "/provider", label: "My Dashboard", icon: LayoutDashboard, exact: true },
+  { to: "/pharmacy/orders", label: "Medicine Orders", icon: ShoppingBag, pharmacyOnly: true },
+  { to: "/pharmacy/prescriptions", label: "Prescriptions", icon: FileText, pharmacyOnly: true },
+  { to: "/pharmacy/stock", label: "Stock", icon: Pill, pharmacyOnly: true },
+  { to: "/pharmacy/sales", label: "Sales", icon: BarChart3, pharmacyOnly: true },
   { to: "/provider/command-center", label: "Command Center", icon: Activity, hospitalOnly: true },
   { to: "/provider/beds", label: "Beds", icon: BedDouble, hospitalOnly: true },
   { to: "/provider/staff", label: "Staff", icon: UserCog, hospitalOnly: true },
   { to: "/provider/patients", label: "Patients", icon: HeartPulse, hospitalOnly: true },
   { to: "/provider/entities", label: "My Entities", icon: Building2, entitiesOnly: true },
-  { to: "/pharmacy", label: "Pharmacy", icon: Pill, pharmacyOnly: true },
   { to: "/provider/activities", label: "My Activities", icon: Activity },
   { to: "/provider/earnings", label: "Earnings & Payouts", icon: Wallet },
   { to: "/provider/ledger", label: "Trata Patients & Billing", icon: Receipt },
@@ -56,9 +58,9 @@ const PROVIDER_NAV = [
 export default function Layout({ children }) {
   const { user, logout, isProvider, isSalesRep, isAdmin } = useAuth();
   const isHospital = user?.provider_type === "hospital";
-  const hasEntities = ["hospital", "pharmacy", "pathology", "pathologist", "path_lab", "diagnostic_centre"].includes(user?.provider_type);
+  const hasEntities = ["hospital", "pharmacy", "pathology", "pathologist", "path_lab", "diagnostic_centre", "ambulance"].includes(user?.provider_type);
   const NAV = (isProvider ? PROVIDER_NAV : isSalesRep ? SALES_NAV : ADMIN_NAV).filter(
-    (n) => (!n.hospitalOnly || isHospital) && (!n.entitiesOnly || hasEntities) && (!n.pharmacyOnly || ["pharmacy", "hospital"].includes(user?.provider_type))
+    (n) => (!n.hospitalOnly || isHospital) && (!n.entitiesOnly || hasEntities) && (!n.pharmacyOnly || user?.provider_type === "pharmacy")
   );
   const navigate = useNavigate();
   const [query, setQuery] = React.useState("");

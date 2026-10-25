@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Building2, Plus, Loader2, X, Upload } from "lucide-react";
+import { Link } from "react-router-dom";
 import api from "../lib/api";
 
 import { KIND_LABEL, ALLOWED, FIELDS } from "../lib/entityFields";
@@ -41,11 +42,11 @@ function AddForm({ kinds, onSave, onCancel }) {
   );
 }
 
-function EntityRow({ e, onRemove, busy }) {
+function EntityRow({ e, onRemove, busy, linkBase }) {
   return (
     <div className="flex items-center justify-between gap-3 py-3 border-b border-[#F4F5F7] last:border-0" data-testid={`entity-row-${e.id}`}>
       <div className="min-w-0">
-        <div className="text-sm font-semibold text-[#091E42] truncate">{e.name} <span className="ml-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#F4F5F7] text-[#42526E]">{KIND_LABEL[e.entity_kind] || e.entity_kind}</span></div>
+        <div className="text-sm font-semibold text-[#091E42] truncate">{linkBase ? <Link to={`${linkBase}/${e.id}`} className="hover:text-[#0052CC] hover:underline" data-testid={`entity-open-${e.id}`}>{e.name}</Link> : e.name} <span className="ml-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#F4F5F7] text-[#42526E]">{KIND_LABEL[e.entity_kind] || e.entity_kind}</span></div>
         <div className="text-xs text-[#5E6C84] truncate">{e.contact_person} · {e.dedicated_phone} · {e.city}</div>
       </div>
       {e.is_active === false ? <span className="text-xs text-[#97A0AF]">Removed</span>
@@ -54,7 +55,7 @@ function EntityRow({ e, onRemove, busy }) {
   );
 }
 
-export default function EntitiesPanel({ base, params }) {
+export default function EntitiesPanel({ base, params, linkBase }) {
   const [state, setState] = useState(null); const [err, setErr] = useState(""); const [adding, setAdding] = useState(false);
   const [bulk, setBulk] = useState(false); const [pending, setPending] = useState([]);
   const load = () => Promise.all([api.get(base, { params }), api.get(`${base}/pending`, { params })])
@@ -73,7 +74,7 @@ export default function EntitiesPanel({ base, params }) {
   return (
     <div className="bg-white border border-[#DFE1E6] rounded-lg p-5" data-testid="entities-panel">
       <div className="flex items-center justify-between gap-3 mb-3">
-        <div><div className="font-heading font-bold text-[#091E42] flex items-center gap-2"><Building2 className="h-4 w-4 text-[#0052CC]" /> Internal entities <span className="text-[#5E6C84] font-medium" data-testid="entities-count">/ {active.length}</span></div>
+        <div><div className="font-heading font-bold text-[#091E42] flex items-center gap-2"><Building2 className="h-4 w-4 text-[#0052CC]" /> My Entities <span className="text-[#5E6C84] font-medium" data-testid="entities-count">/ {active.length}</span></div>
           <p className="text-xs text-[#5E6C84] mt-0.5">{state?.org?.org_name ? `${state.org.org_name} — ` : ""}branches and units, each with its own login.</p></div>
         {state && !adding && <div className="flex gap-2">
           <button onClick={() => setBulk(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-md border border-[#DFE1E6] text-[#091E42] hover:bg-[#F8F9FA]" data-testid="entity-bulk-btn"><Upload className="h-4 w-4" /> Bulk import</button>
@@ -82,7 +83,7 @@ export default function EntitiesPanel({ base, params }) {
       {err && <div className="text-sm text-[#BF2600] bg-[#FFEBE6] rounded px-3 py-2" data-testid="entities-error">{err}</div>}
       {!state && !err && <div className="text-sm text-[#5E6C84] flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>}
       {adding && <AddForm kinds={kinds} onSave={add} onCancel={() => setAdding(false)} />}
-      {state && (state.entities.length ? <div className="mt-2">{state.entities.map((e) => <EntityRow key={e.id} e={e} onRemove={remove} busy={removing === e.id} />)}</div>
+      {state && (state.entities.length ? <div className="mt-2">{state.entities.map((e) => <EntityRow key={e.id} e={e} onRemove={remove} busy={removing === e.id} linkBase={linkBase} />)}</div>
         : !adding && <div className="text-sm text-[#5E6C84] py-4 flex items-center gap-2" data-testid="entities-empty">No entities yet.</div>)}
       {state && <PendingRows items={pending} kinds={kinds} base={base} params={params} onChanged={load} />}
       {bulk && <BulkImportDialog base={base} params={params} kinds={kinds} existingPhones={new Set(active.map((e) => e.dedicated_phone))}

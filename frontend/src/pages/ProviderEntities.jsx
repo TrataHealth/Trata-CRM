@@ -9,7 +9,7 @@ export default function ProviderEntities() {
         <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">My Entities</h1>
         <p className="text-sm text-[#5E6C84] mt-1">Add branches, labs, pharmacies and ambulance units under your organisation. Same as the Provider app.</p>
       </div>
-      <EntitiesPanel base="/provider/entities" />
+      <EntitiesPanel base="/provider/entities" linkBase="/provider/entities" />
     </div>
   );
 }

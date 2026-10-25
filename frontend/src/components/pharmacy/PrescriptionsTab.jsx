@@ -11,7 +11,7 @@ function RxActions({ rx, onDone }) {
   const run = async (status) => {
     setBusy(true);
     try {
-      await api.put(`/pharmacy-console/prescriptions/${rx.id}/status`, { status, ...(amount !== "" && status !== "rejected" ? { total_amount: Number(amount) } : {}), ...(status === "rejected" ? { rejection_reason: reason } : {}), ...(status === "fulfilled" ? { is_paid: true } : {}) });
+      await api.put(`/pharmacy-console/prescriptions/${rx.id}/status`, { status, store: rx.store_id, ...(amount !== "" && status !== "rejected" ? { total_amount: Number(amount) } : {}), ...(status === "rejected" ? { rejection_reason: reason } : {}), ...(status === "fulfilled" ? { is_paid: true } : {}) });
       toast.success(`Prescription marked ${status.replace(/_/g, " ")}`); setMode(null); onDone();
     } catch (e) { errMsg(e); } finally { setBusy(false); }
   };

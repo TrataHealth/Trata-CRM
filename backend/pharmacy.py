@@ -68,6 +68,7 @@ class OrderAction(BaseModel):
 
 class RxStatus(BaseModel):
     status: str
+    store: Optional[str] = None
     total_amount: Optional[float] = Field(None, ge=0, le=1_000_000)
     rejection_reason: Optional[str] = Field(None, max_length=300)
     is_paid: Optional[bool] = None
@@ -91,7 +92,7 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
     async def stores_for(current) -> List[Dict[str, Any]]:
         pool = await sb.get_pool()
         async with pool.acquire() as conn:
-            if is_provider(current):
+            if is_provider(current) and current.get("provider_type") == "pharmacy":
                 uid = current.get("supabase_user_id") or current["id"]
                 rows = await conn.fetch("""
                     WITH orgs AS (SELECT id FROM public.organisations WHERE master_admin_user_id = $1),
@@ -106,17 +107,9 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
                      WHERE p.user_id = $1 OR p.id IN (SELECT entity_profile_id FROM ents) OR p.user_id IN (SELECT entity_user_id FROM ents)
                         OR p.associated_hospital_id = $1 OR p.associated_hospital_id IN (SELECT id FROM hp)
                      ORDER BY (p.user_id = $1) DESC, p.business_name""", uid)
-            elif is_internal(current) and (current.get("is_master_admin") or current.get("role") != "sales_rep"):
-                rows = await conn.fetch("""SELECT id, business_name AS name, city, user_id, associated_hospital_name, 'network' AS kind
-                                             FROM public.pharmacy_providers WHERE coalesce(is_demo, false) = false
-                                            ORDER BY business_name LIMIT 500""")
             else:
-                raise HTTPException(status_code=403, detail="Pharmacy console is for pharmacies, hospitals and Trata admins")
-        out = [dict(x) for x in rows]
-        if current.get("provider_type") == "hospital":
-            for x in out:
-                x["kind"] = "hospital" if x["kind"] == "branch" else x["kind"]
-        return out
+                raise HTTPException(status_code=403, detail="This page is for pharmacy accounts")
+        return [dict(x) for x in rows]
 
     async def pick(current, store: Optional[str]) -> List[Dict[str, Any]]:
         stores = await stores_for(current)
@@ -151,7 +144,7 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
         ids = [s["id"] for s in await pick(current, None)]
         pool = await sb.get_pool()
         async with pool.acquire() as conn:
-            o = await conn.fetchrow("SELECT id, status, pharmacy_id, total_amount, rx_image_b64 FROM public.medicine_orders WHERE id = $1", oid)
+            o = await conn.fetchrow("SELECT id, status, pharmacy_id, total_amount, is_paid, rx_image_b64 FROM public.medicine_orders WHERE id = $1", oid)
         if not o or o["pharmacy_id"] not in ids:
             raise HTTPException(status_code=404, detail="Order not found")
         return o
@@ -167,6 +160,8 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
             raise HTTPException(status_code=400, detail="Unknown action")
         o = await owned_order(current, oid)
         allowed, new = ACTIONS[body.action]
+        if body.action == "mark_paid" and o["is_paid"]:
+            raise HTTPException(status_code=409, detail="Order is already marked paid")
         if o["status"] not in allowed:
             raise HTTPException(status_code=409, detail=f"Order is {o['status'].replace('_', ' ').lower()}; cannot {body.action.replace('_', ' ')}")
         if body.action == "reject" and not (body.reason or "").strip():
@@ -218,14 +213,24 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
         if body.status not in RX_STATUSES:
             raise HTTPException(status_code=400, detail="Unknown status")
         ids = [s["id"] for s in await pick(current, None)]
+        if body.status == "rejected" and not (body.rejection_reason or "").strip():
+            raise HTTPException(status_code=400, detail="Please give a reason for rejecting")
         pool = await sb.get_pool()
         async with pool.acquire() as conn:
             rx = await conn.fetchrow("SELECT pharmacy_id FROM public.prescriptions WHERE id = $1", rx_id)
-        if not rx or (rx["pharmacy_id"] and rx["pharmacy_id"] not in ids):
-            raise HTTPException(status_code=404, detail="Prescription not found")
-        if body.status == "rejected" and not (body.rejection_reason or "").strip():
-            raise HTTPException(status_code=400, detail="Please give a reason for rejecting")
-        out = await _provider_api("PUT", f"/api/pharmacy/prescription/{rx_id}/status", json=body.model_dump(exclude_none=True))
+            if not rx:
+                raise HTTPException(status_code=404, detail="Prescription not found")
+            if rx["pharmacy_id"] is None:
+                # Open prescription: only accepting it claims it for one store (first pharmacy wins).
+                if body.status != "accepted" or body.store not in ids:
+                    raise HTTPException(status_code=409, detail="Accept this prescription for one of your stores first")
+                claimed = await conn.fetchval("UPDATE public.prescriptions SET pharmacy_id = $2, updated_at = now() "
+                                              "WHERE id = $1 AND pharmacy_id IS NULL RETURNING id", rx_id, body.store)
+                if not claimed:
+                    raise HTTPException(status_code=409, detail="Another pharmacy has just taken this prescription")
+            elif rx["pharmacy_id"] not in ids:
+                raise HTTPException(status_code=404, detail="Prescription not found")
+        out = await _provider_api("PUT", f"/api/pharmacy/prescription/{rx_id}/status", json=body.model_dump(exclude_none=True, exclude={"store"}))
         await db.audit_log.insert_one({"action": f"pharmacy.rx.{body.status}", "rx_id": rx_id, "by": current["id"],
                                        "at": datetime.now(timezone.utc).isoformat()})
         return out

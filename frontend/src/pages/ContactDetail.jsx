@@ -145,7 +145,7 @@ export default function ContactDetail() {
       {c.parent_name && (
         <div className="bg-[#DEEBFF]/40 border border-[#B3D4FF] rounded-lg px-4 py-3 text-sm text-[#091E42]" data-testid="contact-parent-org">
           Internal entity of {c.parent_contact_id ? <Link to={`/contacts/${c.parent_contact_id}`} className="font-semibold text-[#0052CC]" data-testid="contact-parent-link">{c.parent_name}</Link> : <b>{c.parent_name}</b>}
-          {" "}· logs in with {c.phone} on the Provider app and CRM · KYC {c.kyc_status || "pending"}
+          {" "}· {c.entity_removed ? "removed by its organisation — login disabled" : `logs in with ${c.phone} on the Provider app and CRM · KYC ${c.kyc_status || "pending"}`}
         </div>
       )}
 

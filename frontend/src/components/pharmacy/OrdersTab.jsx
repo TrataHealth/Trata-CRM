@@ -11,12 +11,13 @@ function Actions({ o, onDone }) {
   const run = async (action) => {
     setBusy(true);
     try {
-      const body = { action, ...(amount !== "" ? { total_amount: Number(amount) } : {}), ...(action === "reject" ? { reason: text } : text ? { note: text } : {}) };
+      const body = { action, ...(amount !== "" && action !== "reject" ? { total_amount: Number(amount) } : {}), ...(action === "reject" ? { reason: text } : text ? { note: text } : {}) };
       const { data } = await api.post(`/pharmacy-console/orders/${o.id}/action`, body);
       toast.success(`Order ${data.order.status.toLowerCase().replace("_", " ")}`); setMode(null); onDone(data.order);
     } catch (e) { errMsg(e); } finally { setBusy(false); }
   };
   const open = ["PENDING_PHARMACY", "PREORDER_PENDING"].includes(o.status);
+  const start = (m) => { setText(""); setAmount(o.total_amount ?? ""); setMode(m); };
   if (mode) return (
     <div className="mt-3 p-3 bg-[#F8F9FA] rounded-md space-y-2" data-testid={`order-form-${o.id}`}>
       {mode !== "reject" && <input className={inp} inputMode="decimal" placeholder="Bill amount ₹" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))} data-testid={`order-amount-${o.id}`} />}
@@ -28,10 +29,10 @@ function Actions({ o, onDone }) {
   );
   return (
     <div className="flex flex-wrap gap-2 mt-3">
-      {open && <button className={primary} onClick={() => setMode("accept")} data-testid={`order-accept-${o.id}`}>Accept</button>}
-      {o.status === "ACCEPTED" && <button className={primary} onClick={() => setMode("fulfil")} data-testid={`order-fulfil-${o.id}`}>Mark fulfilled</button>}
+      {open && <button className={primary} onClick={() => start("accept")} data-testid={`order-accept-${o.id}`}>Accept</button>}
+      {o.status === "ACCEPTED" && <button className={primary} onClick={() => start("fulfil")} data-testid={`order-fulfil-${o.id}`}>Mark fulfilled</button>}
       {["ACCEPTED", "FULFILLED"].includes(o.status) && !o.is_paid && <button className={ghost} disabled={busy} onClick={() => run("mark_paid")} data-testid={`order-paid-${o.id}`}>Mark paid</button>}
-      {(open || o.status === "ACCEPTED") && <button className={danger} onClick={() => setMode("reject")} data-testid={`order-reject-${o.id}`}>Reject</button>}
+      {(open || o.status === "ACCEPTED") && <button className={danger} onClick={() => start("reject")} data-testid={`order-reject-${o.id}`}>Reject</button>}
     </div>
   );
 }

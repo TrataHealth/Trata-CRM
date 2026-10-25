@@ -306,7 +306,7 @@ function DemoCreds() {
         <li>9000020006 · Doctor · <span className="text-[#091E42]">Trata@123</span></li>
       </ul>
       <div className="mt-2 text-[10px] text-[#5E6C84] font-sans">
-        Paramedics + pharmacies: please use the Trata Provider <strong>mobile app</strong>. Other verticals sign in the same way — first login sets your PC password.
+        Paramedics: please use the Trata Provider <strong>mobile app</strong>. Hospitals, pharmacies, labs and other verticals sign in the same way — first login sets your PC password.
       </div>
     </div>
   );

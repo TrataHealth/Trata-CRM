@@ -39,6 +39,8 @@ import AdminRevenue from "./pages/AdminRevenue";
 import ProviderLedger from "./pages/ProviderLedger";
 import ProviderEntities from "./pages/ProviderEntities";
 import PharmacyConsole from "./pages/PharmacyConsole";
+import ProviderHome from "./pages/ProviderHome";
+import EntityDashboard from "./pages/EntityDashboard";
 import Patients from "./pages/Patients";
 import Abha from "./pages/Abha";
 import SuspendedScreen from "./components/SuspendedScreen";
@@ -92,7 +94,7 @@ function App() {
           <Route path="/forgot" element={<ForgotPassword />} />
           <Route path="/security-setup" element={<SecuritySetupRoute />} />
           <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
-          <Route path="/pharmacy" element={<RequireAuth><PharmacyConsole /></RequireAuth>} />
+          <Route path="/pharmacy/:tab" element={<RequireAuth providerOnly><PharmacyConsole /></RequireAuth>} />
           <Route path="/abha" element={<RequireAuth><Abha /></RequireAuth>} />
 
           {/* Admin / internal routes */}
@@ -125,7 +127,7 @@ function App() {
           <Route path="/agent/leaderboard" element={<RequireAuth adminOnly><Leaderboard /></RequireAuth>} />
 
           {/* Provider routes */}
-          <Route path="/provider" element={<RequireAuth providerOnly><ProviderDashboard /></RequireAuth>} />
+          <Route path="/provider" element={<RequireAuth providerOnly><ProviderHome /></RequireAuth>} />
           <Route path="/provider/command-center" element={<RequireAuth providerOnly><HospitalCommandCenter /></RequireAuth>} />
           <Route path="/provider/beds" element={<RequireAuth providerOnly><HospitalBeds /></RequireAuth>} />
           <Route path="/provider/staff" element={<RequireAuth providerOnly><HospitalStaff /></RequireAuth>} />
@@ -136,6 +138,7 @@ function App() {
           <Route path="/provider/earnings" element={<RequireAuth providerOnly><ProviderEarnings /></RequireAuth>} />
           <Route path="/provider/ledger" element={<RequireAuth providerOnly><ProviderLedger /></RequireAuth>} />
           <Route path="/provider/entities" element={<RequireAuth providerOnly><ProviderEntities /></RequireAuth>} />
+          <Route path="/provider/entities/:entityId" element={<RequireAuth providerOnly><EntityDashboard /></RequireAuth>} />
           <Route path="/provider/profile" element={<RequireAuth providerOnly><ProviderProfile /></RequireAuth>} />
 
           <Route path="*" element={<Navigate to="/" replace />} />

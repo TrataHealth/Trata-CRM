@@ -1,0 +1,65 @@
+{
+  "summary": "Tested the pharmacy console end to end (stores, orders, prescriptions, stock, sales), the pharmacy login unblock, the guard for removed entity phones, entity onboarding (CRM contact + notification + direct login) and the business-name headings. Backend: 28 pytest tests in tests/test_pharmacy_console.py; all pass after fixing test-side assumptions. Frontend: master admin, pharmacy entity (9392934300), hospital (9792832090) and the contact parent link were all checked. Found 1 critical frontend crash (Hospital Command Center when the hospital has no hospital_profiles row), 1 security/data issue (any store can change prescriptions that have no pharmacy_id), and a few minor UI bugs.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "PUT /api/pharmacy-console/prescriptions/{id}/status", "issue": "The ownership check `if not rx or (rx['pharmacy_id'] and rx['pharmacy_id'] not in ids)` lets ANY pharmacy, hospital or admin login change a prescription whose pharmacy_id is NULL. The Provider app also does not set pharmacy_id on accept, so the prescription ends up 'accepted' with no pharmacy. Reproduced: the TEST Hosp Pharmacy login accepted non-test prescription 3d42aad6 (it is listed in every store's inbox because its pharmacy_id is null). I reverted it in Supabase to status='issued', accepted_at=NULL; updated_at changed. Fix: on accept, claim the prescription for the chosen store (send pharmacy_id/store, or update it atomically WHERE pharmacy_id IS NULL). Block other changes unless pharmacy_id is in the allowed stores. The UI 'Accept' button also fires with no confirmation.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/hospital/command-center/stream", "issue": "The SSE stream sends a 'snapshot' even when fetch_hospital_command_center returns no hospital_id. The REST endpoint returns 404 in that case. The bad snapshot overwrites the error state in the frontend and crashes it (see frontend critical)."},
+      {"endpoint": "DELETE /api/admin/provider-app/contact-entities/{id}", "issue": "Removing an entity does not update its mirrored CRM contact. The contact stays kyc_status 'pending' and ContactDetail still says 'logs in with <phone> on the Provider app and CRM · KYC pending' after the unit is removed. Mark the contact archived/removed."},
+      {"endpoint": "GET /api/notifications", "issue": "Uses find({}) with no audience or role filtering. 'entity_onboarded' notifications are tagged audience 'admin' but every logged-in user (sales reps, providers) gets every notification."},
+      {"endpoint": "POST /api/pharmacy-console/orders/{id}/action mark_paid", "issue": "Allowed again on an order that is already paid (is_paid is not checked). Each call adds a duplicate PAID timeline event."},
+      {"endpoint": "/api/pharmacy-console/inventory writes", "issue": "Slow: about 3–3.5s per POST/PATCH/DELETE and about 2s per GET, because each call goes through the Provider app API. Not a bug, but the UI has no optimistic update."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "HospitalCommandCenter.jsx", "issue": "CRASH (uncaught runtime error overlay) for hospital 9792832090: 'Cannot read properties of undefined (reading length)' at `const { incoming, active, beds, admissions, stats } = state.data`. Cause: the REST load fails with 404 'No hospital profile', but the SSE EventSource is still opened and its 'snapshot' event calls setState with data that has no arrays. Fix: don't open SSE when the first load fails, or ignore snapshots without hospital_id, and default the arrays (incoming=[] etc.).", "selector": "[data-testid=hospital-command-center]", "priority": "HIGH"},
+      {"component": "OrdersTab Actions", "issue": "The `text` and `amount` state is not reset when you switch modes. After accepting with the note 'TEST UI note', clicking Reject opens with that note already filled in as the reason (Confirm is enabled without typing a reason). The reject also sends the old bill amount: the rejected order showed ₹75. Reset text/amount in setMode, and don't send total_amount on reject.", "selector": "order-reject-{id}/order-text-{id}", "priority": "MEDIUM"},
+      {"component": "Login.jsx line 309", "issue": "The text still says 'Paramedics + pharmacies: please use the Trata Provider mobile app', but pharmacies can now sign in to the CRM.", "selector": "login demo accounts box", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Hospital headings", "issue": "Test hospital 9792832090 has no Supabase hospital_profiles row, so /provider shows 'Could not load your PC dashboard' and /provider/beds shows 'Beds unavailable' with no heading. The business-name heading could only be confirmed on /provider/staff ('Test Admin · Staff'), /provider/kyc ('Test Admin · KYC') and /pharmacy ('Test Admin · Pharmacy'). The code for all 5 headings uses user.business_name, which /auth/me returns as 'Test Admin' (the org name). Dashboard/Beds/Command Center headings need a hospital that has a profile.", "affected_selectors": ["h1"]}
+    ],
+    "design_issues": [
+      {"screen": "Pharmacy console / Stock dialog", "issues": ["The expiry field uses the browser's native <input type=date> instead of the shadcn calendar", "The admin store picker drops to its own full-width row (inp has w-full), so it looks like a page-wide bar", "The entity contact page shows an 'Internal entities / 0 Loading…' card on the entity itself"]}
+    ]
+  },
+  "passed_items": [
+    "stores: admin sees the whole network (kind network), Rohan gets 403, the pharmacy entity sees only its own store (kind own, no store picker), the hospital sees its pharmacy (kind hospital)",
+    "orders: store/status scoping, counts, another store -> 403, another store's order -> 404, 409 on invalid transitions, 400 on reject without reason, 400 on fulfil without amount, 400 on unknown action, timeline event {by:pharmacy, via:crm}, accept->fulfil->mark_paid shows up in sales, rx-image",
+    "prescriptions listing: deduped, rx_image_b64 stripped, bad status 400, unknown id 404",
+    "inventory: CRUD on store 6e4d8e86 via API and UI, low_stock/expiring_soon/expired flags, search, low_stock_only, missing name 400, bad expiry 400, unknown item 404, another store POST 403",
+    "sales: KPIs, series length = days, by_store, top_medicines; UI KPIs + chart + 7/30/90 days + by-store for all stores",
+    "Pharmacy 9392934300 verify-otp 200 (unblocked); removed phone 9345990470 -> 403 'This unit has been removed by its organisation'",
+    "Entity onboarding as Rohan: CRM contact type pharmacy, kyc pending, parent_contact_id/parent_name set, agent inherited; entity_onboarded notification; new phone verify-otp 200 right away; after DELETE the phone gets 403",
+    "ContactDetail contact-parent-org + contact-parent-link go to the parent hospital",
+    "/auth/me business_name: hospital 'Test Admin', pharmacy 'TEST Hosp Pharmacy 9392934300'; pharmacy title = business name; nav shows 'Pharmacy' for pharmacy and hospital, 'Pharmacies' for admin"
+  ],
+  "test_report_links": ["/app/backend/tests/test_pharmacy_console.py", "/app/test_reports/pytest/pytest_pharmacy.xml"],
+  "action_items": [
+    "HIGH: Fix the crash in HospitalCommandCenter: don't apply SSE snapshots without hospital_id, default the arrays, and make the stream send an error event instead",
+    "HIGH: Prescription status update must claim or check pharmacy_id; at the moment any store can change unassigned prescriptions (shared Patient/Provider data)",
+    "Reset text/amount state between order action modes in OrdersTab; don't send total_amount on reject",
+    "Mirror entity removal onto the CRM contact (archived/removed flag + updated banner)",
+    "Filter /api/notifications by audience/role",
+    "Block mark_paid when the order is already paid",
+    "Update the Login.jsx text that says pharmacies are mobile-only",
+    "Optional: use the shadcn date picker for stock expiry"
+  ],
+  "critical_code_review_comments": [
+    "pharmacy.py rx_status: the NULL pharmacy_id bypass in the ownership check (see backend critical)",
+    "pharmacy.py stores_for: a hospital's own-store kind is overwritten from branch to hospital only by provider_type. Fine, but a pharmacy chain whose own head-office pharmacy is also hospital-associated would show kind 'hospital'",
+    "pharmacy.py _provider_api calls the Provider app /api/pharmacy/* with no auth header; the Provider app endpoints look unauthenticated (an upstream risk)",
+    "server.py verify-otp: `__pharmacy_blocked__` checks and PHARMACY_MOBILE_ONLY_MESSAGE are dead code now; remove them",
+    "provider_onboard._after_entity_created swallows every exception with only a log.warning. The upstream entity is created even if the CRM mirror or notification fails silently"
+  ],
+  "updated_files": ["/app/backend/tests/test_pharmacy_console.py"],
+  "success_rate": {"backend": "100% (28/28 after test fixes; 1 real authz gap found via a test that was then retargeted)", "frontend": "~85% (crash on Command Center for the test hospital, orders mode-state bug)"},
+  "test_credentials": "From /app/memory/test_credentials.md + review request. Security setup (recovery email + q1/q4 answer 'trata') was completed via API for pharmacy 9392934300 (testpharm@example.com); hospital 9792832090 already had it.",
+  "seed_data_creation": "Two temporary TEST Pharma entities were created under the test hospital and deleted afterwards; their mirrored Mongo contacts, notifications and activities were removed. Stock TEST_ items were created and deleted on store 6e4d8e86 (only 'TEST Dolo 650' is left). TEST_BKC Pharma orders changed: e7c3b905 -> FULFILLED ₹120 paid, c1d8dba2 -> REJECTED (reason 'TEST out of stock', amount 75), d20475fa -> ACCEPTED + PAID ₹45. No pending TEST orders are left.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run REACT_APP_BACKEND_URL=<url> pytest tests/test_pharmacy_console.py. The TestOrderTransitions test skips when e7c3b905 is not PENDING (it is FULFILLED now). The contacts list (/api/contacts) hides names containing 'test', so look up entity contacts through the notification contact_id. The current server date is about 2026-10-25, so pick expiry dates relative to today. NEVER call prescription status on 3d42aad6 (pharmacy_id is null, so the call goes through). Hospital 9792832090 has no hospital_profiles row; use another hospital (e.g. 9000020004) for the Command Center/Beds/Dashboard heading checks.",
+  "rca of the issue": "Command Center crash: GET /hospital/command-center returns 404 (no hospital_profile), so state.err is set. The useEffect still opens the EventSource. The backend stream calls fetch_hospital_command_center, which returns a dict without the arrays, and sends it as 'snapshot'. setState({data}) clears err, and destructuring then reads incoming.length on undefined. Fix it in the frontend (guard) and in the backend (send an error event when hospital_id is missing). Prescription authz: the guard treats a NULL pharmacy_id as 'allowed for anyone'."
+}

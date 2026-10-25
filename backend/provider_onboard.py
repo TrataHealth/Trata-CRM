@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 from typing import Any, Dict, List, Optional
 
@@ -44,7 +44,8 @@ ROLES: Dict[str, tuple] = {
 
 
 CONTACT_TYPE = {**{r: "hospital" for r in SPECIALISED}, "mental_wellness": "wellness", "veterinarian": "vet"}
-ROOT_BY_ROLE = {"hospital": "hospital", "pharmacy": "pharmacy", "pathologist": "path_lab", "diagnostic_centre": "diagnostic_centre"}
+ROOT_BY_ROLE = {"hospital": "hospital", "pharmacy": "pharmacy", "pathologist": "path_lab", "diagnostic_centre": "diagnostic_centre",
+                "ambulance_provider": "ambulance"}
 
 
 class OnboardBody(BaseModel):
@@ -105,7 +106,7 @@ async def _org_for_uid(uid: str, org_name: Optional[str] = None) -> Dict[str, An
         u = await conn.fetchrow("SELECT role, name, organization_name FROM public.users WHERE id::text = $1", uid)
     root = ROOT_BY_ROLE.get((u and u["role"]) or "")
     if not root:
-        raise HTTPException(status_code=403, detail="Entities are available for hospitals, pharmacies, path labs and diagnostic centres")
+        raise HTTPException(status_code=403, detail="Entities are available for hospitals, pharmacies, path labs, diagnostic centres and ambulance providers")
     async with httpx.AsyncClient(timeout=30) as c:
         res = await c.get(f"{API}/api/org/by-admin/{uid}")
         org = (res.json() or {}).get("org") if res.status_code < 300 else None
@@ -345,7 +346,10 @@ def _entity_routes(r: APIRouter, prefix: str, resolve, db):
     @r.delete(prefix + "/{entity_id}")
     async def delete_entity(entity_id: str, contact_id: str = "", current=Depends(resolve.dep)):
         org = await resolve(current, contact_id)
-        return await _call("DELETE", f"/api/org/{org['id']}/entity/{entity_id}")
+        out = await _call("DELETE", f"/api/org/{org['id']}/entity/{entity_id}")
+        await db.contacts.update_one({"entity_id": entity_id}, {"$set": {"entity_removed": True, "is_active": False,
+                                                                       "updated_at": datetime.now(timezone.utc).isoformat()}})
+        return out
 
 
 def create_provider_onboard_router(db, get_current_user, is_internal) -> APIRouter:
@@ -510,4 +514,49 @@ def create_entities_router(db, get_current_user, is_provider) -> APIRouter:
         return await _org_for_uid(current["supabase_user_id"])
     own_org.dep = get_current_user
     _entity_routes(r, "/entities", own_org, db)
+
+    @r.get("/entities/{entity_id}/summary")
+    async def entity_summary(entity_id: str, current=Depends(get_current_user)):
+        org = await own_org(current, "")
+        ents = (await _call("GET", f"/api/org/{org['id']}/entities")).get("entities", [])
+        e = next((x for x in ents if x.get("id") == entity_id), None)
+        if not e:
+            raise HTTPException(status_code=404, detail="Entity not found")
+        return {"entity": e, **await _entity_metrics(db, e)}
     return r
+
+
+async def _entity_metrics(db, e: Dict[str, Any]) -> Dict[str, Any]:
+    """Key numbers, KYC/login status and recent CRM activity for one internal entity."""
+    ids = [x for x in (e.get("entity_user_id"), e.get("entity_profile_id")) if x]
+    kind, since = e.get("entity_kind"), datetime.now(timezone.utc) - timedelta(days=30)
+    q = {
+        "hospital": [("Patients registered", "SELECT count(*) FROM public.hospital_patients WHERE hospital_id = ANY($1::text[])", False),
+                     ("Emergencies · 30 days", "SELECT count(*) FROM public.emergency_cases WHERE hospital_id = ANY($1::text[]) AND created_at >= $2", True),
+                     ("Consultations · 30 days", "SELECT count(*) FROM public.consultation_bookings WHERE hospital_id = ANY($1::text[]) AND created_at >= $2", True),
+                     ("Beds", "SELECT coalesce(sum(total_count), 0) FROM public.hospital_bed_inventory WHERE hospital_id = ANY($1::text[])", False)],
+        "pharmacy": [("Orders · 30 days", "SELECT count(*) FROM public.medicine_orders WHERE pharmacy_id = ANY($1::text[]) AND created_at >= $2", True),
+                     ("Open orders", "SELECT count(*) FROM public.medicine_orders WHERE pharmacy_id = ANY($1::text[]) AND status IN ('PENDING_PHARMACY','PREORDER_PENDING','ACCEPTED')", False),
+                     ("Sales · 30 days (₹)", "SELECT coalesce(sum(total_amount), 0) FROM public.medicine_orders WHERE pharmacy_id = ANY($1::text[]) AND status = 'FULFILLED' AND created_at >= $2", True),
+                     ("Low-stock medicines", "SELECT count(*) FROM public.pharmacy_inventory_items WHERE pharmacy_id = ANY($1::text[]) AND coalesce(is_active, true) AND qty_in_stock <= reorder_threshold", False)],
+        "ambulance": [("Trips · 30 days", "SELECT count(*) FROM public.emergency_cases WHERE (ambulance_provider_id = ANY($1::text[]) OR ambulance_id = ANY($1::text[])) AND created_at >= $2", True),
+                      ("Completed trips · 30 days", "SELECT count(*) FROM public.emergency_cases WHERE (ambulance_provider_id = ANY($1::text[]) OR ambulance_id = ANY($1::text[])) AND status = 'completed' AND created_at >= $2", True)],
+    }.get({"hospital_branch": "hospital", "poly_clinic": "hospital", "health_centre": "hospital"}.get(kind, kind), [])
+    metrics = []
+    pool = await sb.get_pool()
+    async with pool.acquire() as conn:
+        for label, sql, dated in q:
+            try:
+                v = await conn.fetchval(sql, ids, since) if dated else await conn.fetchval(sql, ids)
+                metrics.append({"label": label, "value": float(v or 0) if "₹" in label else int(v or 0)})
+            except Exception as ex:  # noqa: BLE001 — a missing column upstream must not break the summary
+                log.warning("entity metric %s failed: %s", label, ex)
+    phone = e.get("dedicated_phone")
+    contact = await db.contacts.find_one({"$or": [{"entity_id": e.get("id")}, {"phone": phone}]}, {"_id": 0, "id": 1, "kyc_status": 1, "is_verified": 1})
+    login = await db.crm_users.find_one({"phone": phone}, {"_id": 0, "password_hash": 1, "last_login_at": 1})
+    acts = await db.activities.find({"contact_id": contact["id"]}, {"_id": 0, "title": 1, "created_at": 1, "description": 1}) \
+        .sort("created_at", -1).limit(6).to_list(6) if contact else []
+    return {"metrics": metrics, "kyc_status": (contact or {}).get("kyc_status") or "pending",
+            "crm_login": "active" if login and login.get("password_hash") else "not_yet", "last_login_at": (login or {}).get("last_login_at"),
+            "activities": acts}
+
