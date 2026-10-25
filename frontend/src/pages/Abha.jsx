@@ -8,6 +8,7 @@ import { AbhaRecords } from "../components/abdm/AbhaRecords";
 import { T } from "../components/ledger/ui";
 import { AbhaQrScanner } from "../components/abdm/AbhaQrScanner";
 import { HealthRecordsPanel } from "../components/abdm/HealthRecordsPanel";
+import { ScanShareCard } from "../components/abdm/ScanShareCard";
 
 export default function Abha() {
   const [status, setStatus] = useState(null);
@@ -31,6 +32,7 @@ export default function Abha() {
           </span>}
           </div>
         </div>
+        <ScanShareCard />
         <section className={`${T.card} p-5`}>
           <Tabs defaultValue="create">
             <TabsList>

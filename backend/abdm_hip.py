@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 import abdm
 import abdm_fhir
+import abdm_share
 import supabase_db as sb
 
 log = logging.getLogger("abdm.hip")
@@ -539,6 +540,8 @@ def create_hip_router(db, get_current_user, is_provider, is_internal) -> Dict[st
             await inbound(request, "hiu" + _p.replace("/", "-"))
             return resp(_c)
         cb.add_api_route(path, _hiu, methods=["POST"], name=f"hiu{path.replace('/', '_')}")
+
+    abdm_share.register(cb, api, db, inbound, resp, respond, on_linked, _spawn, get_current_user, is_provider, is_internal)
 
     @cb.post("/{rest:path}")
     async def other_callback(rest: str, request: Request):
