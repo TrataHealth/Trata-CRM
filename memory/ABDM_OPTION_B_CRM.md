@@ -9,3 +9,9 @@
   Consent: /api/v3/consent/request/hip/notify (200)
 - Env: ABDM_ENV, ABDM_CLIENT_ID, ABDM_CLIENT_SECRET, ABDM_X_CM_ID, ABDM_GATEWAY_BASE, ABDM_ABHA_BASE, ABDM_CALLBACK_BASE, ABDM_HIP_ID, ABDM_HIU_ID, ABDM_HTTP_PROXY
 - Sandbox flaky: ABDM-1206 (Aadhaar verify), 303001 SUSPENDED (sessions) → treat 5xx as outage, retry.
+
+## RULE: Bridge callback URL is owned by the Patient app (Jun 2026)
+- The ABDM bridge callback URL is shared global state for the whole Trata gateway. ONLY the Patient app (gateway owner) may change it.
+- The CRM must NEVER call `POST /api/abdm/bridge/register-url` (or any ABDM bridge/URL registration API). The Patient app is gating that endpoint behind an admin token.
+- CRM only reads `ABDM_CALLBACK_BASE` (env) for display in the callbacks view (`abdm_hip.py`); inbound callbacks keep arriving via api.tratahealth.com routed by `X-HIP-ID`.
+- Audit Jun 2026: no CRM code calls register-url/bridge endpoints.
