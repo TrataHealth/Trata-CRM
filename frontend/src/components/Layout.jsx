@@ -58,7 +58,7 @@ const PROVIDER_NAV = [
 export default function Layout({ children }) {
   const { user, logout, isProvider, isSalesRep, isAdmin } = useAuth();
   const isHospital = user?.provider_type === "hospital";
-  const hasEntities = ["hospital", "pharmacy", "pathology", "pathologist", "path_lab", "diagnostic_centre", "ambulance"].includes(user?.provider_type);
+  const hasEntities = ["hospital", "pharmacy", "pathology", "pathologist", "path_lab", "diagnostic_centre", "ambulance"].includes(user?.provider_type) && !user?.parent_org_name;
   const NAV = (isProvider ? PROVIDER_NAV : isSalesRep ? SALES_NAV : ADMIN_NAV).filter(
     (n) => (!n.hospitalOnly || isHospital) && (!n.entitiesOnly || hasEntities) && (!n.pharmacyOnly || user?.provider_type === "pharmacy")
   );

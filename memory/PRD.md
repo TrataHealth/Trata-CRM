@@ -413,3 +413,11 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Shared profile upserts Mongo `abha_records` (owner=hospital) + Supabase `hospital_patients` (match by ABHA no/address or phone+name, status 'registered', abha_kyc merged). No queue UI (user choice).
 - UI: `ScanShareCard.jsx` on /abha (QR + print poster + today's shares; admin sees all hospitals).
 - Tested iteration_22 (backend 11/11, frontend pass); poster size + token race fixed after.
+
+## Iteration 23–24 — Pharmacy as full provider CRM, entity logins + summaries (Jun 2026)
+- Pharmacy logins unblocked (Supabase role pharmacy/pharmacist → provider_type pharmacy). Pharmacy side menu: My Dashboard (PharmacyDashboard via ProviderHome), Medicine Orders, Prescriptions, Stock, Sales (`/pharmacy/:tab`), My Entities (chains). Admin/hospital have NO pharmacy menu; `/api/pharmacy-console/*` is pharmacy-provider only (own store + chain branches; store picker when >1).
+- `pharmacy.py`: orders = Supabase `medicine_orders` (PENDING_PHARMACY/PREORDER_PENDING→ACCEPTED→FULFILLED, REJECTED; timeline events via crm); prescriptions & stock proxied to Provider app `/api/pharmacy/*`; open prescriptions (pharmacy_id NULL) are claimed atomically on accept; sales KPIs.
+- Entities: CRM-created entities mirror into contacts (kyc pending, parent link, inherited agent) + master-admin notification `entity_onboarded` + welcome email; Provider-app signups notify via contacts sync; removed entity phones blocked at login; removal flags contact `entity_removed`. Child units cannot run their own chain (403 + nav hidden via `parent_org_name` on /auth/me). Ambulance providers can now have entities (root 'ambulance'). Doctors: Provider app rejects root_kind 'doctor' — needs Provider app change.
+- My Entities: entity name opens `/provider/entities/:id` summary dashboard (metrics by kind, KYC, login, activity). Section renamed "My Entities".
+- Headings use `business_name` (from /auth/me) not the person's name. Notifications filtered by role.
+- Tested: iteration_23/24 (backend 20/20, frontend pass); follow-ups fixed.

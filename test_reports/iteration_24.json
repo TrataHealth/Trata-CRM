@@ -1,0 +1,53 @@
+{
+  "summary": "Tested the redesign that makes pharmacy a full provider CRM, plus the iteration_23 fixes. Backend: new tests/test_pharmacy_redesign.py has 21 tests; 20 pass and 1 is skipped (mark_paid on an already-paid order, because the TEST Hosp store has no paid order — the guard was checked by code review). The first run had 1 failure, caused by a test-side assertion: /api/contacts/{id} wraps the record in 'contact'. Frontend: navigation for admin, hospital and pharmacy; the pharmacy dashboard tiles and their links; the 4 pharmacy pages and their titles; unknown-tab redirect; no store picker for a single store; hospital My Entities -> EntityDashboard -> back; bad entity id shows an error; the Command Center error state does not crash and stays after the SSE stream starts; the ContactDetail removed banner. All passed and there were no page errors. No critical issues found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/provider/entities (any provider of root type, incl. child entities)", "issue": "_org_for_uid bootstraps an upstream org on the first GET. A unit that is itself a child entity (e.g. hospital pharmacy 9392934300) gets its own 'pharmacy' org and can add its own entities (nested chains). A read call also has a write side effect on shared Supabase. Consider blocking roots for users who are already entity_user_id of another org, and bootstrapping only on create."},
+      {"endpoint": "GET /api/provider/entities/{id}/summary (_entity_metrics)", "issue": "The contact/crm_users lookup uses {'phone': e.get('dedicated_phone')}. If dedicated_phone is ever null, {'phone': None} matches an arbitrary contact without a phone, so wrong KYC/activities would be shown. Guard against null phone."},
+      {"endpoint": "Ambulance entities", "issue": "ROOT_BY_ROLE['ambulance_provider']='ambulance' and the Layout hasEntities list includes 'ambulance' (code verified). It could not be verified live: demo ambulance 9000020003 has a supabase_user_id with no Supabase users row (-> 403 'Entities are available for ...'), and 7678218261 is now role 'hospital' in Supabase."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "PrescriptionsTab", "issue": "The Reject button is shown on open prescriptions (pharmacy_id NULL, status issued/submitted), but the backend always returns 409 'Accept this prescription for one of your stores first'. Hide Reject (or explain it) for unclaimed prescriptions. Accept on shared open prescriptions still has no confirmation step.", "selector": "rx-reject-{id}", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/provider/entities", "issues": ["'My Entities' appears twice: as the page h1 and as the card title ('My Entities / 2')"]},
+      {"screen": "Prescriptions cards", "issues": ["The amount shows '—' on the issued card and '₹0' on the new cards; these are inconsistent"]}
+    ]
+  },
+  "passed_items": [
+    "/api/pharmacy-console/{stores,orders,sales,inventory,prescriptions}: 403 for master admin, sales agent and hospital; 200 for pharmacy 9392934300 (1 store, can_pick_all false, 'TEST Dolo 650' present)",
+    "Rx status on an open prescription: rejected / ready_for_pickup / accepted without store / accepted with a foreign store -> 409; rejected without a reason -> 400; unknown status -> 400; hospital -> 403. No open prescription was modified",
+    "Notifications: hospital and pharmacy get 0 items; admin gets items with no 'provider' audience; Rohan gets no 'admin' audience items",
+    "Entities: hospital list (root hospital, 2 entities); pharmacy summary metrics (Orders·30d, Open, Sales, Low-stock=1), kyc pending, crm_login active, activities; unknown id -> 404; another org's entity -> 404; staff -> 403",
+    "Created TEST_Iter24 pharmacy entity -> summary (pending/not_yet/'added' activity) -> admin entity_onboarded notification -> DELETE -> Mongo contact entity_removed=true, is_active=false -> verify-otp 403 'removed by its organisation'; ContactDetail banner 'removed by its organisation — login disabled' shown",
+    "UI nav: admin has no 'Pharmacies'; hospital has no 'Pharmacy'; pharmacy has My Dashboard, Medicine Orders, Prescriptions, Stock, Sales, My Entities, My Activities, Earnings, Billing, ABHA, Profile, KYC, Tasks",
+    "Pharmacy /provider: pharmacy-dashboard title = business name; the 4 tiles link to the correct pages (low-stock click -> /pharmacy/stock); pd-recent-orders present; no store picker",
+    "/pharmacy/{orders,prescriptions,stock,sales} titles are '<business> · <Page>'; /pharmacy/bogus -> /pharmacy/orders; hospital on /pharmacy/orders gets the 'This page is for pharmacy accounts' error",
+    "Command Center for 9792832090 shows hcc-error 'No hospital profile linked to this account.' and still shows it after 13s, with no crash",
+    "Login.jsx text now says only paramedics are mobile-only"
+  ],
+  "test_report_links": ["/app/backend/tests/test_pharmacy_redesign.py", "/app/test_reports/pytest/pytest_iter24.xml"],
+  "action_items": [
+    "Hide or disable Reject for unclaimed (pharmacy_id NULL) prescriptions in PrescriptionsTab; add a confirmation before Accept claims a shared prescription",
+    "Decide whether child entities (e.g. a hospital pharmacy unit) should get their own My Entities org. If not, hide the nav item and block bootstrap for users who are entity_user_id of another org",
+    "Guard _entity_metrics against a null dedicated_phone in the contacts/crm_users lookups",
+    "Update or retire /app/backend/tests/test_pharmacy_console.py: its admin/hospital store tests now get 403 by design"
+  ],
+  "critical_code_review_comments": [
+    "provider_onboard._org_for_uid: GET routes create an upstream org as a side effect, and the in-memory _ORGS cache is per-process and never invalidated",
+    "pharmacy.rx_status: the claim UPDATE runs before the Provider app PUT. If the upstream PUT fails (400/502), the prescription stays claimed (pharmacy_id set) with its old status. This is acceptable, but there is no rollback",
+    "server.py /notifications admin branch: {'audience': {'$ne': 'provider'}, 'user_id': {'$in': [None, me]}} also applies to sales managers and other internal roles. Fine, but sales managers see admin-audience KYC notifications"
+  ],
+  "updated_files": ["/app/backend/tests/test_pharmacy_redesign.py"],
+  "success_rate": {"backend": "100% (20/20 run, 1 skipped)", "frontend": "100% of tested flows (1 medium UX issue)"},
+  "test_credentials": "From /app/memory/test_credentials.md and the review request; all worked.",
+  "seed_data_creation": "Created and deleted one TEST_Iter24 pharmacy entity under hospital 9792832090. Its Mongo contact, notification and activity were removed afterwards. Visiting /provider/entities as pharmacy 9392934300 probably bootstrapped an empty upstream org for that TEST user.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run REACT_APP_BACKEND_URL=<url> pytest tests/test_pharmacy_redesign.py (about 2 min; creates and deletes a TEST entity; afterwards delete the Mongo contact whose name matches ^TEST_Iter24). The old test_pharmacy_console.py is stale (admin/hospital now 403). The open prescriptions in the TEST store inbox are ab722a63, 88796107, e4299132 and 824b57df; never accept them. UI login: put trata_token + trata_user from /api/auth/me into localStorage.",
+  "rca of the issue": "Not applicable: no blocking bugs were found."
+}

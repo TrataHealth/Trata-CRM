@@ -25,10 +25,10 @@ function RxActions({ rx, onDone }) {
   );
   return (
     <div className="flex flex-wrap gap-2 mt-3">
-      {OPEN.includes(rx.status) && <button className={primary} disabled={busy} onClick={() => run("accepted")} data-testid={`rx-accept-${rx.id}`}>Accept</button>}
+      {OPEN.includes(rx.status) && <button className={primary} disabled={busy} onClick={() => (rx.pharmacy_id || window.confirm("Accept this prescription for your store? Other pharmacies will no longer see it.")) && run("accepted")} data-testid={`rx-accept-${rx.id}`}>Accept</button>}
       {rx.status === "accepted" && <button className={primary} onClick={() => setMode("ready_for_pickup")} data-testid={`rx-ready-${rx.id}`}>Ready for pickup</button>}
       {["accepted", "ready_for_pickup"].includes(rx.status) && <button className={ghost} onClick={() => setMode("fulfilled")} data-testid={`rx-fulfil-${rx.id}`}>Mark fulfilled</button>}
-      {[...OPEN, "accepted"].includes(rx.status) && <button className={danger} onClick={() => setMode("rejected")} data-testid={`rx-reject-${rx.id}`}>Reject</button>}
+      {(rx.pharmacy_id ? [...OPEN, "accepted"] : ["accepted"]).includes(rx.status) && <button className={danger} onClick={() => setMode("rejected")} data-testid={`rx-reject-${rx.id}`}>Reject</button>}
     </div>
   );
 }
@@ -48,7 +48,7 @@ export default function PrescriptionsTab({ store, showStore }) {
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div><div className="flex items-center gap-2"><span className="font-semibold text-[#091E42]">{rx.patient_name || "Patient"}</span><Chip map={RX_STATUS} s={rx.status} testid={`rx-status-${rx.id}`} /></div>
                 <div className="text-xs text-[#5E6C84] mt-0.5">{rx.doctor_name ? `By ${rx.doctor_name} · ` : ""}{when(rx.submitted_at)}{showStore && ` · ${rx.store_name}`}</div></div>
-              <div className="font-heading font-black text-[#091E42]">{inr(rx.total_amount)}</div>
+              <div className="font-heading font-black text-[#091E42]">{rx.total_amount ? inr(rx.total_amount) : "—"}</div>
             </div>
             <ul className="mt-2 text-sm text-[#172B4D] list-disc pl-5">{(rx.items || []).map((it, i) => <li key={i}>{itemLine(it)}</li>)}</ul>
             {rx.notes && <p className="text-xs text-[#42526E] mt-1">{rx.notes}</p>}

@@ -727,6 +727,10 @@ async def me(current=Depends(get_current_user)):
                          "suspended_at": row["suspended_at"].isoformat() if row["suspended_at"] else None}
                 await db.crm_users.update_one({"id": current["id"]}, {"$set": patch})
                 current = {**current, **patch}
+            async with pool.acquire() as conn:
+                parent_org = await conn.fetchval("""SELECT o.org_name FROM public.org_entities e JOIN public.organisations o ON o.id = e.org_id
+                                                     WHERE e.entity_user_id = $1 AND o.master_admin_user_id <> $1 LIMIT 1""", current["supabase_user_id"])
+            current = {**current, "parent_org_name": parent_org}
             biz = await _provider_business_name(conn_pool=pool, uid=current["supabase_user_id"], ptype=current.get("provider_type"))
             if biz and biz != current.get("business_name"):
                 await db.crm_users.update_one({"id": current["id"]}, {"$set": {"business_name": biz}})

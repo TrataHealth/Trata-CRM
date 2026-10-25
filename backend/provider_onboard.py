@@ -105,6 +105,11 @@ async def _org_for_uid(uid: str, org_name: Optional[str] = None) -> Dict[str, An
     async with pool.acquire() as conn:
         u = await conn.fetchrow("SELECT role, name, organization_name FROM public.users WHERE id::text = $1", uid)
     root = ROOT_BY_ROLE.get((u and u["role"]) or "")
+    async with pool.acquire() as conn:
+        parent = await conn.fetchval("""SELECT o.org_name FROM public.org_entities e JOIN public.organisations o ON o.id = e.org_id
+                                         WHERE e.entity_user_id = $1 AND o.master_admin_user_id <> $1 LIMIT 1""", uid)
+    if parent:
+        raise HTTPException(status_code=403, detail=f"This unit is part of {parent}; branches are managed by the organisation")
     if not root:
         raise HTTPException(status_code=403, detail="Entities are available for hospitals, pharmacies, path labs, diagnostic centres and ambulance providers")
     async with httpx.AsyncClient(timeout=30) as c:
@@ -552,8 +557,9 @@ async def _entity_metrics(db, e: Dict[str, Any]) -> Dict[str, Any]:
             except Exception as ex:  # noqa: BLE001 — a missing column upstream must not break the summary
                 log.warning("entity metric %s failed: %s", label, ex)
     phone = e.get("dedicated_phone")
-    contact = await db.contacts.find_one({"$or": [{"entity_id": e.get("id")}, {"phone": phone}]}, {"_id": 0, "id": 1, "kyc_status": 1, "is_verified": 1})
-    login = await db.crm_users.find_one({"phone": phone}, {"_id": 0, "password_hash": 1, "last_login_at": 1})
+    contact = await db.contacts.find_one({"$or": [{"entity_id": e["id"]}, *([{"phone": phone}] if phone else [])]},
+                                         {"_id": 0, "id": 1, "kyc_status": 1, "is_verified": 1})
+    login = await db.crm_users.find_one({"phone": phone}, {"_id": 0, "password_hash": 1, "last_login_at": 1}) if phone else None
     acts = await db.activities.find({"contact_id": contact["id"]}, {"_id": 0, "title": 1, "created_at": 1, "description": 1}) \
         .sort("created_at", -1).limit(6).to_list(6) if contact else []
     return {"metrics": metrics, "kyc_status": (contact or {}).get("kyc_status") or "pending",
