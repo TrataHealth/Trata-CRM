@@ -169,6 +169,55 @@ class PendingBody(BaseModel):
     data: Dict[str, Any]
 
 
+ENTITY_CONTACT_TYPE = {"hospital": "hospital", "hospital_branch": "hospital", "poly_clinic": "hospital", "health_centre": "hospital",
+                       "pharmacy": "pharmacy", "path_lab": "pathologist", "diagnostic_centre": "diagnostic_centre", "ambulance": "ambulance_provider"}
+ENTITY_LABEL = {"hospital": "Hospital", "hospital_branch": "Hospital branch", "pharmacy": "Pharmacy", "path_lab": "Path lab",
+                "diagnostic_centre": "Diagnostic centre", "poly_clinic": "Poly clinic", "health_centre": "Health centre", "ambulance": "Ambulance unit"}
+
+
+async def _after_entity_created(db, org: Dict[str, Any], ent: Dict[str, Any], row: Dict[str, Any], current: Optional[Dict[str, Any]]):
+    """Mirror a new internal entity into CRM contacts (KYC pending), notify master admins and welcome the unit admin."""
+    try:
+        phone = ent.get("dedicated_phone") or row.get("dedicated_phone")
+        if not phone:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        parent = await db.contacts.find_one({"supabase_user_id": org.get("master_admin_user_id")},
+                                            {"_id": 0, "id": 1, "name": 1, "assigned_agent_id": 1, "assigned_agent_name": 1})
+        kind = ent.get("entity_kind") or row.get("entity_kind")
+        label = ENTITY_LABEL.get(kind, kind or "Entity")
+        name = ent.get("name") or row.get("name")
+        parent_name = (parent or {}).get("name") or org.get("org_name")
+        agent = {"assigned_agent_id": parent["assigned_agent_id"], "assigned_agent_name": parent.get("assigned_agent_name")} \
+            if parent and parent.get("assigned_agent_id") else {}
+        contact = await db.contacts.find_one_and_update(
+            {"phone": phone},
+            {"$set": {"supabase_user_id": ent.get("entity_user_id"), "name": name, "phone": phone, "email": row.get("email"),
+                      "contact_person": row.get("contact_person"), "city": row.get("city"), "state": row.get("state"),
+                      "address": row.get("address"), "type": ENTITY_CONTACT_TYPE.get(kind, "hospital"), "entity_kind": kind,
+                      "entity_id": ent.get("id"), "parent_org_id": org.get("id"), "parent_org_name": org.get("org_name"),
+                      "parent_contact_id": (parent or {}).get("id"), "parent_name": parent_name,
+                      "kyc_status": "pending", "is_verified": False, "onboarded_via": "crm_entity",
+                      "onboarded_by": (current or {}).get("name"), "updated_at": now, **agent},
+             "$setOnInsert": {"id": str(uuid.uuid4()), "created_at": now, "pipeline_stage": "contacted", "deal_value": 0,
+                              "source": "org_entity"}},
+            upsert=True, return_document=True, projection={"_id": 0, "id": 1})
+        await db.notifications.insert_one({
+            "id": str(uuid.uuid4()), "kind": "entity_onboarded", "audience": "admin", "contact_id": contact["id"], "read": False,
+            "title": f"New {label} added under {parent_name} — {name}",
+            "body": f"Login {phone} is ready on the Provider app and CRM. KYC is pending — review documents and approve.",
+            "created_at": now})
+        await db.activities.insert_one({"id": str(uuid.uuid4()), "type": "note", "category": "kyc", "subtype": "entity_onboarded",
+                                        "title": f"{label} added — {name}", "contact_id": contact["id"], "contact_name": name,
+                                        "description": f"Internal entity of {parent_name}, added by {(current or {}).get('name') or 'the organisation'}. KYC pending.",
+                                        "agent_id": (current or {}).get("id"), "agent_name": (current or {}).get("name"),
+                                        "status": "completed", "created_at": now})
+        if row.get("email"):
+            await _welcome(row["email"], row.get("contact_person") or name, label, phone, None)
+    except Exception as ex:  # noqa: BLE001 — entity already exists upstream; CRM mirror must not fail the request
+        log.warning("entity mirror failed: %s", ex)
+
+
 def _entity_routes(r: APIRouter, prefix: str, resolve, db):
     """Registers list/create/update/delete/bulk/pending entity routes; `resolve(current, contact_id)` returns the org."""
     async def save_pending(org, current, row, errors, source):
@@ -176,16 +225,17 @@ def _entity_routes(r: APIRouter, prefix: str, resolve, db):
         await db.entity_import_pending.insert_one({"id": uuid.uuid4().hex, "org_id": org["id"], "data": _clean(row), "errors": errors,
                                                    "source": source, "by": current["id"], "by_name": current.get("name"), "created_at": now})
 
-    async def create_one(org, row):
+    async def create_one(org, row, current=None):
         try:
-            await _call("POST", f"/api/org/{org['id']}/entity", _clean(row))
-            return None
+            res = await _call("POST", f"/api/org/{org['id']}/entity", _clean(row))
         except HTTPException as ex:
             return str(ex.detail)
+        await _after_entity_created(db, org, res.get("entity") or {}, row, current)
+        return None
 
     async def run_bulk(job_id, org, current, rows):
         for i, row in enumerate(rows):
-            err = await create_one(org, row)
+            err = await create_one(org, row, current)
             if err:
                 await save_pending(org, current, row, [err], "import_failed")
             await db.entity_import_jobs.update_one({"id": job_id}, {"$inc": {"done": 1, "failed" if err else "created": 1},
@@ -256,7 +306,7 @@ def _entity_routes(r: APIRouter, prefix: str, resolve, db):
         d = await pending_doc(org, pid)
         errors = _row_errors(d["data"], org["root_kind"])
         if not errors:
-            err = await create_one(org, d["data"])
+            err = await create_one(org, d["data"], current)
             errors = [err] if err else []
         if errors:
             await db.entity_import_pending.update_one({"id": pid}, {"$set": {"errors": errors}})
@@ -282,7 +332,9 @@ def _entity_routes(r: APIRouter, prefix: str, resolve, db):
         org = await resolve(current, contact_id)
         if not (body.entity_kind and body.dedicated_phone and body.name and body.contact_person and body.address and body.city):
             raise HTTPException(status_code=400, detail="Type, name, admin/owner name, dedicated phone, address and city are required")
-        return await _call("POST", f"/api/org/{org['id']}/entity", body.model_dump(exclude_none=True))
+        res = await _call("POST", f"/api/org/{org['id']}/entity", body.model_dump(exclude_none=True))
+        await _after_entity_created(db, org, res.get("entity") or {}, body.model_dump(exclude_none=True), current)
+        return res
 
     @r.patch(prefix + "/{entity_id}")
     async def update_entity(entity_id: str, body: "EntityBody", contact_id: str = "", current=Depends(resolve.dep)):

@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity, BedDouble, UserCog,
   BarChart3, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
   Building2, ClipboardList, IdCard, Wallet, Compass, Trophy, Settings as SettingsIcon, ShieldCheck,
-  UserPlus, HeartPulse, Receipt, Fingerprint,
+  UserPlus, HeartPulse, Receipt, Fingerprint, Pill,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import api from "../lib/api";
@@ -16,6 +16,7 @@ const ADMIN_NAV = [
   { to: "/contacts", label: "Trata Users", icon: Users },
   { to: "/pipeline", label: "Pipeline", icon: GitBranch },
   { to: "/admin/onboarding", label: "Onboarding", icon: UserPlus },
+  { to: "/pharmacy", label: "Pharmacies", icon: Pill },
   { to: "/admin/patients", label: "Patients", icon: HeartPulse },
   { to: "/abha", label: "ABHA (ABDM)", icon: Fingerprint },
   { to: "/admin/ledger", label: "Provider Ledger", icon: Receipt },
@@ -42,6 +43,7 @@ const PROVIDER_NAV = [
   { to: "/provider/staff", label: "Staff", icon: UserCog, hospitalOnly: true },
   { to: "/provider/patients", label: "Patients", icon: HeartPulse, hospitalOnly: true },
   { to: "/provider/entities", label: "My Entities", icon: Building2, entitiesOnly: true },
+  { to: "/pharmacy", label: "Pharmacy", icon: Pill, pharmacyOnly: true },
   { to: "/provider/activities", label: "My Activities", icon: Activity },
   { to: "/provider/earnings", label: "Earnings & Payouts", icon: Wallet },
   { to: "/provider/ledger", label: "Trata Patients & Billing", icon: Receipt },
@@ -54,9 +56,9 @@ const PROVIDER_NAV = [
 export default function Layout({ children }) {
   const { user, logout, isProvider, isSalesRep, isAdmin } = useAuth();
   const isHospital = user?.provider_type === "hospital";
-  const hasEntities = ["hospital", "pharmacy", "pathologist", "path_lab", "diagnostic_centre"].includes(user?.provider_type);
+  const hasEntities = ["hospital", "pharmacy", "pathology", "pathologist", "path_lab", "diagnostic_centre"].includes(user?.provider_type);
   const NAV = (isProvider ? PROVIDER_NAV : isSalesRep ? SALES_NAV : ADMIN_NAV).filter(
-    (n) => (!n.hospitalOnly || isHospital) && (!n.entitiesOnly || hasEntities)
+    (n) => (!n.hospitalOnly || isHospital) && (!n.entitiesOnly || hasEntities) && (!n.pharmacyOnly || ["pharmacy", "hospital"].includes(user?.provider_type))
   );
   const navigate = useNavigate();
   const [query, setQuery] = React.useState("");

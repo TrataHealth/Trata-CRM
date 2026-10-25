@@ -38,6 +38,7 @@ import AdminLedgerReview from "./pages/AdminLedgerReview";
 import AdminRevenue from "./pages/AdminRevenue";
 import ProviderLedger from "./pages/ProviderLedger";
 import ProviderEntities from "./pages/ProviderEntities";
+import PharmacyConsole from "./pages/PharmacyConsole";
 import Patients from "./pages/Patients";
 import Abha from "./pages/Abha";
 import SuspendedScreen from "./components/SuspendedScreen";
@@ -91,6 +92,7 @@ function App() {
           <Route path="/forgot" element={<ForgotPassword />} />
           <Route path="/security-setup" element={<SecuritySetupRoute />} />
           <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
+          <Route path="/pharmacy" element={<RequireAuth><PharmacyConsole /></RequireAuth>} />
           <Route path="/abha" element={<RequireAuth><Abha /></RequireAuth>} />
 
           {/* Admin / internal routes */}

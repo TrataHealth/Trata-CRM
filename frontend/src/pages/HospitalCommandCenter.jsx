@@ -446,7 +446,7 @@ export default function HospitalCommandCenter() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="overline flex items-center gap-1"><Siren className="h-3 w-3" /> Emergency Command Centre</div>
-          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">{user?.name || "Hospital"}</h1>
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">{user?.business_name || "Command Center"}</h1>
           <p className="text-sm text-[#5E6C84] mt-1">Accept incoming SOS, track patients from ambulance → bed → discharge — same data as your mobile Hospital Provider App.</p>
         </div>
         <div className="text-[11px] text-[#5E6C84] flex items-center gap-1" data-testid="hcc-live-badge">

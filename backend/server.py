@@ -85,7 +85,7 @@ PROVIDER_TYPE_TO_CONTACT_TYPE = {
     "paramedic":   "paramedic",
     "pharmacy":    "pharmacy",
 }
-SUPPORTED_PROVIDER_TYPES = set(PROVIDER_TYPE_TO_CONTACT_TYPE.keys()) - {"paramedic", "pharmacy"}
+SUPPORTED_PROVIDER_TYPES = set(PROVIDER_TYPE_TO_CONTACT_TYPE.keys()) - {"paramedic"}
 
 # ── Provider KYC checklist ──────────────────────────────────────────────────
 # Doc keys mirror what the Trata Provider mobile app uses in
@@ -401,10 +401,9 @@ SUPABASE_ROLE_TO_PROVIDER_TYPE = {
     "pathologist":        "pathology",
     "lab":                "pathology",
     "lab_tech":           "pathology",
-    # NOTE: `paramedic` and `pharmacy`/`pharmacist` are intentionally NOT mapped
-    # — those verticals only use the mobile Provider App. Any such phone hitting
-    # the CRM login flow is rejected with a "use the mobile app" message before
-    # a crm_user row is ever created (see _try_supabase_provider_lookup).
+    "pharmacy":           "pharmacy",
+    "pharmacist":         "pharmacy",
+    # NOTE: `paramedic` is intentionally NOT mapped — paramedics only use the mobile Provider App.
 }
 PARAMEDIC_MOBILE_ONLY_MESSAGE = (
     "Paramedic accounts must sign in on the Trata Provider mobile app, "
@@ -458,9 +457,6 @@ async def _refresh_provider_user_from_supabase(existing: Dict[str, Any], phone: 
         r = dict(row)
         if r.get("role") == "paramedic":
             existing["__paramedic_blocked__"] = True
-            return existing
-        if r.get("role") in ("pharmacy", "pharmacist"):
-            existing["__pharmacy_blocked__"] = True
             return existing
         new_provider_type = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(r.get("role"))
         if not new_provider_type:
@@ -522,8 +518,6 @@ async def _try_supabase_provider_lookup(phone: str) -> Optional[dict]:
         # so we can surface clean errors instead of a bare 403.
         if r.get("role") == "paramedic":
             return {"__paramedic_blocked__": True, "phone": r.get("phone"), "name": r.get("name")}
-        if r.get("role") in ("pharmacy", "pharmacist"):
-            return {"__pharmacy_blocked__": True, "phone": r.get("phone"), "name": r.get("name")}
         provider_type = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(r.get("role"))
         if not provider_type:
             return None                             # not a provider vertical → block
@@ -646,8 +640,9 @@ async def verify_otp(data: LoginVerifyOTP):
     # Paramedics + pharmacies are mobile-only — block any existing crm_user with those verticals too.
     if user.get("role") == "provider_owner" and user.get("provider_type") == "paramedic":
         raise HTTPException(status_code=403, detail=PARAMEDIC_MOBILE_ONLY_MESSAGE)
-    if user.get("role") == "provider_owner" and user.get("provider_type") == "pharmacy":
-        raise HTTPException(status_code=403, detail=PHARMACY_MOBILE_ONLY_MESSAGE)
+
+    if user.get("role") == "provider_owner" and await sb.is_deactivated_entity_phone(phone):
+        raise HTTPException(status_code=403, detail="This unit has been removed by its organisation. Contact your organisation admin.")
 
     # Guard: only the healthcare-provider verticals listed in SUPPORTED_PROVIDER_TYPES
     if user.get("role") == "provider_owner" and user.get("provider_type") not in SUPPORTED_PROVIDER_TYPES:
@@ -732,9 +727,35 @@ async def me(current=Depends(get_current_user)):
                          "suspended_at": row["suspended_at"].isoformat() if row["suspended_at"] else None}
                 await db.crm_users.update_one({"id": current["id"]}, {"$set": patch})
                 current = {**current, **patch}
+            biz = await _provider_business_name(conn_pool=pool, uid=current["supabase_user_id"], ptype=current.get("provider_type"))
+            if biz and biz != current.get("business_name"):
+                await db.crm_users.update_one({"id": current["id"]}, {"$set": {"business_name": biz}})
+                current = {**current, "business_name": biz}
         except Exception as e:  # noqa: BLE001 — never fail /me on a Supabase hiccup
             logger.warning(f"suspension read-back skipped: {e}")
     return {"user": _safe_user(current)}
+
+
+_BUSINESS_NAME_SQL = {
+    "hospital": "SELECT name FROM public.hospital_profiles WHERE user_id = $1",
+    "ambulance": "SELECT business_name FROM public.ambulance_providers WHERE user_id = $1",
+    "pharmacy": "SELECT business_name FROM public.pharmacy_providers WHERE user_id = $1",
+    "pathology": "SELECT coalesce(lab_name, name) FROM public.pathologists WHERE user_id = $1",
+    "doctor": "SELECT full_name FROM public.doctors WHERE user_id = $1",
+}
+
+
+async def _provider_business_name(conn_pool, uid: str, ptype: Optional[str]) -> Optional[str]:
+    """Organisation/business name shown in page headings (never the person's name)."""
+    sql = _BUSINESS_NAME_SQL.get(ptype or "")
+    async with conn_pool.acquire() as conn:
+        name = await conn.fetchval(sql + " LIMIT 1", uid) if sql else None
+        if not name:
+            name = await conn.fetchval("SELECT name FROM public.org_entities WHERE entity_user_id = $1 LIMIT 1", uid) \
+                or await conn.fetchval("SELECT org_name FROM public.organisations WHERE master_admin_user_id = $1 LIMIT 1", uid)
+        if not name:
+            name = await conn.fetchval("SELECT organization_name FROM public.users WHERE id = $1", uid)
+    return name
 
 
 # ---------- Security questions + Password reset (Resend) ----------
@@ -1175,6 +1196,23 @@ _SB_CONTACTS_SYNC_STATE = {"last_run_at": 0.0, "running": False}
 _SB_CONTACTS_SYNC_TTL = 60.0  # seconds
 
 
+async def _notify_new_upstream_provider(c: Dict[str, Any]) -> None:
+    """Master-admin alert for providers/entities that signed up directly on the Provider app (recent ones only)."""
+    if c.get("type") in (None, "patient"):
+        return
+    try:
+        created = datetime.fromisoformat(str(c.get("created_at")).replace("Z", "+00:00"))
+        if (datetime.now(timezone.utc) - created).total_seconds() > 3 * 86400:
+            return
+    except ValueError:
+        return
+    await db.notifications.insert_one({
+        "id": str(uuid.uuid4()), "kind": "new_provider_signup", "audience": "admin", "contact_id": c["id"], "read": False,
+        "title": f"New {c.get('type', 'provider').replace('_', ' ')} on the Provider app — {c.get('name')}",
+        "body": f"Login {c.get('phone')} · {c.get('city') or 'city not set'}. KYC is pending — review documents and approve.",
+        "created_at": now_iso()})
+
+
 async def _sync_supabase_users_into_contacts() -> Dict[str, Any]:
     """Idempotently mirror every shared-Supabase user (patient app + provider
     app) into the Mongo `contacts` collection. Keyed by phone — if a
@@ -1230,6 +1268,7 @@ async def _sync_supabase_users_into_contacts() -> Dict[str, Any]:
                 }
                 await db.contacts.insert_one(new_row)
                 inserted += 1
+                await _notify_new_upstream_provider(new_row)
         _SB_CONTACTS_SYNC_STATE["last_run_at"] = _time.time()
         return {"success": True, "inserted": inserted, "updated": updated, "skipped": skipped, "total": inserted + updated + skipped}
     except Exception as e:
@@ -6214,6 +6253,8 @@ import user_admin as _user_admin  # noqa: E402
 import provider_onboard as _provider_onboard  # noqa: E402
 app.include_router(_provider_onboard.create_provider_onboard_router(db, get_current_user, is_internal))
 app.include_router(_provider_onboard.create_entities_router(db, get_current_user, is_provider))
+import pharmacy as _pharmacy  # noqa: E402
+app.include_router(_pharmacy.create_pharmacy_router(db, get_current_user, is_provider, is_internal))
 _uadm = _user_admin.create_user_admin_router(db, get_current_user, set(MASTER_ADMIN_PHONES))
 app.include_router(_uadm["router"])
 

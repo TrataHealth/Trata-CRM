@@ -100,7 +100,7 @@ export default function HospitalStaff() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="overline flex items-center gap-1"><Users className="h-3 w-3" /> Staff Roster</div>
-          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">{user?.name} · Staff</h1>
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">{user?.business_name ? `${user.business_name} · Staff` : "Staff"}</h1>
           <p className="text-sm text-[#5E6C84] mt-1">Same roster the mobile Provider App shows. Toggle on-duty status, add or remove staff — changes reflect on the app instantly.</p>
         </div>
         <button className={T.btnPrimary} onClick={() => setShowAdd((v) => !v)} data-testid="staff-add-toggle"><UserPlus className="h-3.5 w-3.5" /> Add staff</button>

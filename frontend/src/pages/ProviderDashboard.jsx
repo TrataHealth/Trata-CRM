@@ -78,7 +78,7 @@ export default function ProviderDashboard() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="overline flex items-center gap-1"><Ambulance className="h-3 w-3" /> Provider PC Console</div>
-          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">{provider.business_name || user?.name}</h1>
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">{provider.business_name || user?.business_name || "My Dashboard"}</h1>
           <p className="text-sm text-[#5E6C84] mt-1 flex items-center gap-2 flex-wrap">
             <MapPin className="h-3 w-3" /> {[provider.city, provider.state].filter(Boolean).join(", ") || "Location not set"}
             <span className="text-[#DFE1E6]">·</span>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import api from "../lib/api";
 import {
   ArrowLeft, Phone, Mail, MapPin, CheckCircle2, XCircle, Sparkles, Loader2,
@@ -141,6 +141,13 @@ export default function ContactDetail() {
 
       {/* KYC Mirror (Phase 6) — only for ambulance providers */}
       {c.type === "ambulance_provider" && <KycMirrorCard contactId={c.id} />}
+
+      {c.parent_name && (
+        <div className="bg-[#DEEBFF]/40 border border-[#B3D4FF] rounded-lg px-4 py-3 text-sm text-[#091E42]" data-testid="contact-parent-org">
+          Internal entity of {c.parent_contact_id ? <Link to={`/contacts/${c.parent_contact_id}`} className="font-semibold text-[#0052CC]" data-testid="contact-parent-link">{c.parent_name}</Link> : <b>{c.parent_name}</b>}
+          {" "}· logs in with {c.phone} on the Provider app and CRM · KYC {c.kyc_status || "pending"}
+        </div>
+      )}
 
       {c.supabase_user_id && ["hospital", "pharmacy", "pathologist", "diagnostic_centre"].includes(c.type) && (user?.is_master_admin || c.assigned_agent_id === user?.id) && (
         <EntitiesPanel base="/admin/provider-app/contact-entities" params={{ contact_id: c.id }} />

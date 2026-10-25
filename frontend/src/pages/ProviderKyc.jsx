@@ -200,7 +200,7 @@ export default function ProviderKyc() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="overline flex items-center gap-1"><ShieldCheck className="h-3 w-3" /> Compliance</div>
-          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">{user?.name} · KYC</h1>
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">{user?.business_name ? `${user.business_name} · KYC` : "KYC"}</h1>
           <p className="text-sm text-[#5E6C84] mt-1">Same checklist as the Trata Provider mobile app. Uploads land in the shared review queue and reflect on your app within a minute.</p>
         </div>
         <div className={T.card + " p-3 flex items-center gap-3 min-w-[220px]"} data-testid="kyc-progress">

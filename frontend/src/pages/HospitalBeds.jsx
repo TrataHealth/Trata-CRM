@@ -115,7 +115,7 @@ export default function HospitalBeds() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="overline flex items-center gap-1"><BedDouble className="h-3 w-3" /> Bed Management</div>
-          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">{user?.name || "Hospital"} · Beds</h1>
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">{user?.business_name ? `${user.business_name} · Beds` : "Beds"}</h1>
           <p className="text-sm text-[#5E6C84] mt-1">Live occupancy across every ward. Click any bed to toggle free/occupied — the change is logged to bed_status_logs and instantly reflected in the mobile app.</p>
         </div>
         <button className={T.btnPrimary} onClick={() => setShowAdd((v) => !v)} data-testid="beds-add-toggle"><Plus className="h-3.5 w-3.5" /> Add bed</button>

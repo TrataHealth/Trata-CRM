@@ -2030,3 +2030,12 @@ async def upsert_user_from_crm(user_id: Optional[str], phone: Optional[str], pat
         logger.warning(f"upsert_user_from_crm({user_id}/{phone}) failed: {e}")
         return {"success": False, "reason": str(e)}
 
+
+
+async def is_deactivated_entity_phone(phone: str) -> bool:
+    """True when the phone is only linked to internal entities that their organisation removed."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT is_active FROM public.org_entities WHERE dedicated_phone = ANY($1::text[])",
+                                [phone, f"+91{phone}"])
+    return bool(rows) and not any(r["is_active"] is not False for r in rows)
