@@ -15,3 +15,6 @@
 - The CRM must NEVER call `POST /api/abdm/bridge/register-url` (or any ABDM bridge/URL registration API). The Patient app is gating that endpoint behind an admin token.
 - CRM only reads `ABDM_CALLBACK_BASE` (env) for display in the callbacks view (`abdm_hip.py`); inbound callbacks keep arriving via api.tratahealth.com routed by `X-HIP-ID`.
 - Audit Jun 2026: no CRM code calls register-url/bridge endpoints.
+
+## Scan & Share (M1, facility side) — Jun 2026
+- Inbound `/api/v3/hip/patient/share` routed by gateway via X-HIP-ID IN0910034478; counter-id = per-hospital code (`abdm_share_counters`). Outbound `/patient-share/v3/on-share` via hiecm_post. Real e2e needs a real ABHA app scan of the hospital QR.

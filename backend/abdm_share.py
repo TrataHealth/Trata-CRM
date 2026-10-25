@@ -1,6 +1,7 @@
 """ABDM Scan & Share (facility side): patient scans a hospital's QR, ABDM pushes the profile, we save it and return a token."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 import abdm
 import supabase_db as sb
@@ -20,6 +22,7 @@ log = logging.getLogger("abdm.share")
 HIP_ID = os.environ["ABDM_HIP_ID"]
 QR_BASE = os.environ["ABDM_SHARE_QR_BASE"]
 IST = timezone(timedelta(hours=5, minutes=30))
+_LOCKS: Dict[str, asyncio.Lock] = {}
 SEX = {"M": "male", "F": "female", "O": "other", "T": "other"}
 
 
@@ -63,7 +66,7 @@ async def _upsert_hospital_patient(hospital_uid: str, p: Dict[str, Any], abha_no
         if row_id:
             await conn.execute("""
                 UPDATE public.hospital_patients SET abha_number = coalesce($2, abha_number), abha_address = $3,
-                       abha_verified_at = now(), abha_kyc = $4::jsonb, updated_at = now(),
+                       abha_verified_at = now(), abha_kyc = coalesce(abha_kyc, '{}'::jsonb) || $4::jsonb, updated_at = now(),
                        name = coalesce(name, $5), age = coalesce(age, $6), sex = coalesce(sex, $7), phone = coalesce(phone, $8),
                        address = coalesce(address, $9), patient_id = coalesce(patient_id, $10)
                  WHERE id = $1""", row_id, abha_no, p.get("abhaAddress"), kyc, name, age, sex, phone, addr, patient_id)
@@ -127,14 +130,29 @@ def register(cb: APIRouter, api: APIRouter, db, inbound, resp, respond, on_linke
             await respond("/patient-share/v3/on-share", {"error": {"code": "ABDM-1017", "message": "Unknown counter or missing ABHA address"},
                                                          "response": {"requestId": rid}})
             return
+        lock = _LOCKS.setdefault(f"{ctx}:{addr}", asyncio.Lock())
+        async with lock:
+            await _process(ctx, addr, counter, p, rid)
+        if not lock.locked():
+            _LOCKS.pop(f"{ctx}:{addr}", None)
+
+    async def _process(ctx: str, addr: str, counter: Dict[str, Any], p: Dict[str, Any], rid: Optional[str]):
         day, expiry = _today_ist()
-        prev = await db.abdm_profile_shares.find_one({"counter": ctx, "abha_address": addr, "date": day}, {"_id": 0})
+        key = {"counter": ctx, "abha_address": addr, "date": day}
+        prev = await db.abdm_profile_shares.find_one(key, {"_id": 0, "token": 1})
         if prev:
             token = prev["token"]
         else:
+            await db.abdm_profile_shares.create_index([("counter", 1), ("abha_address", 1), ("date", 1)], unique=True)
             seq = await db.abdm_share_seq.find_one_and_update({"_id": f"{ctx}:{day}"}, {"$inc": {"n": 1}}, upsert=True,
                                                               return_document=ReturnDocument.AFTER)
-            token = str(seq["n"])
+            try:  # first writer wins, so a double tap / ABDM retry never gets two tokens
+                claimed = await db.abdm_profile_shares.find_one_and_update(
+                    key, {"$setOnInsert": {"token": str(seq["n"]), "id": str(uuid.uuid4()), "created_at": _now()}},
+                    upsert=True, return_document=ReturnDocument.AFTER)
+            except DuplicateKeyError:
+                claimed = await db.abdm_profile_shares.find_one(key)
+            token = claimed["token"]
         try:
             saved, err = await save(counter, p), None
         except Exception as ex:  # noqa: BLE001 — token must still go back to the patient within 30s
@@ -150,8 +168,7 @@ def register(cb: APIRouter, api: APIRouter, db, inbound, resp, respond, on_linke
                "phone_masked": abdm._mask(phone10) if phone10 else None, "address": _addr_text(p.get("address")),
                "token": token, "request_id": rid, "on_share_ok": ok, "save_error": err, "last_shared_at": _now(), **saved}
         await db.abdm_profile_shares.update_one({"counter": ctx, "abha_address": addr, "date": day},
-                                                {"$set": doc, "$setOnInsert": {"id": str(uuid.uuid4()), "created_at": _now()},
-                                                 "$inc": {"share_count": 1}}, upsert=True)
+                                                {"$set": doc, "$inc": {"share_count": 1}}, upsert=True)
 
     @cb.post("/hip/patient/share")
     async def patient_share(request: Request):

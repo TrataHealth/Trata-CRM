@@ -26,7 +26,7 @@ function QrPanel() {
     <div className="flex flex-col items-center gap-3 shrink-0" data-testid="share-qr-panel">
       <div ref={box} className="p-3 bg-white border border-[#DFE1E6] rounded-md"><QRCodeSVG value={qr.qr_url} size={168} data-testid="share-qr" /></div>
       <div className="text-[11px] text-[#5E6C84]">Counter <b data-testid="share-qr-code">{qr.code}</b></div>
-      <button className={T.btn} onClick={() => printQr(box.current.innerHTML.replace('width="168" height="168"', 'width="320" height="320"'), qr)} data-testid="share-qr-print"><Printer className="h-3.5 w-3.5" /> Print poster</button>
+      <button className={T.btn} onClick={() => printQr(box.current.innerHTML.replace(/(width|height)="168"/g, '$1="320"'), qr)} data-testid="share-qr-print"><Printer className="h-3.5 w-3.5" /> Print poster</button>
     </div>
   );
 }

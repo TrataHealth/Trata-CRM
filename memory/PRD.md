@@ -406,3 +406,10 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Editable preview with live validation (required fields, phone, pincode, email, allowed types, duplicate phones in file / already used), visible Problems column; "Import N ready, save M to Pending".
 - Backend (`provider_onboard.py` `_entity_routes`): `POST {base}/bulk` (re-validates + dupes server-side, background job), `GET {base}/bulk/{job_id}` (stale guard 180s), Pending CRUD `GET/PUT/DELETE {base}/pending[/{id}]`, `POST {base}/pending/{id}/import`. Mongo: `entity_import_jobs`, `entity_import_pending`. Upstream-rejected rows auto-go to Pending.
 - Tested: iteration_21.json; all follow-ups fixed (422 on bad rows, server dupe checks, friendly errors, inline problems, template example separated).
+
+## Iteration 22 — ABDM Scan & Share, facility side (Jun 2026)
+- `abdm_share.py`: inbound `POST /api/v3/hip/patient/share` (gateway JWT verified, 200 ack) → saves profile → `on-share` with token (sequential per hospital per IST day, valid till IST midnight, same ABHA same day = same token; atomic + per-ABHA lock). Unknown counter → on-share error.
+- One QR per hospital: `GET /api/abdm/share/qr` (counter code `TH…` in `abdm_share_counters`; QR URL `ABDM_SHARE_QR_BASE?hip-id=IN0910034478&counter-id=…`). `GET /api/abdm/share/profiles?date=` (hospital own / staff all).
+- Shared profile upserts Mongo `abha_records` (owner=hospital) + Supabase `hospital_patients` (match by ABHA no/address or phone+name, status 'registered', abha_kyc merged). No queue UI (user choice).
+- UI: `ScanShareCard.jsx` on /abha (QR + print poster + today's shares; admin sees all hospitals).
+- Tested iteration_22 (backend 11/11, frontend pass); poster size + token race fixed after.
