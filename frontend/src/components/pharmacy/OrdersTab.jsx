@@ -64,7 +64,7 @@ function OrderCard({ o, showStore, onDone }) {
 export default function OrdersTab({ store, showStore }) {
   const [status, setStatus] = useState(""); const [data, setData] = useState(null);
   const load = () => api.get("/pharmacy-console/orders", { params: { store, status: status || undefined } }).then((r) => setData(r.data)).catch((e) => { errMsg(e); setData({ orders: [], counts: {} }); });
-  useEffect(() => { load(); const t = setInterval(load, 20000); return () => clearInterval(t); /* eslint-disable-next-line */ }, [store, status]);
+  useEffect(() => { load(); const t = setInterval(load, 20000); window.addEventListener("trata:new-order", load); return () => { clearInterval(t); window.removeEventListener("trata:new-order", load); }; /* eslint-disable-next-line */ }, [store, status]);
   const replace = (o) => setData((d) => ({ ...d, orders: d.orders.map((x) => (x.id === o.id ? o : x)).filter((x) => !status || x.status === status) }));
   return (
     <div className="space-y-3" data-testid="orders-tab">

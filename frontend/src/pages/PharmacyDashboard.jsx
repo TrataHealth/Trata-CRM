@@ -18,16 +18,17 @@ function Tile({ to, icon: Icon, label, value, sub, testid, tone = "#0052CC" }) {
 export default function PharmacyDashboard() {
   const { user } = useAuth();
   const { stores, err } = useStores();
-  const [store, setStore] = useState("all"); const [d, setD] = useState(null);
+  const [store, setStore] = useState("all"); const [d, setD] = useState(null); const [tick, setTick] = useState(0);
   const multi = (stores?.length || 0) > 1;
   const sel = multi ? store : stores?.[0]?.id;
+  useEffect(() => { const f = () => setTick((t) => t + 1); window.addEventListener("trata:new-order", f); return () => window.removeEventListener("trata:new-order", f); }, []);
   useEffect(() => {
     if (!sel) return;
     const p = { store: sel };
     Promise.all([api.get("/pharmacy-console/orders", { params: p }), api.get("/pharmacy-console/prescriptions", { params: p }),
       api.get("/pharmacy-console/inventory", { params: p }), api.get("/pharmacy-console/sales", { params: { ...p, days: 7 } })])
       .then(([o, rx, inv, s]) => setD({ orders: o.data, rx: rx.data.prescriptions, inv: inv.data, sales: s.data })).catch(() => setD(false));
-  }, [sel]);
+  }, [sel, tick]);
   const newOrders = d ? (d.orders.counts.PENDING_PHARMACY || 0) + (d.orders.counts.PREORDER_PENDING || 0) : 0;
   const newRx = d ? d.rx.filter((x) => ["submitted", "issued", "pending"].includes(x.status)).length : 0;
   return (

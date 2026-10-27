@@ -37,10 +37,12 @@ export function NewOrderAlerts() {
         if (data.orders.length) since.current = data.orders[data.orders.length - 1].created_at;
         if (alive && fresh.length) {
           setAlerts((a) => [...fresh.reverse(), ...a].slice(0, 5));
+          window.dispatchEvent(new CustomEvent("trata:new-order"));
           if (localStorage.getItem(MUTE_KEY) !== "1") chime(ctx);
         }
       } catch { /* offline / not a pharmacy — try again next tick */ }
     };
+    poll();
     const t = setInterval(poll, 10000);
     return () => { alive = false; clearInterval(t); };
   }, []);

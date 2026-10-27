@@ -16,6 +16,7 @@ export default function StockActions({ store, view, showStore }) {
   const [d, setD] = useState(null);
   useEffect(() => { setD(null); api.get("/pharmacy-console/stock-actions", { params: { store, days: 60 } }).then((r) => setD(r.data)).catch((e) => { errMsg(e); setD({ expiring: [], reorder: [] }); }); }, [store]);
   if (!d) return <div className="text-sm text-[#5E6C84]">Loading…</div>;
+  if (d.unreachable_stores) return <div className="text-sm text-[#974F0C] bg-[#FFFAE6] border border-[#FFE380] rounded-md px-3 py-3" data-testid="stock-actions-unreachable">Couldn't reach the Provider app for {d.unreachable_stores} store(s), so this list may be incomplete. Please refresh in a moment.</div>;
   if (view === "expiring") return (
     <div className="space-y-2" data-testid="expiry-list">
       <div className="text-sm text-[#42526E]">Medicines expiring in the next 60 days — sell, return to the distributor or clear first. Stock value at risk: <b className="text-[#BF2600]" data-testid="expiry-value">{inr(d.value_at_risk)}</b></div>

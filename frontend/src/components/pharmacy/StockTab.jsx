@@ -57,6 +57,7 @@ function StockList({ store, stores, showStore }) {
         {data && <span className="text-xs text-[#5E6C84]" data-testid="stock-alerts"><b className="text-[#BF2600]">{data.low_stock}</b> low · <b className="text-[#974F0C]">{data.expiring_soon}</b> expiring within 60 days</span>}
         <button className={`${primary} ml-auto`} onClick={() => setEdit(null)} data-testid="stock-add"><Plus className="h-3.5 w-3.5" /> Add medicine</button>
       </div>
+      {data?.unreachable_stores > 0 && <div className="text-xs text-[#974F0C]" data-testid="stock-unreachable">Couldn't reach the Provider app for {data.unreachable_stores} store(s); the list may be incomplete.</div>}
       {!data ? <div className="text-sm text-[#5E6C84]">Loading stock…</div> : data.items.length === 0 ? <div className="text-sm text-[#5E6C84] py-8 text-center" data-testid="stock-empty">No medicines in stock yet.</div> : (
         <div className="overflow-x-auto bg-white border border-[#DFE1E6] rounded-lg"><table className="w-full text-sm" data-testid="stock-table">
           <thead><tr className="text-left text-[10px] uppercase tracking-wider text-[#5E6C84] bg-[#F8F9FA]">{["Medicine", ...(showStore ? ["Store"] : []), "Qty", "Price", "Batch", "Expiry", ""].map((h) => <th key={h} className="px-3 py-2 font-semibold">{h}</th>)}</tr></thead>

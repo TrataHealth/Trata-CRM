@@ -421,3 +421,8 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - My Entities: entity name opens `/provider/entities/:id` summary dashboard (metrics by kind, KYC, login, activity). Section renamed "My Entities".
 - Headings use `business_name` (from /auth/me) not the person's name. Notifications filtered by role.
 - Tested: iteration_23/24 (backend 20/20, frontend pass); follow-ups fixed.
+
+## Iteration 25 — Pharmacy new-order alerts + expiry/reorder lists (Jun 2026)
+- `NewOrderAlerts.jsx` (mounted in Layout for pharmacy providers): polls `GET /api/pharmacy-console/orders/new?since=` every 10s (first call returns DB clock), pop-up card bottom-right + 3-note chime (WebAudio), View order / dismiss, mute toggle (localStorage `trata_order_alert_muted`), dispatches `trata:new-order` so the dashboard/orders refresh. Medicine orders only (user choice).
+- `GET /api/pharmacy-console/stock-actions?days=60`: expiring list (days left, value at risk) + reorder list (suggested = last-30-day sales + reorder level − stock; no sales → 2× reorder level), est. cost; `unreachable_stores` surfaced in UI. Stock page sub-tabs All / Expiring soon / Reorder list (+ CSV download).
+- Tested iteration_25 (backend 11/11, frontend pass); follow-ups fixed (immediate poll, DB clock, retry + warnings, exact name match, malformed expiry guard).

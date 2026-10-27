@@ -50,8 +50,8 @@ def _row(r) -> Dict[str, Any]:
     return d
 
 
-async def _provider_api(method: str, path: str, **kw):
-    async with httpx.AsyncClient(timeout=30) as c:
+async def _provider_api(method: str, path: str, timeout: float = 30, **kw):
+    async with httpx.AsyncClient(timeout=timeout) as c:
         try:
             res = await c.request(method, f"{API}{path}", **kw)
         except httpx.HTTPError as ex:
@@ -248,8 +248,12 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
 
     async def load_inventory(stores, low_stock_only: bool = False, search: str = ""):
         params = {"low_stock_only": str(low_stock_only).lower(), **({"search": search.strip()} if search.strip() else {})}
-        res = await asyncio.gather(*[_provider_api("GET", f"/api/pharmacy/{s['id']}/inventory", params=params) for s in stores],
-                                   return_exceptions=True)
+        async def one(sid):
+            try:
+                return await _provider_api("GET", f"/api/pharmacy/{sid}/inventory", params=params, timeout=12)
+            except HTTPException:
+                return await _provider_api("GET", f"/api/pharmacy/{sid}/inventory", params=params, timeout=12)
+        res = await asyncio.gather(*[one(s["id"]) for s in stores], return_exceptions=True)
         soon = (datetime.now(IST) + timedelta(days=60)).date().isoformat()
         items = []
         for s, data in zip(stores, res):
@@ -260,14 +264,18 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
                 items.append({**it, "store_id": s["id"], "store_name": s["name"],
                               "low_stock": (it.get("qty_in_stock") or 0) <= (it.get("reorder_threshold") or 0),
                               "expiring_soon": bool(exp) and exp <= soon, "expired": bool(exp) and exp < datetime.now(IST).date().isoformat()})
-        return {"items": items, "low_stock": sum(i["low_stock"] for i in items), "expiring_soon": sum(i["expiring_soon"] for i in items)}
+        return {"items": items, "low_stock": sum(i["low_stock"] for i in items), "expiring_soon": sum(i["expiring_soon"] for i in items),
+                "unreachable_stores": sum(isinstance(x, Exception) for x in res)}
 
     @r.get("/orders/new")
     async def new_orders(since: Optional[str] = None, current=Depends(get_current_user)):
         """Lightweight poll for the new-order pop-up: open orders created after `since` (omit it to get the server clock)."""
         ids = [s["id"] for s in await pick(current, None)]
         if not since:
-            return {"orders": [], "server_time": datetime.now(timezone.utc).isoformat()}
+            pool = await sb.get_pool()
+            async with pool.acquire() as conn:
+                db_now = await conn.fetchval("SELECT now()")
+            return {"orders": [], "server_time": db_now.isoformat()}
         try:
             ts = datetime.fromisoformat(since.replace("Z", "+00:00"))
         except ValueError:
@@ -283,7 +291,8 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
     async def stock_actions(store: Optional[str] = None, days: int = 60, current=Depends(get_current_user)):
         """Expiry clearance list (next `days`) and reorder suggestions sized by the last 30 days of sales."""
         stores = await pick(current, store)
-        inv = (await load_inventory(stores))["items"]
+        loaded = await load_inventory(stores)
+        inv = loaded["items"]
         ids = [s["id"] for s in stores]
         since = datetime.now(timezone.utc) - timedelta(days=30)
         pool = await sb.get_pool()
@@ -304,7 +313,7 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
 
         def sold_for(it) -> int:
             n = (it.get("medicine_name") or "").strip().lower()
-            return sum(v for (pid, name), v in sold.items() if pid == it["store_id"] and n and (name == n or n in name or name in n))
+            return sold.get((it["store_id"], n), 0) if n else 0
 
         today = datetime.now(IST).date()
         horizon = today + timedelta(days=max(1, min(days, 365)))
@@ -312,14 +321,17 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
         for it in inv:
             exp = (it.get("expiry_date") or "")[:10]
             qty, price = it.get("qty_in_stock") or 0, float(it.get("unit_price") or 0)
-            if exp and qty > 0:
-                d = datetime.fromisoformat(exp).date()
+            try:
+                d = datetime.fromisoformat(exp).date() if exp else None
+            except ValueError:
+                d = None
+            if d and qty > 0:
                 if d <= horizon:
                     expiring.append({**it, "days_left": (d - today).days, "value_at_risk": round(qty * price, 2)})
             s30 = sold_for(it)
             level = it.get("reorder_threshold") or 0
-            if qty <= level or (s30 and qty < s30):
-                target = s30 + level if s30 else level * 2
+            target = s30 + level if s30 else level * 2
+            if (qty <= level or (s30 and qty < s30)) and target > qty:
                 reorder.append({**it, "sold_30d": s30, "suggested_qty": max(0, target - qty),
                                 "basis": f"{s30} sold in 30 days + reorder level {level}" if s30 else f"no sales in 30 days, top up to 2× reorder level {level}",
                                 "est_cost": round(max(0, target - qty) * price, 2)})
@@ -327,7 +339,7 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
         reorder.sort(key=lambda x: (-(x["sold_30d"] or 0), x.get("qty_in_stock") or 0))
         return {"days": days, "expiring": expiring, "reorder": reorder,
                 "value_at_risk": round(sum(x["value_at_risk"] for x in expiring), 2),
-                "reorder_cost": round(sum(x["est_cost"] for x in reorder), 2)}
+                "reorder_cost": round(sum(x["est_cost"] for x in reorder), 2), "unreachable_stores": loaded["unreachable_stores"]}
 
     async def owned_item(current, item_id: str):
         ids = [s["id"] for s in await pick(current, None)]
