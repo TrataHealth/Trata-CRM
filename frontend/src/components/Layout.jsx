@@ -10,6 +10,7 @@ import { useAuth } from "../lib/auth";
 import api from "../lib/api";
 import { relativeTime } from "../lib/constants";
 import { LiveBell } from "./LiveUpdates";
+import { NewOrderAlerts } from "./pharmacy/NewOrderAlerts";
 
 const ADMIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
@@ -303,6 +304,7 @@ export default function Layout({ children }) {
           </div>
         )}
         <div className="flex-1 min-w-0 overflow-x-hidden">{children}</div>
+        {isProvider && user?.provider_type === "pharmacy" && <NewOrderAlerts />}
       </main>
     </div>
   );

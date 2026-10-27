@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -32,6 +33,11 @@ ORDER_COLS = """id, order_number, patient_id, patient_name, patient_phone, pharm
 
 def _j(v):
     return json.loads(v) if isinstance(v, str) else v
+
+
+def _first_int(v) -> Optional[int]:
+    m = re.search(r"\d+", str(v or ""))
+    return int(m.group()) if m else None
 
 
 def _row(r) -> Dict[str, Any]:
@@ -238,7 +244,9 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
     # ---------- Stock (Provider app API) ----------
     @r.get("/inventory")
     async def inventory(store: Optional[str] = None, low_stock_only: bool = False, search: str = "", current=Depends(get_current_user)):
-        stores = await pick(current, store)
+        return await load_inventory(await pick(current, store), low_stock_only, search)
+
+    async def load_inventory(stores, low_stock_only: bool = False, search: str = ""):
         params = {"low_stock_only": str(low_stock_only).lower(), **({"search": search.strip()} if search.strip() else {})}
         res = await asyncio.gather(*[_provider_api("GET", f"/api/pharmacy/{s['id']}/inventory", params=params) for s in stores],
                                    return_exceptions=True)
@@ -253,6 +261,73 @@ def create_pharmacy_router(db, get_current_user, is_provider, is_internal) -> AP
                               "low_stock": (it.get("qty_in_stock") or 0) <= (it.get("reorder_threshold") or 0),
                               "expiring_soon": bool(exp) and exp <= soon, "expired": bool(exp) and exp < datetime.now(IST).date().isoformat()})
         return {"items": items, "low_stock": sum(i["low_stock"] for i in items), "expiring_soon": sum(i["expiring_soon"] for i in items)}
+
+    @r.get("/orders/new")
+    async def new_orders(since: Optional[str] = None, current=Depends(get_current_user)):
+        """Lightweight poll for the new-order pop-up: open orders created after `since` (omit it to get the server clock)."""
+        ids = [s["id"] for s in await pick(current, None)]
+        if not since:
+            return {"orders": [], "server_time": datetime.now(timezone.utc).isoformat()}
+        try:
+            ts = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="since must be an ISO timestamp")
+        pool = await sb.get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("""SELECT id, order_number, patient_name, pharmacy_name, items, delivery_mode, is_preorder, created_at
+                                         FROM public.medicine_orders WHERE pharmacy_id = ANY($1::text[]) AND created_at > $2
+                                          AND status IN ('PENDING_PHARMACY', 'PREORDER_PENDING') ORDER BY created_at LIMIT 20""", ids, ts)
+        return {"orders": [_row(x) for x in rows], "server_time": datetime.now(timezone.utc).isoformat()}
+
+    @r.get("/stock-actions")
+    async def stock_actions(store: Optional[str] = None, days: int = 60, current=Depends(get_current_user)):
+        """Expiry clearance list (next `days`) and reorder suggestions sized by the last 30 days of sales."""
+        stores = await pick(current, store)
+        inv = (await load_inventory(stores))["items"]
+        ids = [s["id"] for s in stores]
+        since = datetime.now(timezone.utc) - timedelta(days=30)
+        pool = await sb.get_pool()
+        async with pool.acquire() as conn:
+            sold_rows = await conn.fetch("""SELECT pharmacy_id, items FROM public.medicine_orders WHERE pharmacy_id = ANY($1::text[])
+                                              AND status = 'FULFILLED' AND updated_at >= $2
+                                            UNION ALL
+                                            SELECT pharmacy_id, items FROM public.prescriptions WHERE pharmacy_id = ANY($1::text[])
+                                              AND status = 'fulfilled' AND coalesce(fulfilled_at, updated_at) >= $2""", ids, since)
+        sold: Dict[tuple, int] = {}
+        for row in sold_rows:
+            for it in _j(row["items"]) or []:
+                name = (it.get("name") or it.get("line") or "") if isinstance(it, dict) else str(it)
+                qty = _first_int(it.get("quantity") if isinstance(it, dict) else None) or 1
+                key = (row["pharmacy_id"], name.strip().lower())
+                if key[1]:
+                    sold[key] = sold.get(key, 0) + qty
+
+        def sold_for(it) -> int:
+            n = (it.get("medicine_name") or "").strip().lower()
+            return sum(v for (pid, name), v in sold.items() if pid == it["store_id"] and n and (name == n or n in name or name in n))
+
+        today = datetime.now(IST).date()
+        horizon = today + timedelta(days=max(1, min(days, 365)))
+        expiring, reorder = [], []
+        for it in inv:
+            exp = (it.get("expiry_date") or "")[:10]
+            qty, price = it.get("qty_in_stock") or 0, float(it.get("unit_price") or 0)
+            if exp and qty > 0:
+                d = datetime.fromisoformat(exp).date()
+                if d <= horizon:
+                    expiring.append({**it, "days_left": (d - today).days, "value_at_risk": round(qty * price, 2)})
+            s30 = sold_for(it)
+            level = it.get("reorder_threshold") or 0
+            if qty <= level or (s30 and qty < s30):
+                target = s30 + level if s30 else level * 2
+                reorder.append({**it, "sold_30d": s30, "suggested_qty": max(0, target - qty),
+                                "basis": f"{s30} sold in 30 days + reorder level {level}" if s30 else f"no sales in 30 days, top up to 2× reorder level {level}",
+                                "est_cost": round(max(0, target - qty) * price, 2)})
+        expiring.sort(key=lambda x: x["days_left"])
+        reorder.sort(key=lambda x: (-(x["sold_30d"] or 0), x.get("qty_in_stock") or 0))
+        return {"days": days, "expiring": expiring, "reorder": reorder,
+                "value_at_risk": round(sum(x["value_at_risk"] for x in expiring), 2),
+                "reorder_cost": round(sum(x["est_cost"] for x in reorder), 2)}
 
     async def owned_item(current, item_id: str):
         ids = [s["id"] for s in await pick(current, None)]

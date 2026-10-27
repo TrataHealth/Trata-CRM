@@ -3,6 +3,19 @@ import { Plus, Pencil, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import api from "../../lib/api";
 import { inr, errMsg, inp, primary, ghost } from "./ui";
+import StockActions from "./StockActions";
+
+const VIEWS = [["all", "All stock"], ["expiring", "Expiring soon"], ["reorder", "Reorder list"]];
+
+export default function StockTab(props) {
+  const [view, setView] = useState("all");
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-1 border-b border-[#DFE1E6]">{VIEWS.map(([k, l]) => <button key={k} onClick={() => setView(k)} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${view === k ? "border-[#0052CC] text-[#0052CC]" : "border-transparent text-[#5E6C84] hover:text-[#091E42]"}`} data-testid={`stock-view-${k}`}>{l}</button>)}</div>
+      {view === "all" ? <StockList {...props} /> : <StockActions key={view} store={props.store} view={view} showStore={props.showStore} />}
+    </div>
+  );
+}
 
 const FIELDS = [["medicine_name", "Medicine name *"], ["manufacturer", "Manufacturer"], ["sku", "SKU"], ["unit", "Unit (strip, bottle…)"],
   ["qty_in_stock", "Qty in stock", "num"], ["reorder_threshold", "Reorder at", "num"], ["unit_price", "Unit price ₹", "num"], ["batch_no", "Batch no."], ["expiry_date", "Expiry", "date"]];
@@ -31,7 +44,7 @@ function ItemDialog({ item, stores, defaultStore, onClose, onSaved }) {
   );
 }
 
-export default function StockTab({ store, stores, showStore }) {
+function StockList({ store, stores, showStore }) {
   const [data, setData] = useState(null); const [q, setQ] = useState(""); const [low, setLow] = useState(false); const [edit, setEdit] = useState(undefined);
   const load = () => api.get("/pharmacy-console/inventory", { params: { store, low_stock_only: low, search: q || undefined } }).then((r) => setData(r.data)).catch((e) => { errMsg(e); setData({ items: [] }); });
   useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); /* eslint-disable-next-line */ }, [store, low, q]);
