@@ -11,6 +11,8 @@ import { fmtCurrency, relativeTime, ACTIVITY_CATEGORIES, statusColor, typeLabel,
 import { renderInsightsMarkdown, RANGE_OPTIONS } from "../lib/insights";
 import WebhookBridgePanel from "../components/WebhookBridgePanel";
 import AdminBridgePanel from "../components/AdminBridgePanel";
+import { MorningDigest } from "../components/MorningDigest";
+import { useAuth } from "../lib/auth";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, BarChart, Bar, CartesianGrid,
@@ -30,6 +32,7 @@ export default function Dashboard() {
   const [statsLoading, setStatsLoading] = useState(false);
   const [ai, setAi] = useState({ open: false, loading: false, markdown: "", error: "" });
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   useEffect(() => {
     let cancelled = false;
@@ -113,6 +116,7 @@ export default function Dashboard() {
       </div>
 
       {/* AI insights drawer */}
+      {user?.is_master_admin && <MorningDigest />}
       {ai.open && (
         <div className="bg-white border border-[#6554C0]/30 rounded-md shadow-sm overflow-hidden" data-testid="dashboard-ai-insights-panel">
           <div className="px-5 py-3 border-b border-[#DFE1E6] flex items-center justify-between bg-[#EAE6FF]">

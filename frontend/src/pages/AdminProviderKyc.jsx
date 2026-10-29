@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import api from "../lib/api";
+import { useAuth } from "../lib/auth";
+import { RecordHistory, DetailTabs } from "../components/history/RecordHistory";
 import { toast } from "sonner";
 import {
   AlertTriangle, ArrowLeft, BadgeCheck, CheckCircle2,
@@ -49,6 +51,8 @@ export default function AdminProviderKyc() {
   const [uploadingKey, setUploadingKey] = useState("");
   const [approving, setApproving] = useState(false);
   const fileRefs = useRef({});
+  const { user } = useAuth();
+  const [tab, setTab] = useState("overview");
 
   const load = useCallback(async () => {
     try {
@@ -151,7 +155,8 @@ export default function AdminProviderKyc() {
             <User className="h-3.5 w-3.5" /> +91 {provider.phone} · <StatusChip status={provider.verification_status} />
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {user?.is_master_admin && <DetailTabs tab={tab} setTab={setTab} />}
           <div className="text-right">
             <div className="text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold">Required docs uploaded</div>
             <div className="font-heading text-2xl font-black text-[#091E42]">{requiredUploaded} / {totalRequired}</div>
@@ -167,6 +172,7 @@ export default function AdminProviderKyc() {
         </div>
       </div>
 
+      {tab === "history" ? <RecordHistory recordId={userId} /> : <>
       {alreadyApproved && (
         <div className="bg-[#E3FCEF] border border-[#57D9A3] rounded-md p-3 text-xs text-[#006644] flex items-center gap-2" data-testid="admin-kyc-approved-banner">
           <BadgeCheck className="h-4 w-4" /> Every required document is approved — this provider is now live on the mobile Provider App and Trata Admin App.
@@ -237,6 +243,7 @@ export default function AdminProviderKyc() {
       <div className="text-[10px] text-[#5E6C84]">
         Writes go directly to shared Supabase — the mobile Provider App and Trata Admin App reflect changes in real time.
       </div>
+      </>}
     </div>
   );
 }

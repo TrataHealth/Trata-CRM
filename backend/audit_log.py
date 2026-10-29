@@ -19,6 +19,11 @@ PROVIDER_RE = (r"^(tratax_|hospital_|labs$|lab_|patholog|path_lab|pharmacy_|ambu
 PATIENT_EXCLUDE_RE = PROVIDER_RE.replace("|users$)", ")")
 
 
+# Rows that "are" a person/organisation; ids found on them pull in that record's linked rows (tenant, KYC application...).
+PROFILE_RE = (r"^(users|.*_profiles|.*_providers|labs|doctors|pathologists|org_entities|organisations|tratax_tenants|"
+              r"tratax_kyc_applications|customer_profiles|sanjeevani_agents)$")
+
+
 def scope_of(t: str) -> List[str]:
     if t == "users":
         return ["patient", "provider"]
@@ -44,6 +49,8 @@ CREATE INDEX IF NOT EXISTS activity_log_table_id ON trata_audit.activity_log (ta
 CREATE INDEX IF NOT EXISTS activity_log_row ON trata_audit.activity_log (table_name, row_id);
 CREATE INDEX IF NOT EXISTS activity_log_at ON trata_audit.activity_log (at);
 CREATE INDEX IF NOT EXISTS activity_log_txid ON trata_audit.activity_log (txid, id);
+ALTER TABLE trata_audit.activity_log ADD COLUMN IF NOT EXISTS refs text[];
+CREATE INDEX IF NOT EXISTS activity_log_refs ON trata_audit.activity_log USING gin (refs);
 REVOKE ALL ON trata_audit.activity_log FROM PUBLIC;
 
 -- Drop secrets/large blobs; mask sensitive health text so admins see that it changed, not what it says.
@@ -56,26 +63,35 @@ CREATE OR REPLACE FUNCTION trata_audit.clean(j jsonb) RETURNS jsonb LANGUAGE sql
    WHERE k !~* '(password|otp|token|secret|_b64$|photo|signature_image|pin_hash)'
 $f$;
 
+-- Every id-like value in the row (id, *_id, *_uid) so a record's full history can be found with one index lookup.
+CREATE OR REPLACE FUNCTION trata_audit.refs_of(j jsonb) RETURNS text[] LANGUAGE sql IMMUTABLE AS $f$
+  SELECT array_agg(DISTINCT value) FROM jsonb_each_text(j)
+   WHERE (key = 'id' OR key ~ '_(id|uid)$') AND value IS NOT NULL AND length(value) BETWEEN 4 AND 80
+$f$;
+UPDATE trata_audit.activity_log SET refs = trata_audit.refs_of(coalesce(new_data, '{}'::jsonb) || coalesce(old_data, '{}'::jsonb))
+ WHERE refs IS NULL;
+
 CREATE OR REPLACE FUNCTION trata_audit.capture() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $f$
-DECLARE o jsonb; n jsonb; ch text[];
+DECLARE o jsonb; n jsonb; ch text[]; rf text[];
 BEGIN
   BEGIN
     IF TG_OP <> 'INSERT' THEN o := trata_audit.clean(to_jsonb(OLD)); END IF;
     IF TG_OP <> 'DELETE' THEN n := trata_audit.clean(to_jsonb(NEW)); END IF;
+    rf := trata_audit.refs_of(coalesce(n, '{}'::jsonb) || coalesce(o, '{}'::jsonb));
     IF TG_OP = 'UPDATE' THEN
       SELECT array_agg(k) INTO ch FROM jsonb_object_keys(n) k WHERE n->k IS DISTINCT FROM o->k AND k NOT IN ('updated_at', 'last_seen_at');
       IF ch IS NULL THEN RETURN NULL; END IF;
       SELECT jsonb_object_agg(k, o->k) INTO o FROM unnest(ch) k;
       SELECT jsonb_object_agg(k, n->k) INTO n FROM unnest(ch) k;
     END IF;
-    INSERT INTO trata_audit.activity_log (table_name, op, row_id, app, db_role, old_data, new_data, changed)
+    INSERT INTO trata_audit.activity_log (table_name, op, row_id, app, db_role, old_data, new_data, changed, refs)
     VALUES (TG_TABLE_NAME, TG_OP, coalesce(n->>'id', o->>'id', (to_jsonb(coalesce(NEW, OLD)))->>'id'),
             coalesce(nullif(current_setting('trata.app', true), ''),
                      nullif(nullif(current_setting('application_name', true), ''), 'Supavisor'),
                      CASE WHEN current_setting('role', true) IN ('authenticated', 'anon') THEN 'app-user (Supabase client)'
                           WHEN current_setting('role', true) = 'service_role' THEN 'app-server (service key)' END),
-            coalesce(nullif(current_setting('role', true), 'none'), session_user), o, n, ch);
+            coalesce(nullif(current_setting('role', true), 'none'), session_user), o, n, ch, rf);
   EXCEPTION WHEN others THEN
     -- Never block another app's write because of auditing.
     RAISE WARNING 'trata_audit.capture failed on %: %', TG_TABLE_NAME, SQLERRM;
@@ -182,6 +198,27 @@ def create_audit_router(get_current_user) -> APIRouter:
         else:
             cursor = safe if after_txid is None or safe > after_txid else after_txid
         return {"items": items, "cursor_txid": cursor}
+
+    @r.get("/record/{rid}")
+    async def record_history(rid: str, after_id: int = 0, limit: int = 300, current=Depends(get_current_user)):
+        """Every recorded change to this person/organisation and to rows that point at them, oldest first."""
+        master(current)
+        limit = max(1, min(limit, 500))
+        pool = await sb.get_pool()
+        async with pool.acquire() as conn:
+            seeds = await conn.fetchval("""SELECT array_agg(DISTINCT x) FROM (
+                     SELECT unnest(refs) x FROM trata_audit.activity_log
+                      WHERE table_name ~ $2 AND (row_id = $1 OR refs @> ARRAY[$1])) s""", rid, PROFILE_RE) or []
+            ids = sorted(set(seeds) | {rid})
+            rows = await conn.fetch("""SELECT id, at, table_name, op, row_id, app, old_data, new_data, changed
+                                         FROM trata_audit.activity_log WHERE refs && $1::text[] AND id > $2
+                                        ORDER BY id ASC LIMIT $3""", ids, after_id, limit)
+            since = await conn.fetchval("SELECT min(at) FROM trata_audit.activity_log")
+        import json
+        items = [{**dict(x), "at": x["at"].isoformat(), "old_data": json.loads(x["old_data"]) if x["old_data"] else None,
+                  "new_data": json.loads(x["new_data"]) if x["new_data"] else None} for x in rows]
+        return {"items": items, "linked_ids": len(ids), "more": len(items) == limit,
+                "recording_since": since.isoformat() if since else None}
 
     @r.get("/health")
     async def health(current=Depends(get_current_user)):

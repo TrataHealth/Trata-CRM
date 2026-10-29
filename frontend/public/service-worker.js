@@ -1,5 +1,6 @@
 /* TrataCRM service worker — minimal app-shell caching */
-const CACHE = 'tratacrm-v1';
+importScripts('/push-sw.js');
+const CACHE = 'tratacrm-v2';
 const SHELL = ['/', '/index.html', '/manifest.json', '/icons/icon.svg'];
 
 self.addEventListener('install', (event) => {

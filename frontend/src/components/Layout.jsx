@@ -11,6 +11,7 @@ import api from "../lib/api";
 import { relativeTime } from "../lib/constants";
 import { LiveBell } from "./LiveUpdates";
 import { NewOrderAlerts } from "./pharmacy/NewOrderAlerts";
+import { AlertListener } from "./alerts/AlertListener";
 
 const ADMIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
@@ -313,6 +314,7 @@ export default function Layout({ children }) {
         )}
         <div className="flex-1 min-w-0 overflow-x-hidden">{children}</div>
         {isProvider && user?.provider_type === "pharmacy" && <NewOrderAlerts />}
+        {user?.is_master_admin && <AlertListener />}
       </main>
     </div>
   );

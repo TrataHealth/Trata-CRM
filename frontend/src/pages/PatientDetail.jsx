@@ -4,6 +4,8 @@ import { AbhaBadge, useAbhaLookup } from "../components/abdm/AbhaBadge";
 import { AbhaQrScanner } from "../components/abdm/AbhaQrScanner";
 import { HealthRecordsPanel } from "../components/abdm/HealthRecordsPanel";
 import api from "../lib/api";
+import { useAuth } from "../lib/auth";
+import { RecordHistory, DetailTabs } from "../components/history/RecordHistory";
 import { relativeTime } from "../lib/constants";
 import {
   ArrowLeft, User, Phone, Mail, Calendar, HeartPulse, AlertTriangle,
@@ -52,6 +54,9 @@ export default function PatientDetail({ mode = "admin" }) {
   const basePath = mode === "provider" ? "/provider/patients" : "/admin/patients";
   const listPath = mode === "provider" ? "/provider/patients" : "/admin/patients";
   const [state, setState] = useState({ loading: true, err: "", data: null });
+  const { user } = useAuth();
+  const canHistory = mode === "admin" && !!user?.is_master_admin;
+  const [tab, setTab] = useState("overview");
 
   const load = useCallback(async () => {
     try {
@@ -108,9 +113,11 @@ export default function PatientDetail({ mode = "admin" }) {
             {!abha[userId] && <AbhaQrScanner patientUserId={userId} patientPhone={patient?.phone || cp.phone} onResult={refreshAbha} label="Scan ABHA" testid="patient-abha-scan" />}
           </div>
         </div>
+        {canHistory && <DetailTabs tab={tab} setTab={setTab} />}
       </div>
 
-      {abha[userId] && <HealthRecordsPanel patientUserId={userId} showConsents={false} />}
+      {tab === "history" ? <RecordHistory recordId={userId} /> : <>
+      {abha[userId] && <HealthRecordsPanel patientUserId={userId} showConsents={false} />}}
 
       <section className={T.card} data-testid="patient-clinical">
         <div className={T.head}><span>Clinical profile</span><span className="normal-case text-[10px] text-[#5E6C84] font-normal">Same data as mobile Provider App</span></div>
@@ -227,6 +234,7 @@ export default function PatientDetail({ mode = "admin" }) {
           </div>
         )}
       />
+      </>}
     </div>
   );
 }

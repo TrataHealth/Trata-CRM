@@ -6268,6 +6268,17 @@ import pharmacy as _pharmacy  # noqa: E402
 app.include_router(_pharmacy.create_pharmacy_router(db, get_current_user, is_provider, is_internal))
 import audit_log as _audit_log  # noqa: E402
 app.include_router(_audit_log.create_audit_router(get_current_user))
+import admin_alerts as _admin_alerts  # noqa: E402
+_alerts = _admin_alerts.create_alerts_router(db, get_current_user, EMERGENT_LLM_KEY)
+app.include_router(_alerts["router"])
+
+
+@app.on_event("startup")
+async def _alerts_start():
+    try:
+        await _alerts["start"]()
+    except Exception as ex:  # noqa: BLE001
+        logger.warning(f"admin alerts start failed: {ex}")
 
 
 @app.on_event("startup")

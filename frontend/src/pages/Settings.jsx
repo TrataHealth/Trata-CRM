@@ -3,6 +3,7 @@ import api from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { ShieldCheck, Mail, KeyRound, Loader2, CheckCircle2, RefreshCw } from "lucide-react";
 import SecuritySetup from "./SecuritySetup";
+import { AlertSettingsCard } from "../components/alerts/AlertSettingsCard";
 
 export default function Settings() {
   const { user, refresh } = useAuth();
@@ -34,6 +35,8 @@ export default function Settings() {
         <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">Settings</h1>
         <p className="text-sm text-[#5E6C84] mt-1">Signed in as <b className="text-[#091E42]">{user?.name}</b> · {user?.phone}</p>
       </div>
+
+      {user?.is_master_admin && <AlertSettingsCard />}
 
       <div className="bg-white border border-[#DFE1E6] rounded-md p-5" data-testid="settings-recovery-card">
         <div className="flex items-start justify-between gap-3 flex-wrap">

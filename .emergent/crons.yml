@@ -7,6 +7,14 @@ crons:
     method: POST
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     enabled: true
+  - name: admin-morning-digest
+    description: "Daily 8am IST: AI summary of yesterday's busiest Patient and Provider app activity for master admins"
+    cron: "0 8 * * *"
+    timezone: "Asia/Kolkata"
+    endpoint: "{{BASE_URL}}/api/cron/admin-digest"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true
   - name: monthly-draft-invoices
     description: "1st of each month 6am IST: raise draft invoices for last month for every provider"
     cron: "30 0 1 * *"
