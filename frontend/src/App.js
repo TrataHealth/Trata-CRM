@@ -97,6 +97,8 @@ function App() {
           <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
           <Route path="/pharmacy/:tab" element={<RequireAuth providerOnly><PharmacyConsole /></RequireAuth>} />
           <Route path="/admin/audit" element={<RequireAuth adminOnly><AuditLog /></RequireAuth>} />
+          <Route path="/admin/audit/patient" element={<RequireAuth adminOnly><AuditLog scope="patient" /></RequireAuth>} />
+          <Route path="/admin/audit/provider" element={<RequireAuth adminOnly><AuditLog scope="provider" /></RequireAuth>} />
           <Route path="/abha" element={<RequireAuth><Abha /></RequireAuth>} />
 
           {/* Admin / internal routes */}

@@ -2,15 +2,27 @@
 into trata_audit.activity_log in the same transaction. The Admin Console reads it in id order with a snapshot-safe cursor."""
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
 import supabase_db as sb
 
-KEY_TABLES = ["users", "emergency_cases", "consultation_bookings", "medicine_orders", "prescriptions", "kyc_documents",
-              "user_consents", "consultation_payments", "pathology_bookings", "ambulance_bookings", "patient_admissions",
-              "at_home_care_bookings"]
+# Constant-churn or secret-bearing tables (key-value caches, callback/outbox queues, chats, OTP/token stores, GPS pings).
+NOISY_RE = r"(_kv$|callback_log|outbox|outbound_.*events|webhook_events|chat|_messages$|conversations$|location_ping|heartbeat|presence|crypto_sessions|otp|_tokens$|recommendation_cache|alembic_version)"
+# Tables owned by the Provider app / TrataX; everything else belongs to the Patient app. `users` is shared by both.
+PROVIDER_RE = (r"^(tratax_|hospital_|labs$|lab_|patholog|path_lab|pharmacy_|ambulance|paramedic|doctor|diagnostic_centre|kyc_|org_entities|"
+               r"organisations|provider_|crm_provider|bed_|bills$|admission_notes|discharge|duty_|referring|sanjeevani|test_packages|"
+               r"medicine_catalog|facilities|blood_banks|blood_stock|dental_clinics|vet_clinics|nutritionists|wellness_professionals|"
+               r"wellness_event_providers|mental_health_consultants|retreat_centers|companies|company_employees|platform_plans|tenant_|users$)")
+PATIENT_EXCLUDE_RE = PROVIDER_RE.replace("|users$)", ")")
+
+
+def scope_of(t: str) -> List[str]:
+    if t == "users":
+        return ["patient", "provider"]
+    return ["provider"] if re.search(PROVIDER_RE, t) else ["patient"]
 
 INSTALL_SQL = r"""
 CREATE SCHEMA IF NOT EXISTS trata_audit;
@@ -70,26 +82,56 @@ BEGIN
   END;
   RETURN NULL;
 END $f$;
-"""
+
+CREATE OR REPLACE FUNCTION trata_audit.is_noisy(t text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $f$
+  SELECT t ~* '__NOISY__'
+$f$;
+
+-- Any table any app creates later in public is tracked the moment it is created.
+CREATE OR REPLACE FUNCTION trata_audit.auto_attach() RETURNS event_trigger LANGUAGE plpgsql AS $f$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT * FROM pg_event_trigger_ddl_commands() WHERE object_type IN ('table') AND schema_name = 'public' LOOP
+    BEGIN
+      IF NOT trata_audit.is_noisy(split_part(r.object_identity, '.', 2)) THEN
+        EXECUTE format('CREATE OR REPLACE TRIGGER trata_audit_capture AFTER INSERT OR UPDATE OR DELETE ON %s '
+                       'FOR EACH ROW EXECUTE FUNCTION trata_audit.capture()', r.object_identity);
+      END IF;
+    EXCEPTION WHEN others THEN
+      RAISE WARNING 'trata_audit.auto_attach failed on %: %', r.object_identity, SQLERRM;
+    END;
+  END LOOP;
+END $f$;
+DROP EVENT TRIGGER IF EXISTS trata_audit_auto_attach;
+CREATE EVENT TRIGGER trata_audit_auto_attach ON ddl_command_end WHEN TAG IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
+  EXECUTE FUNCTION trata_audit.auto_attach();
+""".replace("__NOISY__", NOISY_RE)
 
 
 async def install(tables: Optional[List[str]] = None) -> Dict[str, Any]:
-    tables = tables or KEY_TABLES
+    """Attach the recorder to the given tables, or to every non-noisy public table that is not tracked yet."""
     pool = await sb.get_pool()
-    attached, missing = [], []
+    attached, missing, failed = [], [], []
     async with pool.acquire() as conn:
         await conn.execute(INSTALL_SQL)
         existing = {r["relname"] for r in await conn.fetch(
-            "SELECT relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p')")}
-        for t in tables:
+            "SELECT relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND NOT c.relispartition")}
+        covered = {r["relname"] for r in await conn.fetch(
+            "SELECT c.relname FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid WHERE g.tgname = 'trata_audit_capture'")}
+        todo = tables or sorted(t for t in existing - covered if not re.search(NOISY_RE, t, re.I))
+        for t in todo:
             if t not in existing:
                 missing.append(t)
                 continue
-            await conn.execute(f'DROP TRIGGER IF EXISTS trata_audit_capture ON public."{t}"')
-            await conn.execute(f'CREATE TRIGGER trata_audit_capture AFTER INSERT OR UPDATE OR DELETE ON public."{t}" '
-                               f'FOR EACH ROW EXECUTE FUNCTION trata_audit.capture()')
-            attached.append(t)
-    return {"attached": attached, "missing": missing}
+            try:
+                async with conn.transaction():
+                    await conn.execute("SET LOCAL lock_timeout = '3s'")
+                    await conn.execute(f'CREATE OR REPLACE TRIGGER trata_audit_capture AFTER INSERT OR UPDATE OR DELETE ON public."{t}" '
+                                       f'FOR EACH ROW EXECUTE FUNCTION trata_audit.capture()')
+                attached.append(t)
+            except Exception as e:  # busy table: picked up on the next run
+                failed.append({"table": t, "error": str(e)[:200]})
+    return {"attached": attached, "missing": missing, "failed": failed}
 
 
 def create_audit_router(get_current_user) -> APIRouter:
@@ -101,7 +143,7 @@ def create_audit_router(get_current_user) -> APIRouter:
 
     @r.get("")
     async def feed(after_txid: Optional[int] = None, before_id: Optional[int] = None, table: Optional[str] = None, op: Optional[str] = None,
-                   app: Optional[str] = None, row_id: Optional[str] = None, limit: int = 50, current=Depends(get_current_user)):
+                   app: Optional[str] = None, row_id: Optional[str] = None, scope: Optional[str] = None, limit: int = 50, current=Depends(get_current_user)):
         """Newest-first page (before_id) or catch-up page (after_txid). Catch-up walks whole finished transactions in txid
         order and stops at the oldest in-flight one, so a slow commit can never be skipped by the cursor."""
         master(current)
@@ -111,6 +153,12 @@ def create_audit_router(get_current_user) -> APIRouter:
             if val:
                 args.append(val)
                 cond.append(f"{col} = ${len(args)}")
+        if scope == "provider":
+            args.append(PROVIDER_RE)
+            cond.append(f"table_name ~ ${len(args)}")
+        elif scope == "patient":
+            args.append(PATIENT_EXCLUDE_RE)
+            cond.append(f"table_name !~ ${len(args)}")
         if before_id:
             args.append(before_id)
             cond.append(f"id < ${len(args)}")
@@ -120,7 +168,7 @@ def create_audit_router(get_current_user) -> APIRouter:
             cond.append(f"txid > ${len(args)}::xid8 AND txid < pg_snapshot_xmin(pg_current_snapshot())")
             order = "txid ASC, id ASC"
         pool = await sb.get_pool()
-        async with pool.acquire() as conn:
+        async with pool.acquire() as conn, conn.transaction(isolation="repeatable_read", readonly=True):  # one snapshot for rows + cursor
             rows = await conn.fetch(f"""SELECT id, txid::text::bigint AS txid, at, table_name, op, row_id, app, db_role, old_data, new_data, changed
                                           FROM trata_audit.activity_log WHERE {' AND '.join(cond)} ORDER BY {order} LIMIT {limit}""", *args)
             safe = await conn.fetchval("SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint - 1")
@@ -132,7 +180,7 @@ def create_audit_router(get_current_user) -> APIRouter:
             items = [i for i in items if i["txid"] < last] or items
             cursor = items[-1]["txid"] if items[-1]["txid"] < last else last
         else:
-            cursor = max([i["txid"] for i in items], default=after_txid) if after_txid is not None else safe
+            cursor = safe if after_txid is None or safe > after_txid else after_txid
         return {"items": items, "cursor_txid": cursor}
 
     @r.get("/health")
@@ -145,13 +193,17 @@ def create_audit_router(get_current_user) -> APIRouter:
             stats = await conn.fetch("""SELECT table_name, count(*) FILTER (WHERE at > now() - interval '24 hours') AS last_24h,
                                                count(*) AS total, max(at) AS last_at FROM trata_audit.activity_log GROUP BY 1""")
             uncovered = await conn.fetch("""SELECT relname, n_live_tup FROM pg_stat_user_tables WHERE schemaname = 'public'
-                                              AND n_live_tup > 0 AND relname <> ALL($1::text[]) ORDER BY n_live_tup DESC""", covered)
+                                              AND relname <> ALL($1::text[]) ORDER BY n_live_tup DESC""", covered)
+            auto = await conn.fetchval("SELECT evtenabled <> 'D' FROM pg_event_trigger WHERE evtname = 'trata_audit_auto_attach'")
             apps = await conn.fetch("""SELECT coalesce(app, 'unknown') AS app, count(*) AS n FROM trata_audit.activity_log
                                         WHERE at > now() - interval '7 days' GROUP BY 1 ORDER BY 2 DESC""")
         by = {s["table_name"]: s for s in stats}
-        return {"covered": [{"table": t, "last_24h": (by.get(t) or {}).get("last_24h", 0), "total": (by.get(t) or {}).get("total", 0),
+        noisy = [u for u in uncovered if re.search(NOISY_RE, u["relname"], re.I)]
+        return {"auto_attach": bool(auto),
+                "skipped_noisy": [{"table": u["relname"], "rows": u["n_live_tup"]} for u in noisy],
+                "covered": [{"table": t, "scope": scope_of(t), "last_24h": (by.get(t) or {}).get("last_24h", 0), "total": (by.get(t) or {}).get("total", 0),
                              "last_at": by[t]["last_at"].isoformat() if t in by else None} for t in covered],
-                "uncovered_with_data": [{"table": u["relname"], "rows": u["n_live_tup"]} for u in uncovered],
+                "uncovered_with_data": [{"table": u["relname"], "rows": u["n_live_tup"]} for u in uncovered if u not in noisy],
                 "apps_7d": [dict(a) for a in apps]}
 
     @r.post("/install")

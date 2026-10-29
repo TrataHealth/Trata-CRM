@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, GitBranch, ListChecks, Activity, BedDouble, UserCog,
   BarChart3, LogOut, Search, Bell, Sparkles, RefreshCw, Database, Menu, X,
   Building2, ClipboardList, IdCard, Wallet, Compass, Trophy, Settings as SettingsIcon, ShieldCheck,
-  UserPlus, HeartPulse, Receipt, Fingerprint, Pill, ShoppingBag, FileText,
+  UserPlus, HeartPulse, Receipt, Fingerprint, Pill, ShoppingBag, FileText, Radio,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import api from "../lib/api";
@@ -15,13 +15,18 @@ import { NewOrderAlerts } from "./pharmacy/NewOrderAlerts";
 const ADMIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { to: "/contacts", label: "Trata Users", icon: Users },
-  { to: "/pipeline", label: "Pipeline", icon: GitBranch },
-  { to: "/admin/onboarding", label: "Onboarding", icon: UserPlus },
-  { to: "/admin/audit", label: "Live Audit", icon: ShieldCheck },
+  { to: "/admin/audit", label: "Live Audit", icon: ShieldCheck, exact: true },
+  { section: "Patient app" },
+  { to: "/admin/audit/patient", label: "Patient Activity", icon: Radio },
   { to: "/admin/patients", label: "Patients", icon: HeartPulse },
   { to: "/abha", label: "ABHA (ABDM)", icon: Fingerprint },
-  { to: "/admin/ledger", label: "Provider Ledger", icon: Receipt },
+  { section: "Provider app" },
+  { to: "/admin/audit/provider", label: "Provider Activity", icon: Radio },
+  { to: "/admin/onboarding", label: "Onboarding", icon: UserPlus },
   { to: "/admin/kyc-queue", label: "KYC Final Approval", icon: ShieldCheck, badgeKey: "kyc_admin_queue" },
+  { to: "/admin/ledger", label: "Provider Ledger", icon: Receipt },
+  { section: "Sales & team" },
+  { to: "/pipeline", label: "Pipeline", icon: GitBranch },
   { to: "/activities", label: "Activities", icon: Activity },
   { to: "/tasks", label: "Tasks", icon: ListChecks },
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
@@ -163,7 +168,9 @@ export default function Layout({ children }) {
         </div>
 
         <nav className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1">
-          {NAV.map((n) => (
+          {NAV.map((n) => n.section ? (
+            <div key={n.section} className="pt-4 pb-1 px-3 text-[10px] font-bold uppercase tracking-wider text-[#5E6C84]" data-testid={`nav-section-${n.section.toLowerCase().replace(/\s+/g, "-")}`}>{n.section}</div>
+          ) : (
             <NavLink
               key={n.to}
               to={n.to}

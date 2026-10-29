@@ -433,3 +433,13 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - UI `/admin/audit` "Live Audit": Sync health + one-click "track" for untracked tables, live feed (10s), filters, expandable old→new diff.
 - App attribution: Supavisor hides application_name → source "unknown" unless apps run `SET LOCAL trata.app = '<app>'` (or use Supabase client roles). Next steps: extend to all tables + auto-attach on new tables, app events outbox table, nightly reconciliation, monthly partitioning/retention, alerts.
 - Tested: curl + screenshot (testing agent not yet run).
+
+
+## 2026-06 — Audit recorder everywhere + app-scoped admin menu
+- Recorder auto-attached to every public table (~271) except noisy/secret ones (NOISY_RE in `audit_log.py`: kv caches, callback/outbox queues, chats/messages, OTP/token stores, GPS pings).
+- Postgres event trigger `trata_audit_auto_attach` tracks any new table the moment any app creates it; startup sweep in `server.py` attaches anything missed.
+- Feed `GET /api/admin/activity-log?scope=patient|provider` (table classification PROVIDER_RE; `users` in both); repeatable-read snapshot for gap-free cursor.
+- Master admin sidebar grouped: Patient app (Patient Activity, Patients, ABHA) / Provider app (Provider Activity, Onboarding, KYC, Ledger) / Sales & team.
+- Retention: keep forever (no cleanup job).
+- PARKED by user: shared app event log (logins, OTP attempts, failed payments).
+- Still pending: PWA push notifications + sound alerts for master admin.

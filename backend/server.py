@@ -6268,6 +6268,17 @@ import pharmacy as _pharmacy  # noqa: E402
 app.include_router(_pharmacy.create_pharmacy_router(db, get_current_user, is_provider, is_internal))
 import audit_log as _audit_log  # noqa: E402
 app.include_router(_audit_log.create_audit_router(get_current_user))
+
+
+@app.on_event("startup")
+async def _audit_sweep():
+    async def run():
+        try:
+            res = await _audit_log.install()
+            logger.info(f"audit recorder: attached {len(res['attached'])}, failed {len(res['failed'])}")
+        except Exception as ex:  # noqa: BLE001
+            logger.warning(f"audit recorder sweep failed: {ex}")
+    asyncio.create_task(run())
 _uadm = _user_admin.create_user_admin_router(db, get_current_user, set(MASTER_ADMIN_PHONES))
 app.include_router(_uadm["router"])
 
