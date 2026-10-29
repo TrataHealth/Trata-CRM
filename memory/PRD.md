@@ -450,3 +450,6 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Morning digest: cron `admin-morning-digest` 8:00 IST -> `POST /api/cron/admin-digest`; GPT-5.4 via Emergent LLM key; Mongo `admin_digests`; dashboard card `MorningDigest` (Yesterday / Today so far buttons).
 - Audit/activity nav items hidden from non-master admins.
 - Tests: backend/tests/test_admin_alerts_digest_history.py (26 pass), report iteration_26.
+
+## 2026-06 — Split user directories
+- /contacts = "All Users"; /users/patients = "Trata Patient Users" (Patient app section, no type tabs/onboard); /users/providers = "Trata Providers" (Provider app section, provider type tabs). Backend `audience=patient|provider` on GET /api/contacts and /api/export/contacts.csv.

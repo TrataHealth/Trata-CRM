@@ -1289,6 +1289,7 @@ async def list_contacts(
     pipeline_stage: Optional[str] = None,
     is_verified: Optional[bool] = None,
     city: Optional[str] = None,
+    audience: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
     current=Depends(get_current_user),
@@ -1313,6 +1314,10 @@ async def list_contacts(
     qry["$and"] = [{"name": {"$nin": ["Sunrise Care Hospital", "Metro Ambulance Ltd", "UI Tester"]}}, {"archived": {"$ne": True}}]
     if type:
         qry["type"] = type
+    elif audience == "patient":
+        qry["type"] = "patient"
+    elif audience == "provider":
+        qry["type"] = {"$ne": "patient"}
     if pipeline_stage:
         qry["pipeline_stage"] = pipeline_stage
     if is_verified is not None:
@@ -3036,8 +3041,8 @@ async def analytics_overview(current=Depends(require_internal)):
 
 # ---------- Export ----------
 @api.get("/export/contacts.csv")
-async def export_contacts_csv(type: Optional[str] = None, current=Depends(require_internal)):
-    qry = {"type": type} if type else {}
+async def export_contacts_csv(type: Optional[str] = None, audience: Optional[str] = None, current=Depends(require_internal)):
+    qry = {"type": type} if type else {"type": "patient"} if audience == "patient" else {"type": {"$ne": "patient"}} if audience == "provider" else {}
     items = await db.contacts.find(qry, {"_id": 0}).to_list(10000)
     buf = io.StringIO()
     writer = csv.writer(buf)

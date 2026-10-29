@@ -15,14 +15,16 @@ import { AlertListener } from "./alerts/AlertListener";
 
 const ADMIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
-  { to: "/contacts", label: "Trata Users", icon: Users },
+  { to: "/contacts", label: "All Users", icon: Users, exact: true },
   { to: "/admin/audit", label: "Live Audit", icon: ShieldCheck, exact: true, masterOnly: true },
   { section: "Patient app" },
   { to: "/admin/audit/patient", label: "Patient Activity", icon: Radio, masterOnly: true },
+  { to: "/users/patients", label: "Trata Patient Users", icon: Users },
   { to: "/admin/patients", label: "Patients", icon: HeartPulse },
   { to: "/abha", label: "ABHA (ABDM)", icon: Fingerprint },
   { section: "Provider app" },
   { to: "/admin/audit/provider", label: "Provider Activity", icon: Radio, masterOnly: true },
+  { to: "/users/providers", label: "Trata Providers", icon: Building2 },
   { to: "/admin/onboarding", label: "Onboarding", icon: UserPlus },
   { to: "/admin/kyc-queue", label: "KYC Final Approval", icon: ShieldCheck, badgeKey: "kyc_admin_queue" },
   { to: "/admin/ledger", label: "Provider Ledger", icon: Receipt },

@@ -104,6 +104,8 @@ function App() {
           {/* Admin / internal routes */}
           <Route path="/" element={<RequireAuth><RoleRoot /></RequireAuth>} />
           <Route path="/contacts" element={<RequireAuth internalOnly><Contacts /></RequireAuth>} />
+          <Route path="/users/patients" element={<RequireAuth internalOnly><Contacts key="patient" audience="patient" /></RequireAuth>} />
+          <Route path="/users/providers" element={<RequireAuth internalOnly><Contacts key="provider" audience="provider" /></RequireAuth>} />
           <Route path="/contacts/:id" element={<RequireAuth internalOnly><ContactDetail /></RequireAuth>} />
           <Route path="/pipeline" element={<RequireAuth internalOnly><Pipeline /></RequireAuth>} />
           <Route path="/activities" element={<RequireAuth internalOnly><Activities /></RequireAuth>} />

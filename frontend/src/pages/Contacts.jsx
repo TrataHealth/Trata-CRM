@@ -9,7 +9,13 @@ import { BulkBar, BulkActionDialog } from "../components/users/BulkActions";
 import { Ban, Archive } from "lucide-react";
 import { toast } from "sonner";
 
-export default function Contacts() {
+const AUDIENCE = {
+  patient: { title: "Trata Patient Users", blurb: "Everyone using the Trata Patient app.", file: "patient-users" },
+  provider: { title: "Trata Providers", blurb: "Doctors, hospitals, labs, pharmacies and every other provider on the Trata Provider app.", file: "providers" },
+};
+
+export default function Contacts({ audience }) {
+  const aud = AUDIENCE[audience];
   const [params, setParams] = useSearchParams();
   const [list, setList] = useState([]);
   const [total, setTotal] = useState(0);
@@ -73,13 +79,14 @@ export default function Contacts() {
         pipeline_stage: stage || undefined,
         is_verified: verified === "" ? undefined : verified === "true",
         q: q || undefined,
+        audience: audience || undefined,
         limit: 100,
       },
     });
     setList(data.items); setTotal(data.total); setLoading(false);
   };
 
-  useEffect(() => { fetch(); /* eslint-disable-next-line */ }, [type, stage, verified, q, archivedView]);
+  useEffect(() => { fetch(); /* eslint-disable-next-line */ }, [type, stage, verified, q, archivedView, audience]);
 
   const setParam = (k, v) => {
     const p = new URLSearchParams(params);
@@ -89,12 +96,13 @@ export default function Contacts() {
 
   const exportCsv = async () => {
     const token = localStorage.getItem("trata_token");
-    const url = `${api.defaults.baseURL}/export/contacts.csv${type ? `?type=${type}` : ""}`;
+    const qs = new URLSearchParams({ ...(type ? { type } : {}), ...(audience ? { audience } : {}) }).toString();
+    const url = `${api.defaults.baseURL}/export/contacts.csv${qs ? `?${qs}` : ""}`;
     const r = await fetch_with_token(url, token);
     const blob = await r.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `contacts${type ? "-" + type : ""}.csv`;
+    a.download = `${aud?.file || "contacts"}${type ? "-" + type : ""}.csv`;
     a.click();
   };
 
@@ -103,13 +111,13 @@ export default function Contacts() {
       <div className="flex items-end justify-between flex-wrap gap-4">
         <div>
           <div className="overline">User Directory</div>
-          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
-            {archivedView ? "Deleted users" : "Trata Users"} <span className="text-[#5E6C84] font-medium">/ {total.toLocaleString()}</span>
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1" data-testid="contacts-title">
+            {archivedView ? "Deleted users" : aud?.title || "All Users"} <span className="text-[#5E6C84] font-medium">/ {total.toLocaleString()}</span>
           </h1>
-          <p className="text-sm text-[#5E6C84] mt-1">{archivedView ? "Restore within 30 days — after that they're erased permanently from every Trata app." : "All users on the Trata network — providers, prospects, and partners."}</p>
+          <p className="text-sm text-[#5E6C84] mt-1">{archivedView ? "Restore within 30 days — after that they're erased permanently from every Trata app." : aud?.blurb || "All users on the Trata network — patients, providers, prospects, and partners."}</p>
         </div>
         <div className="flex items-center gap-2">
-          {canOnboard && (
+          {canOnboard && audience !== "patient" && (
             <button
               data-testid="contacts-onboard-btn"
               onClick={() => setOnboardOpen(true)}
@@ -125,7 +133,7 @@ export default function Contacts() {
           >
             <Download className="h-4 w-4" /> Export CSV
           </button>
-          {canPurge && (
+          {canPurge && !audience && (
             <button data-testid="contacts-deleted-toggle" onClick={() => setParams(archivedView ? {} : { view: "deleted" })}
               className="flex items-center gap-2 px-3 py-2 text-sm border border-[#DFE1E6] rounded-md hover:bg-[#F8F9FA]">
               <Archive className="h-4 w-4" /> {archivedView ? "Back to all users" : "Deleted users"}
@@ -158,12 +166,12 @@ export default function Contacts() {
       <BulkActionDialog action={bulk} ids={[...sel]} onClose={() => setBulk(null)} onDone={() => { setBulk(null); fetch(); }} />
 
       {/* Type tabs */}
-      {!archivedView && <><div className="flex flex-nowrap overflow-x-auto scrollbar-thin gap-1.5 border-b border-[#DFE1E6] pb-3 -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="contacts-type-tabs">
+      {!archivedView && <>{audience !== "patient" && <div className="flex flex-nowrap overflow-x-auto scrollbar-thin gap-1.5 border-b border-[#DFE1E6] pb-3 -mx-4 px-4 sm:mx-0 sm:px-0" data-testid="contacts-type-tabs">
         <TypeTab label="All" value="" active={!type} onClick={() => setParam("type", "")} />
-        {CONTACT_TYPES.map((c) => (
+        {CONTACT_TYPES.filter((c) => audience !== "provider" || c.value !== "patient").map((c) => (
           <TypeTab key={c.value} label={c.label} value={c.value} active={type === c.value} onClick={() => setParam("type", c.value)} />
         ))}
-      </div>
+      </div>}
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3" data-testid="contacts-filters">
