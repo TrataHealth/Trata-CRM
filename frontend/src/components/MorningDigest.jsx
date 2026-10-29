@@ -3,7 +3,8 @@ import { Sunrise, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import api from "../lib/api";
 
-const HL = [["signup", "Sign-ups"], ["order", "Orders & bookings"], ["kyc", "KYC to review"], ["sos", "SOS cases"]];
+const HL = [["signups", "Patient app sign-ups"], ["doctor_appointments", "Doctor appointments"], ["pathlab_bookings", "Path lab bookings"],
+  ["diagnostics_bookings", "Diagnostics bookings"], ["pharmacy_orders", "Pharmacy orders"], ["sos", "SOS cases"]];
 
 function TopList({ title, total, rows }) {
   return (
@@ -45,9 +46,9 @@ export function MorningDigest() {
         </div>
       </div>
       {!s ? <p className="text-sm text-[#5E6C84] mt-2" data-testid="digest-empty">Your first summary arrives at 8 AM India time. Tap a button to build one now.</p> : <>
-        <p className="text-sm text-[#091E42] mt-3 leading-relaxed max-w-3xl" data-testid="digest-text">{d.text || (s.changes ? `${s.changes} changes recorded across both apps.` : "No activity was recorded on this day.")}</p>
+        <p className="text-sm text-[#091E42] mt-3 leading-relaxed max-w-3xl" data-testid="digest-text">{d.text || (s.changes || HL.some(([k]) => s.highlights[k]) ? `${s.changes} changes recorded across both apps.` : "No activity was recorded on this day.")}</p>
         <div className="flex flex-wrap gap-2 mt-3">{HL.map(([k, l]) => (
-          <span key={k} className="text-xs px-2.5 py-1 rounded-full bg-white border border-[#DFE1E6] text-[#42526E]" data-testid={`digest-hl-${k}`}><b className="text-[#091E42]">{s.highlights[k]}</b> {l}</span>))}</div>
+          <span key={k} className="text-xs px-2.5 py-1 rounded-full bg-white border border-[#DFE1E6] text-[#42526E]" data-testid={`digest-hl-${k}`}><b className="text-[#091E42]">{s.highlights[k] ?? 0}</b> {l}</span>))}</div>
         <div className="grid sm:grid-cols-2 gap-5 mt-4">
           <TopList title="Patient app" total={s.patient_total} rows={s.patient_top} />
           <TopList title="Provider app" total={s.provider_total} rows={s.provider_top} />

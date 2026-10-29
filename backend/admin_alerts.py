@@ -23,6 +23,14 @@ ORDER_TABLES = {"medicine_orders", "consultation_bookings", "pathology_bookings"
                 "diagnostic_bookings", "path_lab_bookings", "appointments", "doctor_appointments", "vaccination_bookings",
                 "lab_test_bookings", "nurse_bookings", "hospital_public_bookings", "teleconsultation_bookings", "wellness_bookings"}
 KYC_PENDING = {"pending", "under_review", "submitted", "pending_review"}
+DIGEST_METRICS = {
+    "signups": (["users"], "AND coalesce(role, 'patient') IN ('patient', 'customer') AND coalesce(user_type, 'patient') IN ('patient', 'customer')"),
+    "doctor_appointments": (["consultation_bookings", "doctor_appointments", "appointments", "teleconsultation_bookings"], ""),
+    "pathlab_bookings": (["pathology_bookings", "path_lab_bookings", "lab_bookings", "lab_test_bookings"], ""),
+    "diagnostics_bookings": (["diagnostic_bookings"], ""),
+    "pharmacy_orders": (["medicine_orders", "medication_orders"], ""),
+    "sos": (["emergency_cases"], ""),
+}
 _BG: set = set()
 
 
@@ -165,6 +173,21 @@ def create_alerts_router(db, get_current_user, llm_key: str):
             await asyncio.sleep(10)
 
     # ── morning digest ──
+    async def day_metrics(start: datetime, end: datetime) -> Dict[str, int]:
+        """Counted from the source tables by created_at, so any past day works (not only since recording began)."""
+        pool = await sb.get_pool()
+        out: Dict[str, int] = {}
+        async with pool.acquire() as conn:
+            have = {r["table_name"] for r in await conn.fetch(
+                "SELECT table_name FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'created_at'")}
+            for key, (tables, where) in DIGEST_METRICS.items():
+                n = 0
+                for t in tables:
+                    if t in have:
+                        n += await conn.fetchval(f'SELECT count(*) FROM public."{t}" WHERE created_at >= $1 AND created_at < $2 {where}', start, end)
+                out[key] = n
+        return out
+
     async def build_digest(day: str) -> Dict[str, Any]:
         d = datetime.now(IST).date() - timedelta(days=1 if day == "yesterday" else 0)
         start = datetime(d.year, d.month, d.day, tzinfo=IST)
@@ -180,13 +203,14 @@ def create_alerts_router(db, get_current_user, llm_key: str):
             for s in audit_log.scope_of(x["table_name"]):
                 totals[s][x["table_name"].replace("_", " ")] += x["n"]
         counts = Counter(classify({**dict(k), "new_data": json.loads(k["new_data"]) if k["new_data"] else None}) for k in kinds)
+        metrics = await day_metrics(start, start + timedelta(days=1))
         stats = {"date": d.isoformat(), "changes": sum(x["n"] for x in rows),
-                 "highlights": {k: counts.get(k, 0) for k in KINDS},
+                 "highlights": {**metrics, "kyc": counts.get("kyc", 0)},
                  "patient_top": [{"table": t, "n": n} for t, n in totals["patient"].most_common(5)],
                  "provider_top": [{"table": t, "n": n} for t, n in totals["provider"].most_common(5)],
                  "patient_total": sum(totals["patient"].values()), "provider_total": sum(totals["provider"].values())}
         text = ""
-        if stats["changes"]:
+        if stats["changes"] or any(metrics.values()):
             try:
                 from emergentintegrations.llm.chat import LlmChat, UserMessage
                 chat = LlmChat(api_key=llm_key, session_id=f"admin-digest-{d}-{datetime.now(timezone.utc).timestamp()}",

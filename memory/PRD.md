@@ -453,3 +453,5 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 
 ## 2026-06 — Split user directories
 - /contacts = "All Users"; /users/patients = "Trata Patient Users" (Patient app section, no type tabs/onboard); /users/providers = "Trata Providers" (Provider app section, provider type tabs). Backend `audience=patient|provider` on GET /api/contacts and /api/export/contacts.csv.
+
+- Digest highlights now counted from source tables by created_at: signups (patient/customer users), doctor_appointments, pathlab_bookings, diagnostics_bookings, pharmacy_orders, sos (DIGEST_METRICS in admin_alerts.py).

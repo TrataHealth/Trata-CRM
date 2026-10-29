@@ -137,7 +137,7 @@ def test_digest_generate_today(M):
     d = r.json()["digest"]
     assert d["day"] == "today"
     s = d["stats"]
-    assert set(s["highlights"]) == {"kyc", "signup", "order", "sos"}
+    assert set(s["highlights"]) == {"signups", "doctor_appointments", "pathlab_bookings", "diagnostics_bookings", "pharmacy_orders", "sos", "kyc"}
     assert isinstance(s["patient_top"], list) and isinstance(s["provider_top"], list)
     if s["changes"]:
         assert d["ai"] is True and len(d["text"]) > 20, "AI text missing"
