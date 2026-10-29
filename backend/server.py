@@ -6266,6 +6266,8 @@ app.include_router(_provider_onboard.create_provider_onboard_router(db, get_curr
 app.include_router(_provider_onboard.create_entities_router(db, get_current_user, is_provider))
 import pharmacy as _pharmacy  # noqa: E402
 app.include_router(_pharmacy.create_pharmacy_router(db, get_current_user, is_provider, is_internal))
+import audit_log as _audit_log  # noqa: E402
+app.include_router(_audit_log.create_audit_router(get_current_user))
 _uadm = _user_admin.create_user_admin_router(db, get_current_user, set(MASTER_ADMIN_PHONES))
 app.include_router(_uadm["router"])
 

@@ -17,6 +17,7 @@ const ADMIN_NAV = [
   { to: "/contacts", label: "Trata Users", icon: Users },
   { to: "/pipeline", label: "Pipeline", icon: GitBranch },
   { to: "/admin/onboarding", label: "Onboarding", icon: UserPlus },
+  { to: "/admin/audit", label: "Live Audit", icon: ShieldCheck },
   { to: "/admin/patients", label: "Patients", icon: HeartPulse },
   { to: "/abha", label: "ABHA (ABDM)", icon: Fingerprint },
   { to: "/admin/ledger", label: "Provider Ledger", icon: Receipt },
