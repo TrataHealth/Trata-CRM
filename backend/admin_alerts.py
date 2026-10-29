@@ -74,7 +74,7 @@ def create_alerts_router(db, get_current_user, llm_key: str):
                                     vapid_private_key=os.environ["VAPID_PRIVATE_KEY"], vapid_claims={"sub": os.environ["VAPID_SUBJECT"]}, ttl=3600)
             return True
         except WebPushException as ex:
-            if ex.response is not None and ex.response.status_code in (404, 410):
+            if ex.response is None or ex.response.status_code in (404, 410):  # gone, or keys the push library can't use
                 await subs.delete_one({"endpoint": doc["endpoint"]})
             else:
                 log.warning(f"push failed: {ex.response.status_code if ex.response is not None else ex}")
@@ -103,7 +103,7 @@ def create_alerts_router(db, get_current_user, llm_key: str):
     async def subscribe(body: Dict[str, Any], current=Depends(get_current_user)):
         master(current)
         sub = body.get("subscription") or {}
-        if not str(sub.get("endpoint", "")).startswith("https://") or not (sub.get("keys") or {}).get("p256dh"):
+        if not str(sub.get("endpoint", "")).startswith("https://") or not (sub.get("keys") or {}).get("p256dh") or not (sub.get("keys") or {}).get("auth"):
             raise HTTPException(status_code=400, detail="Invalid push subscription")
         prefs = {k: bool((body.get("prefs") or {}).get(k, True)) for k in KINDS}
         await subs.update_one({"endpoint": sub["endpoint"]}, {"$set": {
@@ -172,7 +172,8 @@ def create_alerts_router(db, get_current_user, llm_key: str):
         async with pool.acquire() as conn:
             rows = await conn.fetch("""SELECT table_name, op, count(*) n FROM trata_audit.activity_log
                                         WHERE at >= $1 AND at < $2 GROUP BY 1, 2""", start, start + timedelta(days=1))
-            kinds = await conn.fetch("""SELECT table_name, op, new_data, changed FROM trata_audit.activity_log WHERE at >= $1 AND at < $2
+            kinds = await conn.fetch("""SELECT table_name, op, jsonb_build_object('status', new_data->'status') AS new_data, changed
+                                          FROM trata_audit.activity_log WHERE at >= $1 AND at < $2
                                          AND (op = 'INSERT' OR table_name IN ('tratax_kyc_applications', 'kyc_documents'))""", start, start + timedelta(days=1))
         totals = {"patient": Counter(), "provider": Counter()}
         for x in rows:
@@ -202,7 +203,8 @@ def create_alerts_router(db, get_current_user, llm_key: str):
     @r.get("/admin/digest/latest")
     async def latest(current=Depends(get_current_user)):
         master(current)
-        return {"digest": await db.admin_digests.find_one({}, {"_id": 0}, sort=[("date", -1)])}
+        return {"digest": await db.admin_digests.find_one({"day": "yesterday"}, {"_id": 0}, sort=[("date", -1)])
+                or await db.admin_digests.find_one({}, {"_id": 0}, sort=[("date", -1)])}
 
     @r.post("/admin/digest/generate")
     async def generate(body: Dict[str, Any], current=Depends(get_current_user)):

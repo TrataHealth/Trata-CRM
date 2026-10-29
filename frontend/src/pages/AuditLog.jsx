@@ -41,10 +41,10 @@ function Row({ e }) {
         <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${c}`}>{l}</span>
         <span className="text-sm font-semibold text-[#091E42] capitalize">{label(e.table_name)}</span>
         <span className="text-xs text-[#5E6C84] truncate flex-1">{e.op === "UPDATE" ? (e.changed || []).join(", ") : e.row_id}</span>
-        <span className="text-[11px] text-[#5E6C84] shrink-0 hidden md:inline">{e.app || "unknown app"}</span>
+        <span className="text-[11px] text-[#5E6C84] shrink-0 hidden md:inline">{e.app || "app server (direct DB)"}</span>
       </button>
       {open && <div className="px-9 pb-3 text-xs" data-testid={`audit-detail-${e.id}`}>
-        <div className="text-[#5E6C84] mb-1">Record {e.row_id} · source {e.app || "unknown"} · db role {e.db_role}</div>
+        <div className="text-[#5E6C84] mb-1">Record {e.row_id} · source {e.app || "app server (direct DB)"} · db role {e.db_role}</div>
         <table className="w-full"><tbody>{keys.map((k) => (
           <tr key={k} className="align-top"><td className="py-0.5 pr-3 font-semibold text-[#42526E] w-48">{k}</td>
             {e.op === "UPDATE" && <td className="py-0.5 pr-3 text-[#BF2600] break-all line-through">{show(e.old_data?.[k])}</td>}
@@ -94,7 +94,7 @@ export default function AuditLog({ scope }) {
       {h && <section className="bg-white border border-[#DFE1E6] rounded-lg p-4">
         <div className="flex flex-wrap gap-2 mb-3">
           <select className="px-3 py-2 text-sm border border-[#DFE1E6] rounded-md" value={f.table} onChange={(e) => setF({ ...f, table: e.target.value })} data-testid="audit-filter-table">
-            <option value="">All tracked tables ({tables.length})</option>{tables.map((c) => <option key={c.table} value={c.table}>{label(c.table)}</option>)}</select>
+            <option value="">{`All tracked tables (${tables.length})`}</option>{tables.map((c) => <option key={c.table} value={c.table}>{label(c.table)}</option>)}</select>
           <select className="px-3 py-2 text-sm border border-[#DFE1E6] rounded-md" value={f.op} onChange={(e) => setF({ ...f, op: e.target.value })} data-testid="audit-filter-op">
             <option value="">All actions</option><option value="INSERT">Created</option><option value="UPDATE">Changed</option><option value="DELETE">Deleted</option></select>
         </div>

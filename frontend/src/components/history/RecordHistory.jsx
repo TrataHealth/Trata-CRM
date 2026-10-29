@@ -18,7 +18,7 @@ function Entry({ e }) {
         <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${c}`}>{l}</span>
         <span className="text-sm font-semibold text-[#091E42] capitalize">{e.table_name.replace(/_/g, " ")}</span>
         {e.op === "UPDATE" && <span className="text-xs text-[#5E6C84] truncate">{(e.changed || []).join(", ")}</span>}
-        <span className="text-[11px] text-[#97A0AF] ml-auto">{e.app || "unknown app"}</span>
+        <span className="text-[11px] text-[#97A0AF] ml-auto">{e.app || "app server (direct DB)"}</span>
       </button>
       {open && <table className="mt-2 ml-5 text-xs w-[calc(100%-1.25rem)]" data-testid={`history-detail-${e.id}`}><tbody>{keys.map((k) => (
         <tr key={k} className="align-top"><td className="py-0.5 pr-3 font-semibold text-[#42526E] w-40">{k}</td>

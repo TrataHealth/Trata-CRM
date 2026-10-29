@@ -443,3 +443,10 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Retention: keep forever (no cleanup job).
 - PARKED by user: shared app event log (logins, OTP attempts, failed payments).
 - Still pending: PWA push notifications + sound alerts for master admin.
+
+## 2026-06 — Master-admin alerts, record history, morning digest
+- Push alerts (`admin_alerts.py`): Web Push using app-generated signing keys (VAPID_* in backend/.env); subscriptions in Mongo `push_subscriptions` with per-device prefs (kyc/signup/order/sos). A watcher follows the audit cursor (Mongo `alert_state`) every 10s, groups each batch by type and pushes. SW: `public/push-sw.js` (imported by service-worker.js; registered on its own in dev). In-console chime + toast (`AlertListener`). Settings card `AlertSettingsCard` (master only).
+- Record history: `activity_log.refs` (all id-like values, GIN index) + `GET /api/admin/activity-log/record/{id}` oldest-first with one hop via profile rows. History tab on /admin/patients/:id and /admin/onboarding/:id (master only).
+- Morning digest: cron `admin-morning-digest` 8:00 IST -> `POST /api/cron/admin-digest`; GPT-5.4 via Emergent LLM key; Mongo `admin_digests`; dashboard card `MorningDigest` (Yesterday / Today so far buttons).
+- Audit/activity nav items hidden from non-master admins.
+- Tests: backend/tests/test_admin_alerts_digest_history.py (26 pass), report iteration_26.

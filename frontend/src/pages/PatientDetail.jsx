@@ -117,7 +117,7 @@ export default function PatientDetail({ mode = "admin" }) {
       </div>
 
       {tab === "history" ? <RecordHistory recordId={userId} /> : <>
-      {abha[userId] && <HealthRecordsPanel patientUserId={userId} showConsents={false} />}}
+      {abha[userId] && <HealthRecordsPanel patientUserId={userId} showConsents={false} />}
 
       <section className={T.card} data-testid="patient-clinical">
         <div className={T.head}><span>Clinical profile</span><span className="normal-case text-[10px] text-[#5E6C84] font-normal">Same data as mobile Provider App</span></div>

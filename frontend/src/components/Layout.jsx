@@ -16,13 +16,13 @@ import { AlertListener } from "./alerts/AlertListener";
 const ADMIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { to: "/contacts", label: "Trata Users", icon: Users },
-  { to: "/admin/audit", label: "Live Audit", icon: ShieldCheck, exact: true },
+  { to: "/admin/audit", label: "Live Audit", icon: ShieldCheck, exact: true, masterOnly: true },
   { section: "Patient app" },
-  { to: "/admin/audit/patient", label: "Patient Activity", icon: Radio },
+  { to: "/admin/audit/patient", label: "Patient Activity", icon: Radio, masterOnly: true },
   { to: "/admin/patients", label: "Patients", icon: HeartPulse },
   { to: "/abha", label: "ABHA (ABDM)", icon: Fingerprint },
   { section: "Provider app" },
-  { to: "/admin/audit/provider", label: "Provider Activity", icon: Radio },
+  { to: "/admin/audit/provider", label: "Provider Activity", icon: Radio, masterOnly: true },
   { to: "/admin/onboarding", label: "Onboarding", icon: UserPlus },
   { to: "/admin/kyc-queue", label: "KYC Final Approval", icon: ShieldCheck, badgeKey: "kyc_admin_queue" },
   { to: "/admin/ledger", label: "Provider Ledger", icon: Receipt },
@@ -68,7 +68,7 @@ export default function Layout({ children }) {
   const isHospital = user?.provider_type === "hospital";
   const hasEntities = ["hospital", "pharmacy", "pathology", "pathologist", "path_lab", "diagnostic_centre", "ambulance"].includes(user?.provider_type) && !user?.parent_org_name;
   const NAV = (isProvider ? PROVIDER_NAV : isSalesRep ? SALES_NAV : ADMIN_NAV).filter(
-    (n) => (!n.hospitalOnly || isHospital) && (!n.entitiesOnly || hasEntities) && (!n.pharmacyOnly || user?.provider_type === "pharmacy")
+    (n) => (!n.hospitalOnly || isHospital) && (!n.entitiesOnly || hasEntities) && (!n.pharmacyOnly || user?.provider_type === "pharmacy") && (!n.masterOnly || user?.is_master_admin)
   );
   const navigate = useNavigate();
   const [query, setQuery] = React.useState("");

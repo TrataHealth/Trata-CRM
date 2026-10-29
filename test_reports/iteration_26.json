@@ -1,0 +1,46 @@
+{
+  "summary": "Tested the master-admin Push Alerts, Daily Digest and Record History features, plus the audit regression. BACKEND: tests/test_admin_alerts_digest_history.py has 26 tests; 25 passed and 1 failed. Passing: (1) the sales manager gets 403 on all 10 new endpoints; (2) the public key is returned; (3) a non-https endpoint, missing keys or a missing p256dh each return 400; (4) the subscribe → devices → PUT prefs → unsubscribe → PUT prefs (404) flow works, and prefs persist; (5) a fake FCM subscription with valid-format EC keys is auto-removed after /test (sent:0); (6) /test returns 200 with garbage keys (WebPushException is logged); (7) digest generate today returns ai:true with text in about 5s, and /latest matches; (8) cron returns 401 with no Bearer token or the wrong one, and {accepted:true} with WEBHOOK_CRON_SECRET; (9) record history is oldest-first, after_id/limit pagination works and `more` is correct, and an unknown id returns []; (10) audit health shows auto_attach true and more than 200 tables covered; (11) the scope feeds work. FAILURE: subscribe with keys.p256dh but no keys.auth returns 500 (KeyError: 'auth'). FRONTEND: For the master admin, /settings shows settings-alerts-card with the enable button, 4 prefs, the sound toggle (which writes localStorage trata_alert_sound off/on) and the preview. The sales manager does NOT see the card. Enabling push in headless Chromium does not work (the Push API is unsupported in incognito), so it was not counted as a failure. The dashboard morning-digest card works: 'Today so far' produced AI text about Patient app vs Provider app activity (5.4s), the 4 highlight chips (5 sign-ups, 2 orders, 0 KYC, 0 SOS) and both top-5 lists. 'Yesterday' shows 'No activity was recorded on this day', because recording only began on 29 Oct. The patient detail page has Overview/History tabs; the history for 6379fafd is empty and shows record-history-empty. The provider onboarding detail page (TEST Owner 91779969) shows History with 3 entries (users → ambulance_providers → hospital_audits) in ascending order, and expanding an entry shows a 20-row detail table. Switching back to Overview restores the original content. The sidebar sections are present, and Live Audit, Patient Activity and Provider Activity all load their feeds. I fixed a stray '}' that rendered as literal text on the PatientDetail overview.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/alerts/subscribe", "issue": "keys.auth missing → 500 KeyError ('auth'). The validation only checks endpoint and p256dh. Add `or not keys.get('auth')` to the 400 check."},
+      {"endpoint": "push() in admin_alerts.py", "issue": "Subscriptions with invalid keys (WebPushException 'Invalid p256dh key', no HTTP response) are never pruned. Every /test and every alert batch retries them and logs a warning. Consider deleting a subscription when ex.response is None and the error is a key or format error."},
+      {"endpoint": "GET /api/admin/digest/latest", "issue": "Sorts by date desc. If the admin taps 'Today so far' after 8 AM, the 8 AM 'yesterday' digest is no longer what loads on the dashboard (the today partial shows until the next cron run). Consider preferring the newest day:'yesterday' doc for the default view, or storing today-so-far separately."},
+      {"endpoint": "POST /api/admin/alerts/subscribe", "issue": "The upsert is keyed by endpoint only, so a second master admin can take over another admin's endpoint record (admin_id is overwritten). This is low risk, but the update filter could include admin_id or reject the request."},
+      {"endpoint": "build_digest", "issue": "The `users` table is counted in both patient_total and provider_total (scope_of returns both), so the sum of the two totals exceeds `changes`. The second query fetches the full new_data of every INSERT for the day, which could get heavy on busy days. Consider selecting only the columns classify needs (status)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "PatientDetail overview", "issue": "A stray '}' after HealthRecordsPanel rendered as literal text under the tabs (FIXED by testing agent)", "selector": "[data-testid=patient-clinical]", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "AlertSettingsCard prefs while alerts are off", "issue": "Toggling a pref before enabling only changes local state. It is used for the next enablePush, but it is lost on reload, and the user gets no hint about that. Acceptable, but consider persisting it to localStorage.", "affected_selectors": ["alerts-pref-signup"]},
+      {"flow": "Sidebar for non-master admins (regional_manager Priya)", "issue": "Live Audit, Patient Activity and Provider Activity links are visible to the sales manager, but every API behind them returns 403 (master only). Hide these nav items unless user.is_master_admin.", "affected_selectors": ["nav-section-patient-app", "nav-section-provider-app"]}
+    ],
+    "design_issues": [
+      {"screen": "Record history / audit feeds", "issues": ["Most entries show 'unknown app' (the app column is null for these writes), which is not very informative. Consider labelling writes from service-role or direct-DB as 'Admin console / server'."]},
+      {"screen": "AuditLog table filter", "issues": ["React warns that a <span> cannot be a child of <option> (from the 'All tracked tables ({tables.length})' text mixed with the expression). Use a template string: {`All tracked tables (${tables.length})`}."]},
+      {"screen": "MorningDigest date", "issues": ["new Date('YYYY-MM-DD') parses as UTC, so the date shows one day earlier for users west of UTC. Fine for IST users; parsing it as a local date would be safer."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_admin_alerts_digest_history.py", "/app/test_reports/pytest/pytest_iter26.xml"],
+  "action_items": [
+    "Return 400 when keys.auth is missing in POST /api/admin/alerts/subscribe (currently a 500 KeyError)",
+    "Hide Live Audit, Patient Activity and Provider Activity nav items for non-master admins (they currently see links to pages that return 403)",
+    "(Optional) Prune push subscriptions with invalid keys; prefer the 8 AM 'yesterday' digest in /latest; avoid double-counting users in the digest totals; use a template string in the AuditLog <option>"
+  ],
+  "critical_code_review_comments": [
+    "admin_alerts.watch(): the cursor advances before fan_out, so a failing push can never block the cursor. That is good, but an alert is lost if the process dies between the two steps. This is acceptable for notifications.",
+    "The watcher runs in every backend worker process. If uvicorn is ever run with more than one worker, each worker would fan out the same alert (duplicate pushes). Guard it with a Mongo lease or lock.",
+    "record_history: seed expansion takes every ref of any PROFILE_RE row that mentions the id. If a profile row stores reviewer_id, created_by or tenant_id, the history pulls in unrelated changes made by that reviewer or tenant. Consider whitelisting the link columns.",
+    "The service worker is registered as /push-sw.js in dev and /service-worker.js in prod. Verify that the prod service-worker.js actually importScripts('/push-sw.js'); otherwise push will fail after deploy."
+  ],
+  "updated_files": ["/app/backend/tests/test_admin_alerts_digest_history.py", "/app/frontend/src/pages/PatientDetail.jsx"],
+  "success_rate": {"backend": "96% (25/26)", "frontend": "100% of testable flows (real push delivery not testable headless)"},
+  "seed_data_creation": "None in Supabase. Temporary Mongo push_subscriptions with endpoints containing TEST_fake_ were created and all were removed (0 left). The admin_digests docs for 2026-10-28 and 2026-10-29 were generated.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `cd /app/backend && python -m pytest tests/test_admin_alerts_digest_history.py -v` (about 1 min). The audit log only began on 2026-10-29 12:49 UTC (about 133 rows), so 'yesterday' digests are empty. Use provider 933eee2e-315a-430b-9a58-284ae5161863 (TEST Owner 91779969) for a non-empty History tab. The /admin/patients entries currently have no history. For UI tests, inject trata_token and trata_user into localStorage. Headless Chromium can't subscribe to push (incognito).",
+  "rca of the issue": "The subscribe 500 comes from admin_alerts.py line 106, which validates only p256dh. Line 110 then indexes sub['keys']['auth'] directly and raises KeyError. Reproduce with: POST /api/admin/alerts/subscribe {subscription:{endpoint:'https://fcm.googleapis.com/x', keys:{p256dh:'abc'}}}."
+}

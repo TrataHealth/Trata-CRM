@@ -34,7 +34,7 @@ export function MorningDigest() {
         <div>
           <div className="overline flex items-center gap-1.5 text-[#974F0C]"><Sunrise className="h-3.5 w-3.5" /> Morning summary</div>
           <div className="font-heading font-bold text-[#091E42] mt-1" data-testid="digest-date">
-            {s ? `${new Date(s.date).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short" })}${d.day === "today" ? " (so far)" : ""}` : "No summary yet"}
+            {s ? `${new Date(`${s.date}T00:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short" })}${d.day === "today" ? " (so far)" : ""}` : "No summary yet"}
           </div>
         </div>
         <div className="flex gap-2">

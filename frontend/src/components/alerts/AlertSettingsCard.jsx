@@ -5,16 +5,18 @@ import api from "../../lib/api";
 import { ALERT_KINDS, currentSubscription, disablePush, enablePush, playChime, pushSupported, setSound, soundOn } from "../../lib/push";
 
 const ALL_ON = Object.fromEntries(ALERT_KINDS.map((k) => [k.key, true]));
+const savedPrefs = () => { try { return { ...ALL_ON, ...JSON.parse(localStorage.getItem("trata_alert_prefs") || "{}") }; } catch { return ALL_ON; } };
 
 export function AlertSettingsCard() {
-  const [st, setSt] = useState({ loading: true, on: false, devices: 0, prefs: ALL_ON });
+  const [st, setSt] = useState({ loading: true, on: false, devices: 0, prefs: savedPrefs() });
   const [busy, setBusy] = useState(false);
   const [sound, setSnd] = useState(soundOn());
 
   const load = async () => {
     const sub = await currentSubscription().catch(() => null);
     const { data } = await api.get("/admin/alerts/devices", { params: { endpoint: sub?.endpoint } });
-    setSt({ loading: false, on: !!sub && data.this_device, devices: data.devices, prefs: data.prefs });
+    const on = !!sub && data.this_device;
+    setSt({ loading: false, on, devices: data.devices, prefs: on ? data.prefs : savedPrefs() });
   };
   useEffect(() => { load().catch(() => setSt((s) => ({ ...s, loading: false }))); }, []);
 
@@ -22,6 +24,7 @@ export function AlertSettingsCard() {
   const toggle = (key) => {
     const prefs = { ...st.prefs, [key]: !st.prefs[key] };
     setSt((s) => ({ ...s, prefs }));
+    localStorage.setItem("trata_alert_prefs", JSON.stringify(prefs));
     if (st.on) run(async () => { const sub = await currentSubscription(); await api.put("/admin/alerts/prefs", { endpoint: sub.endpoint, prefs }); });
   };
   const test = () => run(async () => { const { data } = await api.post("/admin/alerts/test"); if (!data.sent) throw new Error("No device received it — try turning alerts off and on again"); }, "Test alert sent");
