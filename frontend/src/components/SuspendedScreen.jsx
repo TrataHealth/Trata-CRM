@@ -25,7 +25,7 @@ export default function SuspendedScreen() {
             <h1 className="font-heading text-xl font-black" data-testid="suspended-title">Your account has been suspended</h1>
           </div>
           <p className="text-sm text-[#42526E] mt-3 leading-relaxed">
-            {user?.name ? <b>{user.name}</b> : "This account"} can't use the Trata CRM, the Trata Provider app or TrataX until the suspension is lifted.
+            {user?.name ? <b>{user.name}</b> : "This account"} can't use the Trata Admin Console, the Trata Provider app or TrataX until the suspension is lifted.
           </p>
           {user?.suspended_reason && (
             <div className="mt-4 bg-[#FFF4E5] border-l-4 border-[#FF8B00] px-4 py-3 text-sm text-[#172B4D]" data-testid="suspended-reason">

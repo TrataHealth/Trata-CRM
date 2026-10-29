@@ -41,7 +41,7 @@ export default function EntityDashboard() {
           {d.activities.length ? d.activities.map((a, i) => <div key={i} className="py-2 border-b border-[#F4F5F7] last:border-0"><div className="text-sm font-semibold text-[#091E42]">{a.title}</div>
             <div className="text-xs text-[#5E6C84]">{new Date(a.created_at).toLocaleString()}{a.description ? ` · ${a.description}` : ""}</div></div>) : <div className="text-sm text-[#5E6C84]">No activity yet.</div>}
         </div>
-        <p className="text-xs text-[#5E6C84]">This unit manages its own day-to-day work by signing in with {e.dedicated_phone} on the Provider app or the CRM.</p>
+        <p className="text-xs text-[#5E6C84]">This unit manages its own day-to-day work by signing in with {e.dedicated_phone} on the Provider app or the Admin Console.</p>
       </>}
     </div>
   );

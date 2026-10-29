@@ -87,7 +87,7 @@ export default function InstallPrompt() {
         >
           <img src="/brand/shield.png" alt="" className="h-10 w-10 object-contain shrink-0" />
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-heading font-bold text-[#091E42]">Install Trata Health CRM</div>
+            <div className="text-sm font-heading font-bold text-[#091E42]">Install Trata Health Admin Console</div>
             <div className="text-xs text-[#5E6C84] mt-0.5 leading-snug">
               Add to your home screen for one-tap access, full-screen view and faster loads.
             </div>
@@ -134,7 +134,7 @@ export default function InstallPrompt() {
               <img src="/brand/shield.png" alt="" className="h-10 w-10 object-contain shrink-0" />
               <div className="flex-1">
                 <div className="font-heading text-base font-bold text-[#091E42]">Add to Home Screen</div>
-                <div className="text-xs text-[#5E6C84] mt-1">Install Trata Health CRM on your iPhone/iPad in two taps.</div>
+                <div className="text-xs text-[#5E6C84] mt-1">Install Trata Health Admin Console on your iPhone/iPad in two taps.</div>
               </div>
               <button onClick={dismiss} aria-label="Close" className="p-1 text-[#5E6C84]"><X className="h-4 w-4" /></button>
             </div>
@@ -151,7 +151,7 @@ export default function InstallPrompt() {
               </li>
               <li className="flex items-center gap-2">
                 <span className="h-6 w-6 rounded-full bg-[#F1F2F4] flex items-center justify-center text-xs font-bold">3</span>
-                <span className="flex-1">Tap <span className="font-semibold">Add</span> — TrataCRM is now on your home screen.</span>
+                <span className="flex-1">Tap <span className="font-semibold">Add</span> — Trata Health Admin Console is now on your home screen.</span>
               </li>
             </ol>
           </div>

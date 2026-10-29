@@ -138,7 +138,7 @@ export default function ProviderProfile() {
 
       {/* ── CRM meta ────────────────────────────────────────────────── */}
       <section className={T.card} data-testid="profile-crm-meta">
-        <div className={T.sectionHead}>Trata CRM tracking</div>
+        <div className={T.sectionHead}>Trata Admin Console tracking</div>
         <div className="p-4">
           <Row label="Pipeline stage" value={c.pipeline_stage} />
           <Row label="Deal value" value={c.deal_value ? fmtCurrency(c.deal_value) : null} />

@@ -149,7 +149,7 @@ export default function Layout({ children }) {
             <img src="/brand/shield.png" alt="" className="h-9 w-9 object-contain shrink-0" />
             <div className="min-w-0">
               <div className="font-heading font-bold text-[#091E42] leading-none truncate">Trata Health</div>
-              <div className="text-[10px] text-[#5E6C84] tracking-wider uppercase mt-0.5 truncate">CRM</div>
+              <div className="text-[10px] text-[#5E6C84] tracking-wider uppercase mt-0.5 truncate">Admin Console</div>
             </div>
           </div>
           <button
@@ -338,7 +338,7 @@ function DataSourceBadge({ sync, syncing, onSync, hidden }) {
   const last = sync.last?.last_synced_at;
   const tip = upstream
     ? `Live · ${sync.base_url}\nLast sync: ${last ? relativeTime(last) : "never"}`
-    : live ? "Live · reading the shared Trata database directly (all 4 apps)" : "Shared Trata database unreachable — showing cached CRM data";
+    : live ? "Live · reading the shared Trata database directly (all 4 apps)" : "Shared Trata database unreachable — showing cached data";
   return (
     <div
       data-testid="data-source-badge"

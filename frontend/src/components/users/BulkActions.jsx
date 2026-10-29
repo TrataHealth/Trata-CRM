@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 
 const COPY = {
   suspend: { title: "Suspend users", verb: "Suspend", need: true, tone: "bg-[#DE350B] hover:bg-[#BF2600]",
-    help: "They see a suspension notice in the CRM, Provider app and TrataX and can't use anything until you restore access. They're emailed with this reason." },
+    help: "They see a suspension notice in the Admin Console, Provider app and TrataX and can't use anything until you restore access. They're emailed with this reason." },
   unsuspend: { title: "Restore access", verb: "Restore access", need: false, tone: "bg-[#00875A] hover:bg-[#006644]",
     help: "The suspension is lifted everywhere and they're emailed that their account is active again." },
   archive: { title: "Delete users", verb: "Delete", need: true, tone: "bg-[#DE350B] hover:bg-[#BF2600]",

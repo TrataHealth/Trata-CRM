@@ -77,7 +77,7 @@ export default function Login() {
       kicker: "Step 3 of 3",
       title: needsSetup ? "Set your password" : "Enter your password",
       sub: needsSetup
-        ? "First time signing in — choose a password (min 6 chars) for your TrataCRM account."
+        ? "First time signing in — choose a password (min 6 chars) for your Trata Health Admin Console account."
         : `Welcome back${previewUser?.name ? `, ${previewUser.name}` : ""}. Enter your password to continue.`,
     },
   };
@@ -96,7 +96,7 @@ export default function Login() {
             <img src="/brand/shield.png" alt="" className="h-12 w-12 object-contain bg-white rounded-md p-1" />
             <div>
               <div className="font-heading font-bold text-xl">Trata Health</div>
-              <div className="text-xs opacity-70 tracking-widest uppercase">Provider CRM · Master Console</div>
+              <div className="text-xs opacity-70 tracking-widest uppercase">Admin Console</div>
             </div>
           </div>
           <div className="mt-auto space-y-6">
@@ -136,7 +136,7 @@ export default function Login() {
             <img src="/brand/shield.png" alt="" className="h-10 w-10 object-contain" />
             <div>
               <div className="font-heading font-bold text-lg leading-none">Trata Health</div>
-              <div className="text-[10px] text-[#5E6C84] tracking-widest uppercase mt-0.5">Provider CRM</div>
+              <div className="text-[10px] text-[#5E6C84] tracking-widest uppercase mt-0.5">Admin Console</div>
             </div>
           </div>
           <div className="overline mb-2">{t.kicker}</div>

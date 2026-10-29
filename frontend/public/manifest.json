@@ -1,5 +1,5 @@
 {
-  "name": "Trata Health Provider CRM",
+  "name": "Trata Health Admin Console",
   "short_name": "Trata Health",
   "description": "Master operations console for Trata Health — unified view of patients, providers, cases, pipeline, tasks and AI insights.",
   "start_url": "/?utm_source=pwa",

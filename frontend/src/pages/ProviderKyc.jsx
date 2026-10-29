@@ -184,7 +184,7 @@ export default function ProviderKyc() {
     return (
       <div className="p-8 max-w-xl mx-auto mt-10 text-sm text-[#5E6C84]">
         <ShieldAlert className="h-5 w-5 mb-2" />
-        KYC uploads are available only for hospital, ambulance, doctor and pathology providers on the CRM console.
+        KYC uploads are available only for hospital, ambulance, doctor and pathology providers on the Admin Console.
       </div>
     );
   }
