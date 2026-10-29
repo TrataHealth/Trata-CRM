@@ -20,7 +20,6 @@ const ADMIN_NAV = [
   { section: "Patient app" },
   { to: "/users/patients", label: "Trata Patient Users", icon: Users },
   { to: "/admin/audit/patient", label: "Patient Activity", icon: Radio, masterOnly: true },
-  { to: "/admin/patients", label: "Patients", icon: HeartPulse },
   { to: "/abha", label: "ABHA (ABDM)", icon: Fingerprint },
   { section: "Provider app" },
   { to: "/users/providers", label: "Trata Providers", icon: Building2 },

@@ -41,6 +41,7 @@ import ProviderEntities from "./pages/ProviderEntities";
 import PharmacyConsole from "./pages/PharmacyConsole";
 import ProviderHome from "./pages/ProviderHome";
 import AuditLog from "./pages/AuditLog";
+import DigestRecords from "./pages/DigestRecords";
 import EntityDashboard from "./pages/EntityDashboard";
 import Patients from "./pages/Patients";
 import Abha from "./pages/Abha";
@@ -97,6 +98,7 @@ function App() {
           <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
           <Route path="/pharmacy/:tab" element={<RequireAuth providerOnly><PharmacyConsole /></RequireAuth>} />
           <Route path="/admin/audit" element={<RequireAuth adminOnly><AuditLog /></RequireAuth>} />
+          <Route path="/admin/summary/:metric" element={<RequireAuth adminOnly><DigestRecords /></RequireAuth>} />
           <Route path="/admin/audit/patient" element={<RequireAuth adminOnly><AuditLog scope="patient" /></RequireAuth>} />
           <Route path="/admin/audit/provider" element={<RequireAuth adminOnly><AuditLog scope="provider" /></RequireAuth>} />
           <Route path="/abha" element={<RequireAuth><Abha /></RequireAuth>} />

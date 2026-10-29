@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { Sunrise, Loader2, RefreshCw } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Sunrise, Loader2, RefreshCw, ArrowUp, ArrowDown, Minus } from "lucide-react";
 import { toast } from "sonner";
 import api from "../lib/api";
 
-const HL = [["signups", "Patient app sign-ups"], ["doctor_appointments", "Doctor appointments"], ["pathlab_bookings", "Path lab bookings"],
+export const HL = [["signups", "Patient app sign-ups"], ["doctor_appointments", "Doctor appointments"], ["pathlab_bookings", "Path lab bookings"],
   ["diagnostics_bookings", "Diagnostics bookings"], ["pharmacy_orders", "Pharmacy orders"], ["sos", "SOS cases"]];
 
 function TopList({ title, total, rows }) {
@@ -14,6 +15,21 @@ function TopList({ title, total, rows }) {
         <li key={r.table} className="text-xs text-[#42526E] flex justify-between gap-2"><span className="capitalize truncate">{r.table}</span><b className="text-[#091E42]">{r.n}</b></li>
       )) : <li className="text-xs text-[#97A0AF]">No activity</li>}</ul>
     </div>
+  );
+}
+
+function Chip({ k, l, s }) {
+  const n = s.highlights[k] ?? 0;
+  const p = s.previous?.[k];
+  const diff = p == null ? null : n - p;
+  const Icon = diff > 0 ? ArrowUp : diff < 0 ? ArrowDown : Minus;
+  const tone = diff > 0 ? "text-[#006644]" : diff < 0 ? "text-[#BF2600]" : "text-[#97A0AF]";
+  return (
+    <Link to={`/admin/summary/${k}?date=${s.date}`} title={p == null ? "" : `Day before: ${p}`}
+          className="group text-xs px-2.5 py-1 rounded-full bg-white border border-[#DFE1E6] text-[#42526E] hover:border-[#0052CC] hover:text-[#0052CC] transition-colors inline-flex items-center gap-1" data-testid={`digest-hl-${k}`}>
+      <b className="text-[#091E42] group-hover:text-[#0052CC]">{n}</b> {l}
+      {diff !== null && <span className={`inline-flex items-center ${tone}`} data-testid={`digest-diff-${k}`}><Icon className="h-3 w-3" />{diff !== 0 && Math.abs(diff)}</span>}
+    </Link>
   );
 }
 
@@ -47,8 +63,7 @@ export function MorningDigest() {
       </div>
       {!s ? <p className="text-sm text-[#5E6C84] mt-2" data-testid="digest-empty">Your first summary arrives at 8 AM India time. Tap a button to build one now.</p> : <>
         <p className="text-sm text-[#091E42] mt-3 leading-relaxed max-w-3xl" data-testid="digest-text">{d.text || (s.changes || HL.some(([k]) => s.highlights[k]) ? `${s.changes} changes recorded across both apps.` : "No activity was recorded on this day.")}</p>
-        <div className="flex flex-wrap gap-2 mt-3">{HL.map(([k, l]) => (
-          <span key={k} className="text-xs px-2.5 py-1 rounded-full bg-white border border-[#DFE1E6] text-[#42526E]" data-testid={`digest-hl-${k}`}><b className="text-[#091E42]">{s.highlights[k] ?? 0}</b> {l}</span>))}</div>
+        <div className="flex flex-wrap gap-2 mt-3">{HL.map(([k, l]) => <Chip key={k} k={k} l={l} s={s} />)}</div>
         <div className="grid sm:grid-cols-2 gap-5 mt-4">
           <TopList title="Patient app" total={s.patient_total} rows={s.patient_top} />
           <TopList title="Provider app" total={s.provider_total} rows={s.provider_top} />

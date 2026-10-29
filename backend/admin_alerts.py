@@ -204,7 +204,8 @@ def create_alerts_router(db, get_current_user, llm_key: str):
                 totals[s][x["table_name"].replace("_", " ")] += x["n"]
         counts = Counter(classify({**dict(k), "new_data": json.loads(k["new_data"]) if k["new_data"] else None}) for k in kinds)
         metrics = await day_metrics(start, start + timedelta(days=1))
-        stats = {"date": d.isoformat(), "changes": sum(x["n"] for x in rows),
+        previous = await day_metrics(start - timedelta(days=1), start)
+        stats = {"date": d.isoformat(), "changes": sum(x["n"] for x in rows), "previous": previous,
                  "highlights": {**metrics, "kyc": counts.get("kyc", 0)},
                  "patient_top": [{"table": t, "n": n} for t, n in totals["patient"].most_common(5)],
                  "provider_top": [{"table": t, "n": n} for t, n in totals["provider"].most_common(5)],
@@ -234,6 +235,44 @@ def create_alerts_router(db, get_current_user, llm_key: str):
     async def generate(body: Dict[str, Any], current=Depends(get_current_user)):
         master(current)
         return {"digest": await build_digest("today" if body.get("day") == "today" else "yesterday")}
+
+    @r.get("/admin/digest/records")
+    async def digest_records(metric: str, date: str, current=Depends(get_current_user)):
+        """The rows behind one summary number, for one IST day."""
+        master(current)
+        if metric not in DIGEST_METRICS:
+            raise HTTPException(status_code=400, detail="Unknown metric")
+        try:
+            d = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+        start = datetime(d.year, d.month, d.day, tzinfo=IST)
+        tables, where = DIGEST_METRICS[metric]
+        pool = await sb.get_pool()
+        items: List[Dict[str, Any]] = []
+        async with pool.acquire() as conn:
+            have = {r["table_name"] for r in await conn.fetch(
+                "SELECT table_name FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'created_at'")}
+            for t in tables:
+                if t not in have:
+                    continue
+                for x in await conn.fetch(f'SELECT to_jsonb(r) j FROM public."{t}" r WHERE created_at >= $1 AND created_at < $2 {where} '
+                                          f'ORDER BY created_at DESC LIMIT 500', start, start + timedelta(days=1)):
+                    j = json.loads(x["j"])
+                    pick = lambda *ks: next((j[k] for k in ks if j.get(k) not in (None, "")), None)  # noqa: E731
+                    items.append({"table": t, "id": str(j.get("id")), "created_at": j.get("created_at"), "status": pick("status"),
+                                  "who": pick("patient_name", "customer_name", "full_name", "name", "contact_name"),
+                                  "phone": pick("phone", "patient_phone", "customer_phone", "contact_phone"),
+                                  "what": pick("case_type", "emergency_type", "service_type", "booking_type", "test_name", "consultation_type", "specialty", "order_type"),
+                                  "patient_user_id": str(j["id"]) if t == "users" else pick("user_id", "patient_user_id", "customer_id", "patient_id")})
+            missing = list({i["patient_user_id"] for i in items if not i["who"] and i["patient_user_id"]})
+            if missing:
+                names = {str(u["id"]): u["name"] for u in await conn.fetch(
+                    "SELECT id, name FROM public.users WHERE id::text = ANY($1::text[])", missing)}
+                for i in items:
+                    i["who"] = i["who"] or names.get(i["patient_user_id"])
+        items.sort(key=lambda i: str(i["created_at"]), reverse=True)
+        return {"metric": metric, "date": d.isoformat(), "items": items}
 
     @r.post("/cron/admin-digest")
     async def cron_digest(request: Request):

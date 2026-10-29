@@ -149,6 +149,13 @@ export default function ContactDetail() {
         </div>
       )}
 
+      {c.supabase_user_id && c.type === "patient" && user?.is_master_admin && (
+        <Link to={`/admin/patients/${c.supabase_user_id}`} className="flex items-center justify-between bg-[#E3FCEF]/60 border border-[#ABF5D1] rounded-lg px-4 py-3 text-sm text-[#091E42] hover:bg-[#E3FCEF]" data-testid="contact-patient-record-link">
+          <span>Medical record — cases, appointments, health records and full change history</span>
+          <span className="font-semibold text-[#006644]">Open →</span>
+        </Link>
+      )}
+
       {c.supabase_user_id && ["hospital", "pharmacy", "pathologist", "diagnostic_centre"].includes(c.type) && (user?.is_master_admin || c.assigned_agent_id === user?.id) && (
         <EntitiesPanel base="/admin/provider-app/contact-entities" params={{ contact_id: c.id }} />
       )}
