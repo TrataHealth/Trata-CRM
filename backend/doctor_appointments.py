@@ -146,8 +146,10 @@ def create_doctor_router(get_current_user):
         eid = str(uuid.uuid5(EHR_NS, f"{source}:{a['id']}"))
         row = await conn.fetchrow("SELECT * FROM public.consultation_ehr WHERE id = $1", eid)
         if not row and a.get("patient_id") and a.get("date"):  # a record the doctor already started in the Provider app
+            # console-created rows are uuid v5 (one per appointment) — never borrow another appointment's record
             row = await conn.fetchrow("""SELECT * FROM public.consultation_ehr WHERE patient_id = $1 AND doctor_id = ANY($2::text[])
-                                          AND (consultation_date AT TIME ZONE 'Asia/Kolkata')::date = $3::text::date ORDER BY created_at DESC LIMIT 1""",
+                                          AND (consultation_date AT TIME ZONE 'Asia/Kolkata')::date = $3::text::date
+                                          AND substr(id, 15, 1) <> '5' ORDER BY created_at DESC LIMIT 1""",
                                       str(a["patient_id"]), ids, str(a["date"])[:10])
         return eid, row
 
@@ -158,8 +160,10 @@ def create_doctor_router(get_current_user):
         e = dict(row)
         for k in ("diagnosis", "prescriptions", "investigations", "vitals", "past_medical_history", "lab_results"):
             e[k] = j(e.get(k))
-        for k in ("consultation_date", "follow_up_date", "signed_at", "created_at", "updated_at"):
+        for k in ("signed_at", "created_at", "updated_at"):
             e[k] = e[k].isoformat() if e.get(k) else None
+        for k in ("consultation_date", "follow_up_date"):  # stored as IST midnight -> plain IST date
+            e[k] = e[k].astimezone(IST).date().isoformat() if e.get(k) else None
         e["shared"] = str(e.get("status") or "").lower() == "signed"
         return e
 
@@ -179,7 +183,10 @@ def create_doctor_router(get_current_user):
         ids = await doctor_ids(current)
         meds = [m.model_dump() for m in body.prescriptions if m.name.strip()]
         diag = [x.strip() for x in body.diagnosis.split(",") if x.strip()]
-        fu = datetime.strptime(body.follow_up_date, "%Y-%m-%d").replace(tzinfo=IST) if body.follow_up_date else None
+        try:
+            fu = datetime.strptime(body.follow_up_date, "%Y-%m-%d").replace(tzinfo=IST) if body.follow_up_date else None
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Follow-up date must be YYYY-MM-DD")
         pool = await sb.get_pool()
         async with pool.acquire() as conn:
             a = await appointment(conn, source, aid, ids)
@@ -200,9 +207,14 @@ def create_doctor_router(get_current_user):
                                       VALUES ($1, $2::json, $3, $4::json, $5, $6::json, $7::json, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'draft', $11)""",
                                    *vals, eid, str(a.get("patient_id") or ""), ids[0], cdate, a.get("mode") or source)
             out = ehr_out(await conn.fetchrow("SELECT * FROM public.consultation_ehr WHERE id = $1", eid))
+        completed, note = False, None
         if body.complete and str(a.get("status") or "").lower() not in DONE:
-            await set_status(source, aid, {"status": "completed"}, current)
-        return {"ehr": out, "completed": bool(body.complete)}
+            try:
+                await set_status(source, aid, {"status": "completed"}, current)
+                completed = True
+            except HTTPException as ex:  # e.g. patient cancelled meanwhile — notes are still saved
+                note = ex.detail
+        return {"ehr": out, "completed": completed, "complete_error": note}
 
     @r.post("/appointments/{source}/{aid}/consult/share")
     async def share_consult(source: str, aid: str, current=Depends(get_current_user)):

@@ -471,3 +471,8 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - doctor_appointments.py: GET /api/provider/doctor/appointments (doctor_appointments, consultation_bookings, teleconsultation_bookings, appointments; doctor_id matches users.id or doctors.id), POST .../{source}/{id}/status (completed|no_show|cancelled, atomic), GET .../patients/{pid}/visits. UI: DoctorAppointments on doctor dashboard + /provider/appointments (doctorOnly nav) with patient side sheet.
 - My Activities tabs filtered per vertical (VERTICAL_ACTIVITY_CATEGORIES).
 - TEST rows for Dr. Meera (9000020006) in doctor_appointments with reason "TEST — fever and cough".
+
+## 2026-06 — Doctor consultation notes & prescriptions
+- Stored ONLY in shared Supabase consultation_ehr (contract: memory/CONSULTATION_EHR_CONTRACT.md). One row per appointment (uuid5), falls back to a Provider-app-created row (non-v5 id) for same patient+doctor+IST day. status draft -> signed on Share; private notes in `notes`; Share inserts Supabase notifications (consultation) for the patient if a users row exists.
+- Endpoints GET/PUT /api/provider/doctor/appointments/{source}/{id}/consult, POST .../consult/share. UI ConsultEditor (Save / Save & mark completed / Share / Print), print page /provider/rx/:source/:id (no layout).
+- Patient app must show only status=signed rows and never `notes` (needs Patient app dev work).

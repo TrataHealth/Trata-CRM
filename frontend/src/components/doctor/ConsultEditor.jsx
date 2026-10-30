@@ -19,6 +19,9 @@ function Meds({ meds, set }) {
   const upd = (i, k, v) => set(meds.map((m, j) => (j === i ? { ...m, [k]: v } : m)));
   return (
     <div className="space-y-2" data-testid="consult-meds">
+      <div className="hidden sm:grid grid-cols-12 gap-1.5 text-[10px] uppercase tracking-wider text-[#97A0AF] font-semibold">
+        <span className="col-span-3">Medicine</span><span className="col-span-2">Dose</span><span className="col-span-2">Frequency</span><span className="col-span-2">Duration</span><span className="col-span-2">Instructions</span>
+      </div>
       {meds.map((m, i) => (
         <div key={i} className="grid grid-cols-12 gap-1.5 items-center" data-testid={`consult-med-${i}`}>
           <input value={m.name} onChange={(e) => upd(i, "name", e.target.value)} placeholder="Medicine" className={`${inp} col-span-12 sm:col-span-3`} data-testid={`consult-med-name-${i}`} />
@@ -53,8 +56,9 @@ export function ConsultEditor({ appt, onClose, onChanged }) {
     setBusy(complete ? "complete" : "save");
     try {
       const { data } = await api.put(base, { ...f, investigations: f.investigations.split(",").map((x) => x.trim()).filter(Boolean), follow_up_date: f.follow_up_date || null, complete });
-      setS((p) => ({ ...p, ehr: data.ehr, appointment: complete ? { ...p.appointment, status: "completed" } : p.appointment }));
-      toast.success(complete ? "Saved and marked completed" : "Saved — visible in your Provider app too");
+      setS((p) => ({ ...p, ehr: data.ehr, appointment: data.completed ? { ...p.appointment, status: "completed" } : p.appointment }));
+      if (data.complete_error) toast.warning(`Notes saved, but not marked completed: ${data.complete_error}`);
+      else toast.success(data.completed ? "Saved and marked completed" : "Saved — visible in your Provider app too");
       onChanged?.();
       return true;
     } catch (e) { toast.error(e?.response?.data?.detail || "Save failed"); return false; }
@@ -105,7 +109,7 @@ export function ConsultEditor({ appt, onClose, onChanged }) {
                 {busy === "complete" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Save &amp; mark completed</button>}
               <button onClick={share} disabled={!!busy} className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold rounded-md bg-[#0052CC] text-white hover:bg-[#0747A6] disabled:opacity-50" data-testid="consult-share-btn">
                 {busy === "share" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} {s.ehr?.shared ? "Share again" : "Share with patient"}</button>
-              <button onClick={async () => { if (await save()) window.open(`/provider/rx/${appt.source}/${appt.id}`, "_blank"); }} disabled={!!busy} className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold rounded-md text-[#42526E] hover:bg-[#F4F5F7] ml-auto" data-testid="consult-print-btn">
+              <button onClick={async () => { const w = window.open("", "_blank"); if (await save()) { const url = `/provider/rx/${appt.source}/${appt.id}`; if (w) w.location.href = url; else window.location.href = url; } else w?.close(); }} disabled={!!busy} className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold rounded-md text-[#42526E] hover:bg-[#F4F5F7] ml-auto" data-testid="consult-print-btn">
                 <Printer className="h-4 w-4" /> Print / PDF</button>
             </div>
           </div>

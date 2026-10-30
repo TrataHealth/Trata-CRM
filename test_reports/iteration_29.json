@@ -1,0 +1,44 @@
+{
+  "summary": "Iter 29: Tested Consultation Notes & Rx for Dr. Meera's TEST appointments: GET/PUT/share consult API with RBAC, the ConsultEditor dialog, and the print page. Backend: 13/15 pytest pass. Passing: 403 for hospital and admin, 401/403 when unauthenticated, 400 invalid source, 404 unknown id (all 4 sources, uuid and non-uuid), status 'draft' on insert and 'signed' after share, notes, prescriptions (blank meds dropped), diagnosis array, vitals and investigations round-trip, share rejected (400) with no diagnosis and no medicine, edit after share keeps 'signed' with updated_at > signed_at, complete=true on a final row does nothing. Two failures: the follow-up date shifts by one day, and a bad date returns 500. Frontend: both entry points open consult-editor. All fields save and reload after closing and reopening, except the follow-up date. Add/remove medicine works. Share works: chip 'Shared with patient 30 Oct, 05:52 pm', button 'Share again', consult-stale shown after editing. The rejection toast 'Add a diagnosis or at least one medicine before sharing' appears. Save & mark completed is hidden for final rows; on a confirmed row it shows the toast and the API confirms status=completed. Print opens /provider/rx/clinic/{id} in a new tab with no sidebar; meds are listed and private notes are absent. Found 2 real bugs: the follow-up date drifts and the find_ehr fallback attaches another appointment's record.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET/PUT /api/provider/doctor/appointments/{source}/{id}/consult (follow_up_date)", "issue": "Data corruption: the follow-up date moves back one day on every save. follow_up_date is timestamptz stored as IST midnight, and the API returns UTC iso ('2026-02-09T18:30:00+00:00' for 10 Feb). ConsultEditor fromEhr does follow_up_date.slice(0,10), which shows the previous day, and the next Save writes that day back. Reproduced in UI: entered 2026-11-15, reopened showed 2026-11-14, after one more save the print page read '13 November 2026'. Fix: return follow_up_date (and consultation_date) as an IST date string, e.g. .astimezone(IST).date().isoformat(), or convert to IST in the frontend before slicing.", "priority": "HIGH"},
+      {"endpoint": "find_ehr fallback (doctor_appointments.py:148)", "issue": "Two appointments for the same patient on the same IST day share one consultation_ehr row. Repro: I added TEST appointment 4d0dc8b2 (same patient and date 2026-10-25 as c922fcde). GET consult for 4d0dc8b2 returned c922fcde's signed EHR 21c7d9bf, and saving or completing 4d0dc8b2 overwrote it. Fix: in the fallback, skip rows whose id equals uuid5 of some other appointment (e.g. require id NOT LIKE a console-generated id, or check that no other appointment maps to it), or only fall back when the row was created by the Provider app.", "priority": "MEDIUM"}
+    ],
+    "minor": [
+      {"endpoint": "PUT .../consult", "issue": "An invalid follow_up_date (e.g. '10-02-2026') raises an uncaught ValueError and returns 500. Validate it in the Pydantic model or return 400/422."},
+      {"endpoint": "PUT .../consult with complete=true", "issue": "set_status is called after the EHR commit. A 409 (patient cancelled meanwhile) gives an error toast even though the notes were saved."},
+      {"endpoint": "PUT/share latency", "issue": "Share (save + share) and Save & mark completed take more than 5 s against the shared Supabase DB. The UI shows a spinner, but it feels slow."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ConsultEditor follow-up date", "issue": "Shows the previous day after reload (see backend critical #1)", "selector": "[data-testid='consult-followup-date']", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Print / PDF", "issue": "window.open runs after `await save()`. Safari, Firefox and popup blockers may block it because the user click no longer counts once the save resolves. Open the window synchronously and set its location after the save, or fall back to navigating in the same tab.", "affected_selectors": ["[data-testid='consult-print-btn']"]}
+    ],
+    "design_issues": [
+      {"screen": "ConsultEditor", "issues": ["The share-state chip and the stale warning wrap onto two lines; minor.", "The medicine dose, frequency, duration and instructions inputs show only placeholders with no column headers."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_doctor_consult.py", "/app/test_reports/pytest/pytest_results_iter29.xml"],
+  "action_items": [
+    "Fix the follow-up date timezone round-trip: return an IST date string (backend) or convert to IST before slice (frontend), and check PrescriptionPrint fmt()",
+    "Tighten the find_ehr fallback so a second same-day appointment does not reuse another appointment's EHR",
+    "Validate follow_up_date and return 4xx instead of 500",
+    "Make the Print button popup-safe"
+  ],
+  "critical_code_review_comments": [
+    "ConsultEditor `final` list (completed/cancelled/canceled/no_show) differs from the backend DONE set (rejected/declined/expired/failed/missed), so 'Save & mark completed' can show and then do nothing for those statuses",
+    "vitals Dict[str,str] and investigations List[str] have no length or size limits",
+    "Share in the UI always saves first, so clicking Share with blank fields overwrites the saved diagnosis and meds before the 400 rejection"
+  ],
+  "updated_files": ["/app/backend/tests/test_doctor_consult.py"],
+  "success_rate": {"backend": "87% (13/15)", "frontend": "90% (all flows work except the follow-up date round-trip)"},
+  "seed_data_creation": "Inserted 1 TEST doctor_appointments row 4d0dc8b2-3860-4086-babd-9989393ec899 (copy of c922fcde, reason 'TEST — fever and cough', date 2026-10-25). It is now completed. Created or modified TEST consultation_ehr rows: 21c7d9bf (c922fcde/4d0dc8b2, signed), 635de29a... (4c6880ff, signed, stale), 23fd8fe7 (98cf572f, overwritten with TEST payload).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run with: REACT_APP_BACKEND_URL=... pytest backend/tests/test_doctor_consult.py. test_followup_date_iso_string_day and test_invalid_followup_date should pass after the fixes. All 4 TEST rows are now final, so the complete button test needs a new confirmed TEST row. Note that 4d0dc8b2 shares patient and date with c922fcde, which is the repro for the fallback bug. Use login_as='staff' for admin. Share and complete take about 5-8 s.",
+  "rca of the issue": "Follow-up date: the timestamptz is written at IST midnight, serialized by isoformat() in UTC (previous day 18:30Z), and the frontend slices the first 10 chars, which gives the previous day. The fallback bug happens because find_ehr matches by patient + doctor + day without excluding rows that belong to another appointment's deterministic uuid5."
+}
