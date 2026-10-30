@@ -527,6 +527,12 @@ async def fetch_generic_provider_dashboard(user_id: str, vertical: str) -> Dict[
             if extra in cols:                 select_cols.append(extra)
         provider = await conn.fetchrow(
             f"SELECT {', '.join(select_cols)} FROM public.{table} WHERE user_id = $1", user_id)
+        profile_incomplete = False
+        if not provider:
+            # Account exists but the vertical profile (e.g. doctors row) was never created — still show the dashboard.
+            provider = await conn.fetchrow(
+                "SELECT id, id AS user_id, name AS business_name, phone, email, created_at FROM public.users WHERE id::text = $1", str(user_id))
+            profile_incomplete = True
         if not provider:
             return {"provider": None}
         # Cases count — meaningful for hospital (via hospital_id on cases) and paramedic (via paramedic_id).
@@ -572,6 +578,7 @@ async def fetch_generic_provider_dashboard(user_id: str, vertical: str) -> Dict[
         "recent_cases": [],
         "fleet": [],
         "vertical": vertical,
+        "profile_incomplete": profile_incomplete,
     }
 
 

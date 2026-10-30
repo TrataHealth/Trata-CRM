@@ -96,6 +96,13 @@ export default function ProviderDashboard() {
         </div>
       </div>
 
+      {state.data.profile_incomplete && (
+        <div className="bg-[#FFFAE6] border border-[#FFE380] rounded-md p-4 text-sm text-[#974F0C] flex items-start gap-2" data-testid="provider-profile-incomplete">
+          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+          <div>Your {state.data.vertical || "provider"} profile isn&apos;t complete yet, so some details are missing here. Finish it under <a href="/provider/profile" className="font-semibold underline">Profile</a> or on the Trata Provider mobile app.</div>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="provider-kpis">
         {state.data.vertical === "ambulance" ? (
           <>

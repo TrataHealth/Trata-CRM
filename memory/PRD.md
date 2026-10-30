@@ -462,3 +462,7 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - All UI/API/email text "Master Admin" -> "Trata Health Admin" (Mongo history migrated; crm_users name updated). Dashboard heading "Admin Dashboard".
 - access_requests.py: public GET /api/public/providers/search, POST /api/public/access-requests (name, phone, role provider_admin|provider_staff, provider entity, note; dup-pending 409, 5/h per IP (3rd-from-right XFF hop) + 60/h global). Creates Mongo notifications (audience master_admin, kind access_request) + push kind "access".
 - Notification Centre /admin/notifications (master only): All feed with read state (read_by), Access requests tab with Approve/Decline/Open provider. Bell links to it. Approve only marks the request; account creation is still done on the provider page.
+
+## 2026-06 — Doctor dashboard fix
+- Root cause: demo provider rows (users + doctors etc.) for 900002000x were removed from shared Supabase before audit tracking began; re-ran POST /api/admin/seed-demo-accounts to restore. Generic provider dashboard now falls back to the users row (profile_incomplete banner) when the vertical profile row is missing.
+- Known: pathology demo mirror fails (pathologists table is now read-only; canonical path_lab_* tables).
