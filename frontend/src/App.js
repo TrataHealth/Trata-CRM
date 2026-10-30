@@ -43,6 +43,7 @@ import ProviderHome from "./pages/ProviderHome";
 import AuditLog from "./pages/AuditLog";
 import DigestRecords from "./pages/DigestRecords";
 import NotificationCentre from "./pages/NotificationCentre";
+import DoctorAppointmentsPage from "./pages/DoctorAppointmentsPage";
 import EntityDashboard from "./pages/EntityDashboard";
 import Patients from "./pages/Patients";
 import Abha from "./pages/Abha";
@@ -145,6 +146,7 @@ function App() {
           <Route path="/provider/patients/:userId" element={<RequireAuth providerOnly><PatientDetail mode="provider" /></RequireAuth>} />
           <Route path="/provider/kyc" element={<RequireAuth providerOnly><ProviderKyc /></RequireAuth>} />
           <Route path="/provider/activities" element={<RequireAuth providerOnly><ProviderActivities /></RequireAuth>} />
+          <Route path="/provider/appointments" element={<RequireAuth providerOnly><DoctorAppointmentsPage /></RequireAuth>} />
           <Route path="/provider/earnings" element={<RequireAuth providerOnly><ProviderEarnings /></RequireAuth>} />
           <Route path="/provider/ledger" element={<RequireAuth providerOnly><ProviderLedger /></RequireAuth>} />
           <Route path="/provider/entities" element={<RequireAuth providerOnly><ProviderEntities /></RequireAuth>} />

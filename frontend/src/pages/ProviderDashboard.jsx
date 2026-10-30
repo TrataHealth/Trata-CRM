@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { DoctorAppointments } from "../components/doctor/DoctorAppointments";
 import api from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { relativeTime } from "../lib/constants";
@@ -112,8 +113,10 @@ export default function ProviderDashboard() {
           </>
         ) : (
           <>
+            {state.data.vertical !== "doctor" && <>
             <Tile label={state.data.vertical === "hospital" ? "Active cases" : "Cases assigned"} value={kpis.active_trips ?? 0} sub="in progress" icon={Activity} tone="#DE350B" />
             <Tile label="Today" value={kpis.trips_today ?? 0} sub="new today" icon={Clock} tone="#0052CC" />
+            </>}
             <Tile label="Status" value={provider.status || provider.verification_status || (provider.is_verified ? "verified" : "pending")} sub="on the network" icon={ShieldCheck} tone="#006644" />
           </>
         )}
@@ -145,6 +148,7 @@ export default function ProviderDashboard() {
         </div>
       )}
 
+      {state.data.vertical === "doctor" ? <DoctorAppointments compact /> : (
       <div className={`grid grid-cols-1 ${state.data.vertical === "ambulance" ? "lg:grid-cols-2" : ""} gap-4`}>
         <section className="bg-white border border-[#DFE1E6] rounded-md overflow-hidden" data-testid="provider-recent-cases">
           <div className="px-4 py-2 text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold border-b border-[#DFE1E6] bg-[#F8F9FA]">Recent cases · last 10</div>
@@ -185,6 +189,7 @@ export default function ProviderDashboard() {
         )}
         {state.data.vertical === "ambulance" && <AllocationsPanel allocations={allocations} onDone={load} />}
       </div>
+      )}
     </div>
   );
 }

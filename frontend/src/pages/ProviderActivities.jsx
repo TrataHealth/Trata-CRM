@@ -1,9 +1,13 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { useSearchParams } from "react-router-dom";
-import { ACTIVITY_CATEGORIES, statusColor, relativeTime, fmtCurrency } from "../lib/constants";
+import { ACTIVITY_CATEGORIES, VERTICAL_ACTIVITY_CATEGORIES, statusColor, relativeTime, fmtCurrency } from "../lib/constants";
+import { useAuth } from "../lib/auth";
 
 export default function ProviderActivities() {
+  const { user } = useAuth();
+  const allowed = VERTICAL_ACTIVITY_CATEGORIES[user?.provider_type];
+  const cats = allowed ? ACTIVITY_CATEGORIES.filter((c) => allowed.includes(c.value)) : ACTIVITY_CATEGORIES;
   const [params, setParams] = useSearchParams();
   const category = params.get("category") || "";
   const status = params.get("status") || "";
@@ -39,7 +43,7 @@ export default function ProviderActivities() {
 
       <div className="flex flex-nowrap overflow-x-auto scrollbar-thin gap-1.5 border-b border-[#DFE1E6] pb-3 -mx-4 px-4 sm:mx-0 sm:px-0">
         <Chip label="All" active={!category} onClick={() => setParam("category", "")} testid="pa-cat-all" />
-        {ACTIVITY_CATEGORIES.map((c) => (
+        {cats.map((c) => (
           <Chip key={c.value} label={c.label} color={c.color} active={category === c.value} onClick={() => setParam("category", c.value)} testid={`pa-cat-${c.value}`} />
         ))}
       </div>

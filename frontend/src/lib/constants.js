@@ -100,6 +100,15 @@ export const ACTIVITY_CATEGORIES = [
   { value: "kyc", label: "KYC", color: "#36B37E" },
 ];
 
+export const VERTICAL_ACTIVITY_CATEGORIES = {
+  doctor: ["appointment", "kyc"],
+  hospital: ["emergency_case", "appointment", "kyc"],
+  ambulance: ["emergency_case", "ambulance_booking", "kyc"],
+  pathology: ["lab_booking", "pathology_booking", "kyc"],
+  diagnostic_centre: ["lab_booking", "pathology_booking", "kyc"],
+  pharmacy: ["kyc"],
+};
+
 export const STATUS_COLORS = {
   // emergency
   CREATED: "#FFC400",

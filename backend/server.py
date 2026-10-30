@@ -6278,6 +6278,8 @@ _alerts = _admin_alerts.create_alerts_router(db, get_current_user, EMERGENT_LLM_
 app.include_router(_alerts["router"])
 import access_requests as _access_requests  # noqa: E402
 app.include_router(_access_requests.create_access_router(db, get_current_user, _alerts["notify"]))
+import doctor_appointments as _doctor_appts  # noqa: E402
+app.include_router(_doctor_appts.create_doctor_router(get_current_user))
 
 
 @app.on_event("startup")
