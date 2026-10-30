@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { CalendarDays, Loader2, Phone, Video, Building2, Stethoscope, Check, UserX, X } from "lucide-react";
+import { CalendarDays, Loader2, Phone, Video, Building2, Stethoscope, Check, UserX, X, NotebookPen } from "lucide-react";
 import { toast } from "sonner";
 import api from "../../lib/api";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../ui/sheet";
+import { ConsultEditor } from "./ConsultEditor";
 
 const MODE_ICON = { video: Video, hospital: Building2 };
 const STATUS_TONE = {
@@ -39,7 +40,7 @@ function Actions({ a, onDone }) {
   );
 }
 
-function Row({ a, upcoming, onOpen, onDone }) {
+function Row({ a, upcoming, onOpen, onDone, onConsult }) {
   const Icon = MODE_ICON[a.source] || (a.mode === "video" ? Video : Stethoscope);
   return (
     <li onClick={() => onOpen(a)} className="px-4 py-3 border-b border-[#F4F5F7] last:border-0 flex flex-wrap items-center gap-3 cursor-pointer hover:bg-[#F8F9FA]" data-testid={`appt-row-${a.id}`}>
@@ -49,12 +50,13 @@ function Row({ a, upcoming, onOpen, onDone }) {
         <div className="text-xs text-[#5E6C84] truncate flex items-center gap-1"><Icon className="h-3 w-3 shrink-0" /> {SRC[a.source]}{a.reason ? ` — ${a.reason}` : ""}</div>
       </div>
       <Status s={a.status} />
+      <button onClick={(e) => { e.stopPropagation(); onConsult(a); }} className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md border border-[#4C9AFF] text-[#0052CC] hover:bg-[#DEEBFF]" data-testid={`appt-consult-${a.id}`}><NotebookPen className="h-3 w-3" /> Notes &amp; Rx</button>
       {upcoming && <Actions a={a} onDone={onDone} />}
     </li>
   );
 }
 
-function PatientSheet({ a, onClose }) {
+function PatientSheet({ a, onClose, onConsult }) {
   const [visits, setVisits] = useState(null);
   useEffect(() => {
     if (!a) return;
@@ -77,7 +79,8 @@ function PatientSheet({ a, onClose }) {
             <F l="Visit" v={a.visit_type} />
             <F l="Ref / token" v={a.token} />
           </div>
-          <div className="mt-3 space-y-3"><F l="Reason" v={a.reason} /><F l="Notes" v={a.notes} /></div>
+          <div className="mt-3 space-y-3"><F l="Reason" v={a.reason} /><F l="Booking notes" v={a.notes} /></div>
+          <button onClick={() => onConsult(a)} className="mt-4 w-full inline-flex justify-center items-center gap-1.5 px-3 py-2 text-sm font-semibold rounded-md bg-[#0052CC] text-white hover:bg-[#0747A6]" data-testid="appt-sheet-consult-btn"><NotebookPen className="h-4 w-4" /> Notes &amp; prescription</button>
           <div className="mt-6 text-[10px] uppercase tracking-wider text-[#5E6C84] font-semibold">Visits with you</div>
           {visits === null ? <div className="text-xs text-[#5E6C84] mt-2 flex items-center gap-2"><Loader2 className="h-3 w-3 animate-spin" /> Loading…</div>
             : <ul className="mt-2 space-y-2" data-testid="appt-visit-history">{visits.map((v) => (
@@ -97,6 +100,7 @@ export function DoctorAppointments({ compact = false }) {
   const [s, setS] = useState({ loading: true, upcoming: [], past: [], counts: {} });
   const [tab, setTab] = useState("upcoming");
   const [open, setOpen] = useState(null);
+  const [consult, setConsult] = useState(null);
   const load = useCallback(() => api.get("/provider/doctor/appointments").then(({ data }) => setS({ loading: false, ...data }))
     .catch((e) => setS({ loading: false, upcoming: [], past: [], counts: {}, err: e?.response?.data?.detail || "Could not load appointments" })), []);
   useEffect(() => { load(); window.addEventListener("trata:live", load); return () => window.removeEventListener("trata:live", load); }, [load]);
@@ -113,8 +117,9 @@ export function DoctorAppointments({ compact = false }) {
       {s.loading ? <div className="p-6 text-xs text-[#5E6C84] flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading appointments…</div>
         : s.err ? <div className="p-4 text-sm text-[#BF2600]" data-testid="appt-error">{s.err}</div>
         : list.length === 0 ? <div className="p-8 text-center text-sm text-[#5E6C84]" data-testid="appt-empty">{tab === "upcoming" ? "No upcoming appointments." : "No past appointments yet."}</div>
-        : <ul>{list.map((a) => <Row key={`${a.source}-${a.id}`} a={a} upcoming={tab === "upcoming"} onOpen={setOpen} onDone={load} />)}</ul>}
-      <PatientSheet a={open} onClose={() => setOpen(null)} />
+        : <ul>{list.map((a) => <Row key={`${a.source}-${a.id}`} a={a} upcoming={tab === "upcoming"} onOpen={setOpen} onDone={load} onConsult={setConsult} />)}</ul>}
+      <PatientSheet a={open} onClose={() => setOpen(null)} onConsult={(a) => { setOpen(null); setConsult(a); }} />
+      <ConsultEditor appt={consult} onClose={() => setConsult(null)} onChanged={load} />
     </section>
   );
 }

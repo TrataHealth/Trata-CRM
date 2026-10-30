@@ -44,6 +44,7 @@ import AuditLog from "./pages/AuditLog";
 import DigestRecords from "./pages/DigestRecords";
 import NotificationCentre from "./pages/NotificationCentre";
 import DoctorAppointmentsPage from "./pages/DoctorAppointmentsPage";
+import PrescriptionPrint from "./pages/PrescriptionPrint";
 import EntityDashboard from "./pages/EntityDashboard";
 import Patients from "./pages/Patients";
 import Abha from "./pages/Abha";
@@ -54,7 +55,7 @@ import { registerSW } from "./lib/registerSW";
 
 registerSW();
 
-function RequireAuth({ children, internalOnly = false, providerOnly = false, adminOnly = false, allowSetupGate = false }) {
+function RequireAuth({ children, internalOnly = false, providerOnly = false, adminOnly = false, allowSetupGate = false, bare = false }) {
   const { user, loading, isInternal, isProvider, isAdmin, isSalesRep } = useAuth();
   if (loading) return <div className="p-10 text-sm text-[#5E6C84]">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
@@ -63,7 +64,7 @@ function RequireAuth({ children, internalOnly = false, providerOnly = false, adm
   if (adminOnly && !isAdmin) return <Navigate to={isSalesRep ? "/agent" : "/provider"} replace />;
   if (internalOnly && !isInternal) return <Navigate to="/provider" replace />;
   if (providerOnly && !isProvider) return <Navigate to={isSalesRep ? "/agent" : "/"} replace />;
-  return <Layout>{children}</Layout>;
+  return bare ? children : <Layout>{children}</Layout>;
 }
 
 function RoleRoot() {
@@ -147,6 +148,7 @@ function App() {
           <Route path="/provider/kyc" element={<RequireAuth providerOnly><ProviderKyc /></RequireAuth>} />
           <Route path="/provider/activities" element={<RequireAuth providerOnly><ProviderActivities /></RequireAuth>} />
           <Route path="/provider/appointments" element={<RequireAuth providerOnly><DoctorAppointmentsPage /></RequireAuth>} />
+          <Route path="/provider/rx/:source/:id" element={<RequireAuth providerOnly bare><PrescriptionPrint /></RequireAuth>} />
           <Route path="/provider/earnings" element={<RequireAuth providerOnly><ProviderEarnings /></RequireAuth>} />
           <Route path="/provider/ledger" element={<RequireAuth providerOnly><ProviderLedger /></RequireAuth>} />
           <Route path="/provider/entities" element={<RequireAuth providerOnly><ProviderEntities /></RequireAuth>} />
