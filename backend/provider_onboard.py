@@ -182,7 +182,7 @@ ENTITY_LABEL = {"hospital": "Hospital", "hospital_branch": "Hospital branch", "p
 
 
 async def _after_entity_created(db, org: Dict[str, Any], ent: Dict[str, Any], row: Dict[str, Any], current: Optional[Dict[str, Any]]):
-    """Mirror a new internal entity into CRM contacts (KYC pending), notify master admins and welcome the unit admin."""
+    """Mirror a new internal entity into CRM contacts (KYC pending), notify Trata Health Admins and welcome the unit admin."""
     try:
         phone = ent.get("dedicated_phone") or row.get("dedicated_phone")
         if not phone:
@@ -480,7 +480,7 @@ def create_provider_onboard_router(db, get_current_user, is_internal) -> APIRout
         if not c:
             raise HTTPException(status_code=404, detail="Contact not found")
         if not current.get("is_master_admin") and c.get("assigned_agent_id") != current["id"]:
-            raise HTTPException(status_code=403, detail="Only the master admin or the assigned sales agent can manage entities")
+            raise HTTPException(status_code=403, detail="Only the Trata Health Admin or the assigned sales agent can manage entities")
         if not c.get("supabase_user_id"):
             raise HTTPException(status_code=400, detail="This provider is not linked to the Trata network yet")
         return await _org_for_uid(c["supabase_user_id"], c.get("name"))

@@ -16,7 +16,7 @@ const TABS = [
 ];
 
 // Data-source toggle — during the Supabase migration both sources coexist so
-// the master admin can flip between them and verify parity before we retire
+// the Trata Health Admin can flip between them and verify parity before we retire
 // the Admin App REST proxy in Phase B.
 const SOURCES = {
   supabase: { label: "Supabase (shared DB)", prefix: "/supabase", icon: Database, tone: "text-[#3ECF8E]" },

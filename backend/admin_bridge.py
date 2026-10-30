@@ -378,7 +378,7 @@ async def user_sync_loop(db, interval_seconds: int = USER_SYNC_INTERVAL_SECONDS)
 # ---------- Auto-escalation ----------
 ESCALATION_INTERVAL_SECONDS = 900  # 15 min
 SLA_REP_HOURS = 36   # nudge manager when sales rep hasn't moved in 36h
-SLA_ADMIN_HOURS = 24 # email master admin when his queue item is >24h old
+SLA_ADMIN_HOURS = 24 # email Trata Health Admin when his queue item is >24h old
 
 
 async def _send_resend_email(to_email: str, subject: str, html: str, text: str) -> bool:
@@ -438,7 +438,7 @@ async def escalation_loop(db, interval_seconds: int = ESCALATION_INTERVAL_SECOND
                 })
                 await db.contacts.update_one({"id": c["id"]}, {"$set": {"escalation_rep_at": _now()}})
                 logger.info(f"escalation: rep stale on {c.get('name')} → {manager.get('name') if manager else 'admin'}")
-            # --- Admin queue overdue: email master admin ---
+            # --- Admin queue overdue: email Trata Health Admin ---
             async for c in db.contacts.find({
                 "kyc_status": "agent_reviewed",
                 "kyc_agent_completed_at": {"$lt": admin_cutoff},
@@ -449,7 +449,7 @@ async def escalation_loop(db, interval_seconds: int = ESCALATION_INTERVAL_SECOND
                 hours = int((now - datetime.fromisoformat(c["kyc_agent_completed_at"].replace("Z","+00:00") if c["kyc_agent_completed_at"].endswith("Z") else c["kyc_agent_completed_at"])).total_seconds() / 3600)
                 subject = f"⏰ KYC awaiting your final approval — {c.get('name')} ({hours}h overdue)"
                 html = f"""
-                <p>Hi {(admin or {}).get('name') or 'Master Admin'},</p>
+                <p>Hi {(admin or {}).get('name') or 'Trata Health Admin'},</p>
                 <p><b>{c.get('name')}</b>'s KYC has been sitting in your Final Approval queue for <b>{hours} hours</b>.</p>
                 <p>Sales rep summary: {c.get('kyc_agent_summary', {}).get('approved', 0)} approved · {c.get('kyc_agent_summary', {}).get('rejected', 0)} rejected.</p>
                 <p><a href="https://patient-hub-133.preview.emergentagent.com/admin/kyc-queue">Open the queue →</a></p>

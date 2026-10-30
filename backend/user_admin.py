@@ -44,7 +44,7 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
 
     def require_master(c):
         if not c.get("is_master_admin"):
-            raise HTTPException(status_code=403, detail="Master admin only")
+            raise HTTPException(status_code=403, detail="Trata Health Admin only")
 
     async def ensure_schema():
         pool = await sb.get_pool()
@@ -92,7 +92,7 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
         skipped, done = [], []
         for c in contacts:
             if (c.get("phone") or "")[-10:] in master_phones or (current.get("supabase_user_id") and c.get("supabase_user_id") == current.get("supabase_user_id")):
-                skipped.append({"id": c["id"], "name": c.get("name"), "why": "master admin / yourself"})
+                skipped.append({"id": c["id"], "name": c.get("name"), "why": "Trata Health Admin / yourself"})
                 continue
             done.append(c)
         uids = [c["supabase_user_id"] for c in done if c.get("supabase_user_id")]

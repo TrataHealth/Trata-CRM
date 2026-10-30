@@ -20,7 +20,7 @@ export default function KycAdminQueue() {
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-5 max-w-5xl" data-testid="kyc-queue-page">
       <div>
-        <div className="overline flex items-center gap-1.5"><Crown className="h-3 w-3 text-[#FFAB00]" /> Master Admin · Final Approvals</div>
+        <div className="overline flex items-center gap-1.5"><Crown className="h-3 w-3 text-[#FFAB00]" /> Trata Health Admin · Final Approvals</div>
         <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
           KYC Final Approval Queue <span className="text-[#5E6C84] font-medium">/ {items.length}</span>
         </h1>

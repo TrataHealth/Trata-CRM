@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { Bell, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import api from "../lib/api";
@@ -35,7 +36,7 @@ function useLiveStream(onCounters) {
   }, []);
 }
 
-export const LiveBell = () => {
+export const LiveBell = ({ isMaster = false }) => {
   const [unread, setUnread] = useState(0);
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
@@ -80,6 +81,7 @@ export const LiveBell = () => {
               </div>
             ))}
           </div>
+          {isMaster && <Link to="/admin/notifications" onClick={() => setOpen(false)} className="block text-center text-xs font-semibold text-[#0052CC] py-2 border-t border-[#DFE1E6] hover:bg-[#F4F5F7]" data-testid="notifications-open-centre">Open Notification Centre</Link>}
         </div>
       )}
     </div>

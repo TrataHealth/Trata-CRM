@@ -1,4 +1,4 @@
-"""Provider Ledger & monthly invoicing (Master Admin + provider console).
+"""Provider Ledger & monthly invoicing (Trata Health Admin + provider console).
 
 Auto services are read live from the shared Supabase tables (ledger_sb).
 CRM-owned billing data lives in Mongo: ledger_services (manual / AI-filled
@@ -295,7 +295,7 @@ def create_ledger_router(db, get_current_user: Callable, get_current_user_from_q
 
     def require_admin(c):
         if not is_admin(c):
-            raise HTTPException(status_code=403, detail="Master admin access only")
+            raise HTTPException(status_code=403, detail="Trata Health Admin access only")
 
     def prov_uid(c) -> str:
         if not is_provider(c):

@@ -200,7 +200,7 @@ export default function TeamMemberDetail() {
             </select>
             <div className="text-[11px] text-[#5E6C84] mt-1">
               {form.role === "national_manager"
-                ? "National Managers can only report to the Master Admin."
+                ? "National Managers can only report to the Trata Health Admin."
                 : `Only ${roleLabel(Object.entries(ROLE_META).find(([_, v]) => v.tier === (ROLE_META[form.role]?.tier - 1))?.[0])}s can be selected (strict hierarchy).`}
             </div>
           </div>

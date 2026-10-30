@@ -58,7 +58,7 @@ class TestSeedDemoAccounts:
         r = requests.post(f"{API}/admin/seed-demo-accounts",
                           headers={"Authorization": f"Bearer {rohan_token}"}, timeout=20)
         assert r.status_code == 403, f"expected 403, got {r.status_code}: {r.text}"
-        assert "Master admin only" in r.text
+        assert "Trata Health Admin only" in r.text
 
     def test_master_admin_seed_first_call(self, master_token):
         r = requests.post(f"{API}/admin/seed-demo-accounts",

@@ -107,7 +107,7 @@ export default function AdminOnboarding() {
     <div className="p-4 sm:p-6 lg:p-8 space-y-6" data-testid="admin-onboarding-page">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="overline flex items-center gap-1"><ShieldCheck className="h-3 w-3" /> Master admin · Onboarding</div>
+          <div className="overline flex items-center gap-1"><ShieldCheck className="h-3 w-3" /> Trata Health Admin · Onboarding</div>
           <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
             Onboard providers &amp; approve KYC
           </h1>

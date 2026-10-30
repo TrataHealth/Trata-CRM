@@ -18,7 +18,7 @@ import supabase_db as sb
 
 log = logging.getLogger("admin_alerts")
 IST = timezone(timedelta(hours=5, minutes=30))
-KINDS = ["kyc", "signup", "order", "sos"]
+KINDS = ["kyc", "signup", "order", "sos", "access"]
 ORDER_TABLES = {"medicine_orders", "consultation_bookings", "pathology_bookings", "ambulance_bookings", "at_home_care_bookings",
                 "diagnostic_bookings", "path_lab_bookings", "appointments", "doctor_appointments", "vaccination_bookings",
                 "lab_test_bookings", "nurse_bookings", "hospital_public_bookings", "teleconsultation_bookings", "wellness_bookings"}
@@ -74,7 +74,7 @@ def create_alerts_router(db, get_current_user, llm_key: str):
 
     def master(c):
         if not c.get("is_master_admin"):
-            raise HTTPException(status_code=403, detail="Master admin only")
+            raise HTTPException(status_code=403, detail="Trata Health Admin only")
 
     async def push(doc: Dict[str, Any], payload: Dict[str, Any]) -> bool:
         try:
@@ -215,7 +215,7 @@ def create_alerts_router(db, get_current_user, llm_key: str):
             try:
                 from emergentintegrations.llm.chat import LlmChat, UserMessage
                 chat = LlmChat(api_key=llm_key, session_id=f"admin-digest-{d}-{datetime.now(timezone.utc).timestamp()}",
-                               system_message="You brief the master admin of Trata Health (a health platform with a Patient app and a Provider app). Plain English, no markdown headings, no emojis.").with_model("openai", "gpt-5.4")
+                               system_message="You brief the Trata Health Admin of Trata Health (a health platform with a Patient app and a Provider app). Plain English, no markdown headings, no emojis.").with_model("openai", "gpt-5.4")
                 text = str(await chat.send_message(UserMessage(text=(
                     "Write 3-4 short sentences summarising this day's activity: what was busiest in the Patient app, what was busiest in the "
                     f"Provider app, and one thing the admin should look at first. Data:\n{json.dumps(stats)}")))).strip()
@@ -295,4 +295,4 @@ def create_alerts_router(db, get_current_user, llm_key: str):
         t = asyncio.create_task(watch())
         _BG.add(t)
 
-    return {"router": r, "start": start}
+    return {"router": r, "start": start, "notify": fan_out}

@@ -60,7 +60,7 @@ export default function Patients({ mode = "admin" }) {
         <div>
           <div className="overline flex items-center gap-1">
             {isProviderView ? <HeartPulse className="h-3 w-3" /> : <ShieldCheck className="h-3 w-3" />}
-            {isProviderView ? "Patient roster" : "Master admin · Patients"}
+            {isProviderView ? "Patient roster" : "Trata Health Admin · Patients"}
           </div>
           <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
             {isProviderView ? "My patients" : "All Trata patients"}

@@ -7,7 +7,7 @@ import { HL } from "../components/MorningDigest";
 const shift = (iso, n) => { const d = new Date(`${iso}T00:00:00`); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA"); };
 const fmt = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short", year: "numeric" });
 
-/** The rows behind one morning-summary number for one day (master admin). */
+/** The rows behind one morning-summary number for one day (Trata Health Admin). */
 export default function DigestRecords() {
   const { metric } = useParams();
   const [sp, setSp] = useSearchParams();

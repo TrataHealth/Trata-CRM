@@ -155,7 +155,7 @@ def create_audit_router(get_current_user) -> APIRouter:
 
     def master(c):
         if not c.get("is_master_admin"):
-            raise HTTPException(status_code=403, detail="Master admin only")
+            raise HTTPException(status_code=403, detail="Trata Health Admin only")
 
     @r.get("")
     async def feed(after_txid: Optional[int] = None, before_id: Optional[int] = None, table: Optional[str] = None, op: Optional[str] = None,

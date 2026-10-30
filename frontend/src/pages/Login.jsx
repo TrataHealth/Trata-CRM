@@ -1,7 +1,14 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
-import { ShieldCheck, ArrowRight, Loader2, Lock, KeyRound, Eye, EyeOff } from "lucide-react";
+import { ShieldCheck, ArrowRight, Loader2, Lock, KeyRound, Eye, EyeOff, UserPlus } from "lucide-react";
+import { AccessRequestDialog } from "../components/AccessRequestDialog";
+
+const RequestAccessBtn = ({ onClick }) => (
+  <button type="button" onClick={onClick} className="w-full inline-flex justify-center items-center gap-2 py-2.5 text-sm font-semibold rounded-md border border-[#0052CC] text-[#0052CC] hover:bg-[#DEEBFF]" data-testid="login-request-access-btn">
+    <UserPlus className="h-4 w-4" /> Request access from Trata Health Admin
+  </button>
+);
 
 export default function Login() {
   const { sendOtp, verifyOtp, setPassword, loginPassword, user } = useAuth();
@@ -17,6 +24,7 @@ export default function Login() {
   const [previewUser, setPreviewUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [reqOpen, setReqOpen] = useState(false);
 
   React.useEffect(() => { localStorage.setItem("trata_login_as", loginAs); }, [loginAs]);
 
@@ -150,7 +158,7 @@ export default function Login() {
                 <div className="mt-2 grid grid-cols-2 gap-2" data-testid="login-role-selector">
                   {[
                     { k: "provider", label: "Healthcare Provider", sub: "Hospital · Ambulance · Doctor · Lab" },
-                    { k: "staff",    label: "Trata Staff",         sub: "Master admin · Sales manager · Rep" },
+                    { k: "staff",    label: "Trata Staff",         sub: "Trata Health Admin · Sales manager · Rep" },
                   ].map((o) => (
                     <button key={o.k} type="button" onClick={() => setLoginAs(o.k)}
                       className={`text-left px-3 py-2.5 rounded-md border transition-colors ${loginAs === o.k ? "border-[#0052CC] bg-[#DEEBFF]" : "border-[#DFE1E6] bg-white hover:bg-[#F4F5F7]"}`}
@@ -181,9 +189,15 @@ export default function Login() {
                 )}
               </label>
               {err && <div className="text-sm text-[#FF5630]" data-testid="login-error">{err}</div>}
+              {/registered/i.test(err) && <RequestAccessBtn onClick={() => setReqOpen(true)} />}
               <SubmitBtn loading={loading} testid="login-send-otp-btn">
                 Send OTP <ArrowRight className="h-4 w-4" />
               </SubmitBtn>
+              {loginAs === "provider" && !/registered/i.test(err) && (
+                <button type="button" onClick={() => setReqOpen(true)} className="w-full text-xs text-[#5E6C84] hover:text-[#091E42] py-1" data-testid="login-request-access-link">
+                  Work at a provider already on Trata Health? <span className="font-semibold text-[#0052CC]">Request access</span>
+                </button>
+              )}
               <DemoCreds />
             </form>
           )}
@@ -202,6 +216,7 @@ export default function Login() {
                 />
               </label>
               {err && <div className="text-sm text-[#FF5630]" data-testid="login-error">{err}</div>}
+              {/registered/i.test(err) && <RequestAccessBtn onClick={() => setReqOpen(true)} />}
               <SubmitBtn loading={loading} testid="login-verify-btn">
                 Verify OTP <ArrowRight className="h-4 w-4" />
               </SubmitBtn>
@@ -220,7 +235,7 @@ export default function Login() {
                     <span> · <span className="inline-flex px-1.5 py-0.5 bg-[#E6FCFF] text-[#006A75] rounded text-[10px] font-bold uppercase tracking-wider">{previewUser.provider_type}</span></span>
                   )}
                   {previewUser.role === "admin" && (
-                    <span> · <span className="inline-flex px-1.5 py-0.5 bg-[#FFEBE6] text-[#974F0C] rounded text-[10px] font-bold uppercase tracking-wider">Master Admin</span></span>
+                    <span> · <span className="inline-flex px-1.5 py-0.5 bg-[#FFEBE6] text-[#974F0C] rounded text-[10px] font-bold uppercase tracking-wider">Trata Health Admin</span></span>
                   )}
                 </div>
               )}
@@ -275,6 +290,7 @@ export default function Login() {
           </div>
         </div>
       </div>
+      {reqOpen && <AccessRequestDialog phone={phone} onClose={() => setReqOpen(false)} />}
     </div>
   );
 }
@@ -297,7 +313,7 @@ function DemoCreds() {
     <div className="mt-6 p-3 bg-[#F8F9FA] border border-dashed border-[#DFE1E6] rounded-md text-[11px] text-[#42526E] leading-relaxed">
       <div className="font-semibold text-[#091E42] mb-1">Demo accounts (OTP: 123456):</div>
       <ul className="space-y-0.5 font-mono">
-        <li>9873117605 · Master admin (set pw on first login)</li>
+        <li>9873117605 · Trata Health Admin (set pw on first login)</li>
         <li>9000000002 · Sales Agent (Rohan) · <span className="text-[#091E42]">Trata@123</span></li>
         <li>9000000001 · Sales Manager (Priya) · <span className="text-[#091E42]">Trata@123</span></li>
         <li>9000020003 · Ambulance owner · <span className="text-[#091E42]">Trata@123</span></li>

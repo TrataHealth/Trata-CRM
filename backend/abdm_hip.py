@@ -603,7 +603,7 @@ def create_hip_router(db, get_current_user, is_provider, is_internal) -> Dict[st
     @api.get("/callbacks")
     async def callbacks(current=Depends(get_current_user)):
         if not current.get("is_master_admin"):
-            raise HTTPException(status_code=403, detail="Master admin only")
+            raise HTTPException(status_code=403, detail="Trata Health Admin only")
         rows = await db.abdm_callbacks.find({}, {"_id": 0, "body": 0}).sort("at", -1).to_list(100)
         return {"callbacks": [{**r, "expires_at": _iso(r.get("expires_at"))} for r in rows], "hip_id": HIP_ID, "callback_base": CALLBACK_BASE}
 

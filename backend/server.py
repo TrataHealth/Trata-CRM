@@ -1,5 +1,5 @@
 """
-TrataHealth Master Admin CRM - Backend
+TrataHealth Admin Console - Backend
 Comprehensive CRM for managing all users (patients, doctors, hospitals, paramedics, ambulance providers, pathologists),
 their activities (emergency cases, appointments, bookings, KYC), deal pipeline, tasks, and analytics.
 """
@@ -379,7 +379,7 @@ async def _ensure_master_admin_user(phone: str) -> dict:
     return {
         "id": str(uuid.uuid4()),
         "phone": phone,
-        "name": "Master Admin",
+        "name": "Trata Health Admin",
         "email": "admin@tratahealth.com",
         "role": "admin",
         "is_master_admin": True,
@@ -576,7 +576,7 @@ async def verify_otp(data: LoginVerifyOTP):
 
     # ── Branch 1: explicit "sign in as staff" ────────────────────────────
     if login_as == "staff":
-        # Master admin auto-bootstrap on first login.
+        # Trata Health Admin auto-bootstrap on first login.
         if not existing and phone in MASTER_ADMIN_PHONES:
             existing = await _ensure_master_admin_user(phone)
             await db.crm_users.insert_one(existing.copy())
@@ -1165,7 +1165,7 @@ async def dashboard_ai_insights(payload: Dict[str, Any] = Body(default={}), curr
             system_message=(
                 "You are an executive analyst for TrataHealth's healthcare-provider CRM. "
                 "Given a JSON snapshot of activity for a chosen time range, produce a SHORT, "
-                "high-signal briefing for the master admin. Be specific to the numbers you see — "
+                "high-signal briefing for the Trata Health Admin. Be specific to the numbers you see — "
                 "never invent metrics. If the dataset is small, say so honestly and recommend what "
                 "to instrument next. Always end with one concrete next action."
             ),
@@ -1345,7 +1345,7 @@ async def list_contacts(
 
 
 # ---------- Onboard new provider from CRM ----------
-# Master Admin / Manager can create a provider directly from the CRM (mirrors the
+# Trata Health Admin / Manager can create a provider directly from the CRM (mirrors the
 # admin app's onboarding flow). Creates a CRM contact and emits crm.lead.created →
 # user.upsert outbound so the Trata Admin App + Provider App see the same user.
 PROVIDER_ROLES_ALLOWED = {
@@ -1483,7 +1483,7 @@ def _user_type_for_role(role: str) -> str:
     return mapping.get(role, role)
 
 
-# ── Master Admin · Direct Supabase Onboarding + One-click KYC Approval ──────
+# ── Trata Health Admin · Direct Supabase Onboarding + One-click KYC Approval ──────
 # (Iter 37) Writes go straight to the shared Supabase `users` + vertical
 # profile + `kyc_documents` tables so the mobile Provider App and Trata
 # Admin App see the new provider (and later, KYC docs + approval) in
@@ -1493,7 +1493,7 @@ ADMIN_ONBOARDING_VERTICALS = {"hospital", "ambulance", "doctor", "pathology"}
 
 def _require_admin(current) -> None:
     if not (current.get("is_master_admin") or current.get("role") == "admin"):
-        raise HTTPException(status_code=403, detail="Master admin access only")
+        raise HTTPException(status_code=403, detail="Trata Health Admin access only")
     if not _supabase_ready():
         raise HTTPException(status_code=503, detail="Supabase not configured")
 
@@ -1786,7 +1786,7 @@ async def admin_onboarding_approve_all(user_id: str, body: Optional[AdminApprove
 # ── Patients (shared with mobile Provider App · Iter 38) ───────────────────
 @api.get("/admin/patients")
 async def admin_list_patients(q: Optional[str] = None, current=Depends(get_current_user)):
-    """Master admin roster of every patient on the shared Trata platform."""
+    """Trata Health Admin roster of every patient on the shared Trata platform."""
     _require_admin(current)
     rows = await sb.list_all_patients_admin(q=q, limit=200)
     return {"patients": rows, "total": len(rows)}
@@ -1794,7 +1794,7 @@ async def admin_list_patients(q: Optional[str] = None, current=Depends(get_curre
 
 @api.get("/admin/patients/{user_id}")
 async def admin_get_patient(user_id: str, current=Depends(get_current_user)):
-    """Master admin patient detail — profile + every case, appointment,
+    """Trata Health Admin patient detail — profile + every case, appointment,
     admission and ambulance ride across the network."""
     _require_admin(current)
     detail = await sb.fetch_patient_detail(user_id, hospital_scope_id=None)
@@ -2338,7 +2338,7 @@ async def _ai_screen_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         "Aadhaar, GST certificate, RC, insurance, fitness certificate, drug license, etc.) and "
         "(1) give the sales rep a fast first-pass approve/reject recommendation and "
         "(2) extract the structured fields visible on the document so the rep doesn't have to "
-        "retype them. You are NOT the final approver — the sales rep and master admin make the "
+        "retype them. You are NOT the final approver — the sales rep and Trata Health Admin make the "
         "binding decision. Be strict on the recommendation: only APPROVE if the document is "
         "clearly legible, the document type matches the expected kind, and there are no obvious "
         "tampering or expiry red flags. Be conservative on extraction: only return fields you can "
@@ -2611,7 +2611,7 @@ async def apply_extracted_fields(contact_id: str, payload: Dict[str, Any] = Body
 
 @api.post("/contacts/{contact_id}/kyc-submit-for-admin")
 async def submit_kyc_for_admin_final(contact_id: str, current=Depends(get_current_user)):
-    """Sales rep declares 'I'm done reviewing all docs — please final-approve, master admin.'
+    """Sales rep declares 'I'm done reviewing all docs — please final-approve, Trata Health Admin.'
     Sets contact.kyc_status='agent_reviewed' and emits crm.kyc.agent_completed for the admin queue."""
     if not is_internal(current):
         raise HTTPException(status_code=403, detail="Internal users only")
@@ -2649,9 +2649,9 @@ class KycAdminFinalBody(BaseModel):
 
 @api.post("/contacts/{contact_id}/kyc-admin-final")
 async def kyc_admin_final(contact_id: str, data: KycAdminFinalBody, current=Depends(get_current_user)):
-    """Master admin final approval/rejection after sales rep submits."""
+    """Trata Health Admin final approval/rejection after sales rep submits."""
     if not (current.get("is_master_admin") or current.get("role") == "admin"):
-        raise HTTPException(status_code=403, detail="Master admin only")
+        raise HTTPException(status_code=403, detail="Trata Health Admin only")
     if data.decision not in {"verified", "rejected"}:
         raise HTTPException(status_code=400, detail="decision must be verified|rejected")
     c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
@@ -2684,9 +2684,9 @@ async def kyc_admin_final(contact_id: str, data: KycAdminFinalBody, current=Depe
 
 @api.get("/admin/kyc-queue")
 async def kyc_admin_queue(current=Depends(get_current_user)):
-    """Master admin: list of leads awaiting final approval (kyc_status='agent_reviewed')."""
+    """Trata Health Admin: list of leads awaiting final approval (kyc_status='agent_reviewed')."""
     if not (current.get("is_master_admin") or current.get("role") == "admin"):
-        raise HTTPException(status_code=403, detail="Master admin only")
+        raise HTTPException(status_code=403, detail="Trata Health Admin only")
     items = await db.contacts.find(
         {"kyc_status": "agent_reviewed"},
         {"_id": 0, "id": 1, "name": 1, "phone": 1, "city": 1, "state": 1, "type": 1,
@@ -2736,7 +2736,7 @@ async def create_team_member(data: TeamMemberCreate, current=Depends(get_current
         expected = parent_role_of(target_role)
         if mgr.get("is_master_admin"):
             if target_role != "national_manager":
-                raise HTTPException(status_code=400, detail="Only National Managers can report directly to the Master Admin")
+                raise HTTPException(status_code=400, detail="Only National Managers can report directly to the Trata Health Admin")
         elif expected is None:
             raise HTTPException(status_code=400, detail=f"{target_role} cannot have a reporting manager")
         elif mgr_role != expected:
@@ -2767,7 +2767,7 @@ async def delete_team_member(member_id: str, current=Depends(get_current_user)):
     if not m:
         raise HTTPException(status_code=404, detail="Not found")
     if m.get("is_master_admin"):
-        raise HTTPException(status_code=400, detail="Cannot remove master admin")
+        raise HTTPException(status_code=400, detail="Cannot remove Trata Health Admin")
     # Unassign any subordinates (set their reports_to to null)
     await db.crm_users.update_many({"reports_to": member_id}, {"$set": {"reports_to": None}})
     await db.crm_users.delete_one({"id": member_id})
@@ -2891,7 +2891,7 @@ async def update_team_member(member_id: str, data: TeamMemberUpdate, current=Dep
     if not m:
         raise HTTPException(status_code=404, detail="Not found")
     if m.get("is_master_admin") and (data.role and data.role != "admin"):
-        raise HTTPException(status_code=400, detail="Cannot change the master admin's role")
+        raise HTTPException(status_code=400, detail="Cannot change the Trata Health Admin's role")
 
     update: Dict[str, Any] = {}
     if data.name is not None: update["name"] = data.name.strip()
@@ -2918,9 +2918,9 @@ async def update_team_member(member_id: str, data: TeamMemberUpdate, current=Dep
             mgr_role = normalize_role(mgr.get("role") or "")
             expected_parent = parent_role_of(target_role)
             if mgr.get("is_master_admin"):
-                # Master admin can be parent only of national_manager
+                # Trata Health Admin can be parent only of national_manager
                 if target_role != "national_manager":
-                    raise HTTPException(status_code=400, detail="Only National Managers can report directly to the Master Admin")
+                    raise HTTPException(status_code=400, detail="Only National Managers can report directly to the Trata Health Admin")
             elif expected_parent is None:
                 raise HTTPException(status_code=400, detail=f"{target_role} cannot have a reporting manager")
             elif mgr_role != expected_parent:
@@ -3067,7 +3067,7 @@ async def list_notifications(limit: int = 30, current=Depends(get_current_user))
     elif is_sales_rep(current):
         f = {"$or": [{"audience": {"$in": [None, "all", "agents"]}}, {"agent_id": current["id"]}]}
     else:
-        f = {"audience": {"$ne": "provider"}, "user_id": {"$in": [None, current["id"]]}}
+        f = {"audience": {"$nin": ["provider"] if current.get("is_master_admin") else ["provider", "master_admin"]}, "user_id": {"$in": [None, current["id"]]}}
     items = await db.notifications.find(f, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
     return {"items": items}
 
@@ -3876,7 +3876,7 @@ async def seed_demo_accounts(current=Depends(get_current_user)):
     `/api/provider/pc-dashboard` endpoint works end-to-end for every demo phone.
     Deterministic UUIDs (uuid5 from phone) keep the seed re-runnable."""
     if not (current.get("is_master_admin") or current.get("role") == "admin"):
-        raise HTTPException(status_code=403, detail="Master admin only")
+        raise HTTPException(status_code=403, detail="Trata Health Admin only")
 
     DEMO_ACCOUNTS = [
         # (phone, name, role, provider_type_or_None, city, state)
@@ -4062,7 +4062,7 @@ async def mirror_contacts_to_postgres(current=Depends(get_current_user)):
     upsert into Supabase `crm_provider_leads`. Safe to re-run — the upsert
     keys off contact.id. Master-admin only."""
     if not (current.get("is_master_admin") or current.get("role") == "admin"):
-        raise HTTPException(status_code=403, detail="Master admin only")
+        raise HTTPException(status_code=403, detail="Trata Health Admin only")
     if not sb.is_configured():
         raise HTTPException(status_code=503, detail="Supabase not configured")
 
@@ -4086,7 +4086,7 @@ async def sync_supabase_users_now(current=Depends(get_current_user)):
     Trata Users page auto-runs this on load (cached for 60s), but admins
     can force a fresh sync from here."""
     if not is_admin_or_manager(current):
-        raise HTTPException(status_code=403, detail="Master admin only")
+        raise HTTPException(status_code=403, detail="Trata Health Admin only")
     if not sb.is_configured():
         raise HTTPException(status_code=503, detail="Supabase not configured")
     # Reset cache so this call always runs.
@@ -4100,7 +4100,7 @@ async def sync_supabase_users_now(current=Depends(get_current_user)):
 # shared Supabase tables (users + vertical profile + kyc_documents +
 # hospital_staff + hospital_patients as hospital + crm_provider_leads) AND
 # the local Mongo CRM (contacts, crm_users, activities). Preserves real
-# master admins because their names ("Master Admin") don't match the
+# Trata Health Admins because their names ("Trata Health Admin") don't match the
 # patterns.
 _TEST_PATTERNS_SQL = (
     "%test%", "%probe%", "%it84%", "%demo hospital%", "%dr test%",
@@ -4116,11 +4116,11 @@ class TestUserPurgeBody(BaseModel):
 async def purge_test_users(body: Optional[TestUserPurgeBody] = None, current=Depends(get_current_user)):
     """Delete every test user from Supabase + CRM. Master-admin only. Pass
     `{"dry_run": true}` to preview which users would be deleted without
-    touching a single row. Real master admins are always preserved because
+    touching a single row. Real Trata Health Admins are always preserved because
     their names don't match the patterns and their phones are excluded from
     the sweep."""
     if not (current.get("is_master_admin") or current.get("role") == "admin"):
-        raise HTTPException(status_code=403, detail="Master admin only")
+        raise HTTPException(status_code=403, detail="Trata Health Admin only")
     if not _supabase_ready():
         raise HTTPException(status_code=503, detail="Supabase not configured")
     dry = bool(body and body.dry_run)
@@ -4574,7 +4574,7 @@ async def _do_seed(force: bool = False) -> dict:
         })
     await db.notifications.insert_many([n.copy() for n in notifs])
 
-    # Seed team members (besides master admin) — passwords pre-set for demo
+    # Seed team members (besides Trata Health Admin) — passwords pre-set for demo
     sales_pw = hash_password("Trata@123")
     team_seed = [
         {"name": "Priya Sales Lead", "phone": "9000000001", "email": "priya@tratahealth.com", "role": "manager", "territories": ["Mumbai", "Bengaluru", "Pune"]},
@@ -4748,7 +4748,7 @@ async def sync_status(current=Depends(require_internal)):
 @api.post("/admin/sync/run")
 async def sync_run(current=Depends(get_current_user)):
     if not current.get("is_master_admin"):
-        raise HTTPException(status_code=403, detail="Only master admin can trigger sync")
+        raise HTTPException(status_code=403, detail="Only Trata Health Admin can trigger sync")
     if not us.upstream_enabled():
         raise HTTPException(status_code=400, detail="UPSTREAM_API_URL is not configured")
     syncer = us.make_sync(db)
@@ -5146,7 +5146,7 @@ async def _handle_admin_event(body: AdminInboundBody) -> Dict[str, Any]:
                 "avatar": None,
             }
             await db.contacts.insert_one(contact.copy())
-            # Notify master admin (in-app notification + outbound to admin app for cross-channel)
+            # Notify Trata Health Admin (in-app notification + outbound to admin app for cross-channel)
             await db.notifications.insert_one({
                 "id": str(uuid.uuid4()),
                 "kind": "new_provider_signup",
@@ -5295,7 +5295,7 @@ async def admin_app_webhook(
 
 
 # ---------- Upstream proxy endpoints (Trata Admin App data mirrored into CRM) ----------
-# Master Admin / Manager use these to see network-wide data that lives in the Admin App,
+# Trata Health Admin / Manager use these to see network-wide data that lives in the Admin App,
 # without changing the Admin App. Each call is a small cache-busting pass-through; the CRM
 # adds its own enrichment (matched contact, our KYC review state, etc.).
 
@@ -5398,7 +5398,7 @@ async def upstream_kyc_overview(current=Depends(require_internal)):
 
     # Cross-reference with this CRM's contacts so we can show the assigned agent, KYC status,
     # and review history without re-fetching per-doc data here (KycMirrorCard handles that
-    # once the master admin clicks into a row).
+    # once the Trata Health Admin clicks into a row).
     crm_by_phone: Dict[str, Dict[str, Any]] = {}
     async for c in db.contacts.find(
         {"phone": {"$in": [u.get("phone") for u in providers if u.get("phone")]}},
@@ -6200,13 +6200,13 @@ async def startup():
         # Sales rep must report to area_manager — but Priya is regional_manager.
         # Skip auto-link to keep hierarchy clean; admin can wire it via UI once area managers exist.
         pass
-    # Ensure every configured master admin exists
+    # Ensure every configured Trata Health Admin exists
     for _ma_phone in MASTER_ADMIN_PHONES:
         if not await db.crm_users.find_one({"phone": _ma_phone}):
             await db.crm_users.insert_one({
                 "id": str(uuid.uuid4()),
                 "phone": _ma_phone,
-                "name": "Master Admin",
+                "name": "Trata Health Admin",
                 "email": "admin@tratahealth.com",
                 "role": "admin",
                 "is_master_admin": True,
@@ -6276,6 +6276,8 @@ app.include_router(_audit_log.create_audit_router(get_current_user))
 import admin_alerts as _admin_alerts  # noqa: E402
 _alerts = _admin_alerts.create_alerts_router(db, get_current_user, EMERGENT_LLM_KEY)
 app.include_router(_alerts["router"])
+import access_requests as _access_requests  # noqa: E402
+app.include_router(_access_requests.create_access_router(db, get_current_user, _alerts["notify"]))
 
 
 @app.on_event("startup")

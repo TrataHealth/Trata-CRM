@@ -28,7 +28,7 @@ function Entry({ e }) {
   );
 }
 
-/** Every recorded change to this person/organisation and anything linked to them, oldest first. Master admin only. */
+/** Every recorded change to this person/organisation and anything linked to them, oldest first. Trata Health Admin only. */
 export function RecordHistory({ recordId }) {
   const [s, setS] = useState({ loading: true, items: [], more: false, since: null, err: "" });
   const load = (after = 0) => api.get(`/admin/activity-log/record/${recordId}`, { params: { after_id: after } })

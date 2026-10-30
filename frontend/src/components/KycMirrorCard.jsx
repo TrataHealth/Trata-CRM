@@ -116,7 +116,7 @@ export default function KycMirrorCard({ contactId }) {
   };
 
   const submitForAdmin = async () => {
-    if (!window.confirm("Submit all doc reviews to Master Admin for final approval?")) return;
+    if (!window.confirm("Submit all doc reviews to Trata Health Admin for final approval?")) return;
     setSubmitting(true);
     try {
       await api.post(`/contacts/${contactId}/kyc-submit-for-admin`);
@@ -446,7 +446,7 @@ export default function KycMirrorCard({ contactId }) {
           if (kycStatus === "verified") {
             return (
               <div className="flex items-center gap-2 text-sm font-semibold text-[#006644]" data-testid="kyc-state-verified">
-                <ShieldCheck className="h-5 w-5" /> Master Admin VERIFIED on {relativeTime(c.kyc_admin_decision_at)} by {c.kyc_admin_decision_by || "admin"}
+                <ShieldCheck className="h-5 w-5" /> Trata Health Admin VERIFIED on {relativeTime(c.kyc_admin_decision_at)} by {c.kyc_admin_decision_by || "admin"}
                 {c.kyc_admin_decision_notes && <span className="text-[#5E6C84] font-normal">— {c.kyc_admin_decision_notes}</span>}
               </div>
             );
@@ -454,19 +454,19 @@ export default function KycMirrorCard({ contactId }) {
           if (kycStatus === "rejected" && c.kyc_admin_decision_at) {
             return (
               <div className="flex items-center gap-2 text-sm font-semibold text-[#BF2600]" data-testid="kyc-state-rejected">
-                <ShieldAlert className="h-5 w-5" /> Master Admin REJECTED on {relativeTime(c.kyc_admin_decision_at)}
+                <ShieldAlert className="h-5 w-5" /> Trata Health Admin REJECTED on {relativeTime(c.kyc_admin_decision_at)}
                 {c.kyc_admin_decision_notes && <span className="text-[#5E6C84] font-normal">— {c.kyc_admin_decision_notes}</span>}
               </div>
             );
           }
           if (kycStatus === "agent_reviewed") {
-            // Awaiting master admin
+            // Awaiting Trata Health Admin
             if (isAdmin) {
               return (
                 <div className="space-y-2" data-testid="kyc-admin-final">
                   <div className="flex items-center gap-2 text-sm text-[#091E42] flex-wrap">
                     <Crown className="h-4 w-4 text-[#FFAB00]" />
-                    <b>Master Admin: final approval</b>
+                    <b>Trata Health Admin: final approval</b>
                     <SlaChip since={c.kyc_agent_completed_at} threshold={24} prefix="Awaiting" testid="kyc-sla-admin" />
                     <span className="text-[#5E6C84] text-xs">— sales rep finished: {c.kyc_agent_summary?.approved || 0} approved, {c.kyc_agent_summary?.rejected || 0} rejected</span>
                   </div>
@@ -484,7 +484,7 @@ export default function KycMirrorCard({ contactId }) {
                       <textarea data-testid="kyc-admin-notes" value={adminForm.notes} onChange={(e) => setAdminForm({ ...adminForm, notes: e.target.value })} placeholder="Admin notes (optional)…" rows={2} className="w-full px-3 py-2 text-sm border border-[#DFE1E6] rounded-md bg-white" />
                       <div className="flex gap-2">
                         <button onClick={adminFinalDecide} disabled={submitting} data-testid="kyc-admin-submit" className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold bg-[#0052CC] text-white rounded hover:bg-[#0747A6] disabled:opacity-60">
-                          {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} {adminForm.decision === "verified" ? "Verify" : "Reject"} as Master Admin
+                          {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} {adminForm.decision === "verified" ? "Verify" : "Reject"} as Trata Health Admin
                         </button>
                         <button onClick={() => setAdminForm({ open: false, decision: "verified", notes: "" })} className="px-3 py-1.5 text-sm border border-[#DFE1E6] rounded hover:bg-[#F4F5F7]">Cancel</button>
                       </div>
@@ -495,7 +495,7 @@ export default function KycMirrorCard({ contactId }) {
             } else {
               return (
                 <div className="flex items-center gap-2 text-sm text-[#0747A6]" data-testid="kyc-state-awaiting-admin">
-                  <Crown className="h-4 w-4" /> <b>Awaiting Master Admin final approval</b>
+                  <Crown className="h-4 w-4" /> <b>Awaiting Trata Health Admin final approval</b>
                   <span className="text-[#5E6C84]">— you submitted {relativeTime(c.kyc_agent_completed_at)} ({c.kyc_agent_summary?.approved || 0} ✓ / {c.kyc_agent_summary?.rejected || 0} ✗)</span>
                 </div>
               );
@@ -515,10 +515,10 @@ export default function KycMirrorCard({ contactId }) {
                   disabled={!allReviewed || submitting}
                   data-testid="kyc-submit-for-admin"
                   className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold bg-[#0052CC] text-white rounded hover:bg-[#0747A6] disabled:opacity-60 disabled:cursor-not-allowed"
-                  title={allReviewed ? "Submit to Master Admin for final approval" : `Review all ${docsTotal} documents first`}
+                  title={allReviewed ? "Submit to Trata Health Admin for final approval" : `Review all ${docsTotal} documents first`}
                 >
                   {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crown className="h-4 w-4" />}
-                  Submit to Master Admin
+                  Submit to Trata Health Admin
                 </button>
               </div>
               {!allReviewed && docsTotal > 0 && (

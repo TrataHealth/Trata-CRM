@@ -5,6 +5,7 @@ export const ALERT_KINDS = [
   { key: "signup", label: "New patient or provider sign-up" },
   { key: "order", label: "New medicine order or booking" },
   { key: "sos", label: "New emergency / SOS case" },
+  { key: "access", label: "New provider access request" },
 ];
 
 export const pushSupported = () => typeof window !== "undefined" && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;

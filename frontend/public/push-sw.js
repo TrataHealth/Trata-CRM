@@ -1,4 +1,4 @@
-/* Trata Admin Console — push alerts for master admins (imported by service-worker.js, registered alone in dev). */
+/* Trata Admin Console — push alerts for Trata Health Admins (imported by service-worker.js, registered alone in dev). */
 self.addEventListener('push', (event) => {
   let d = {};
   try { d = event.data ? event.data.json() : {}; } catch (e) { d = { title: 'Admin alert', body: event.data ? event.data.text() : '' }; }

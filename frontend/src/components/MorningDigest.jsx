@@ -33,7 +33,7 @@ function Chip({ k, l, s }) {
   );
 }
 
-/** Master admin morning summary of yesterday's Patient + Provider app activity (written at 8 AM IST). */
+/** Trata Health Admin morning summary of yesterday's Patient + Provider app activity (written at 8 AM IST). */
 export function MorningDigest() {
   const [d, setD] = useState(undefined);
   const [busy, setBusy] = useState(false);

@@ -126,7 +126,7 @@ export default function Team() {
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold text-[#091E42] flex items-center gap-1.5 truncate">
                         {m.name}
-                        {m.is_master_admin && <ShieldCheck className="h-3.5 w-3.5 text-[#0052CC] shrink-0" title="Master admin" />}
+                        {m.is_master_admin && <ShieldCheck className="h-3.5 w-3.5 text-[#0052CC] shrink-0" title="Trata Health Admin" />}
                       </div>
                       <div className="text-xs text-[#5E6C84] truncate">+91 {m.phone}{m.email ? ` · ${m.email}` : ""}</div>
                       <div className="mt-2 flex items-center gap-2 flex-wrap">

@@ -16,6 +16,7 @@ import { AlertListener } from "./alerts/AlertListener";
 const ADMIN_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { to: "/contacts", label: "All Users", icon: Users, exact: true },
+  { to: "/admin/notifications", label: "Notification Centre", icon: Bell, masterOnly: true },
   { to: "/admin/audit", label: "Live Audit", icon: ShieldCheck, exact: true, masterOnly: true },
   { section: "Patient app" },
   { to: "/users/patients", label: "Trata Patient Users", icon: Users },
@@ -206,7 +207,7 @@ export default function Layout({ children }) {
             <div className="min-w-0">
               <div className="text-sm font-semibold text-[#091E42] truncate">{user?.name}</div>
               <div className="text-[11px] text-[#5E6C84] truncate">
-                {user?.is_master_admin ? "Master Admin"
+                {user?.is_master_admin ? "Trata Health Admin"
                   : user?.role === "provider_owner"
                     ? `${(user?.provider_type || "").replace(/^\w/, c => c.toUpperCase())} Owner`
                     : user?.role}
@@ -284,7 +285,7 @@ export default function Layout({ children }) {
           >
             <Search className="h-5 w-5" />
           </button>
-          <LiveBell />
+          <LiveBell isMaster={!!user?.is_master_admin} />
           <DataSourceBadge sync={sync} syncing={syncing} onSync={runSync} hidden={isProvider} />
           <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-[#0052CC] to-[#00B8D9] text-white rounded-md text-xs font-semibold">
             <Sparkles className="h-3.5 w-3.5" /> AI Insights Active

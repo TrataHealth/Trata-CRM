@@ -212,7 +212,7 @@ async def fetch_patients(q: Optional[str] = None, limit: int = 200) -> List[Dict
 
 
 async def fetch_network_stats() -> Dict[str, Any]:
-    """One-shot aggregate for the master admin dashboard."""
+    """One-shot aggregate for the Trata Health Admin dashboard."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch("""

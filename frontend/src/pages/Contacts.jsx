@@ -50,7 +50,7 @@ export default function Contacts({ audience }) {
       const ok = window.confirm(
         `This will archive ${preview.would_delete} test users from shared Supabase AND delete them from the Admin Console.\n\n` +
         `Sample:\n${sample}${preview.would_delete > 5 ? `\n…and ${preview.would_delete - 5} more` : ""}\n\n` +
-        `Master admin accounts are always preserved. Continue?`
+        `Trata Health Admin accounts are always preserved. Continue?`
       );
       if (!ok) return;
       const { data: result } = await api.post("/admin/purge-test-users", { dry_run: false });
