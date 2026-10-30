@@ -422,7 +422,7 @@ PROVIDER_WRONG_ROLE_MESSAGE = (
     "This phone is registered on the Provider App but not as a healthcare-provider owner "
     "(hospital / ambulance / doctor / pathology / pharmacy). Contact Trata support."
 )
-STAFF_NOT_AUTHORIZED_MESSAGE = "This phone is not registered as Trata staff. Contact your Master Admin."
+STAFF_NOT_AUTHORIZED_MESSAGE = "This number is not registered. Please contact Trata Health Admin."
 STAFF_IS_PROVIDER_MESSAGE = "This phone is a Healthcare Provider account — pick 'Healthcare Provider' on the sign-in screen."
 
 
@@ -626,7 +626,7 @@ async def verify_otp(data: LoginVerifyOTP):
                 if fresh and fresh.get("__pharmacy_blocked__"):
                     raise HTTPException(status_code=403, detail=PHARMACY_MOBILE_ONLY_MESSAGE)
                 if not fresh:
-                    raise HTTPException(status_code=403, detail="Phone not authorized. Contact master admin to be added.")
+                    raise HTTPException(status_code=403, detail="This number is not registered. Please contact Trata Health Admin.")
                 user = fresh
         elif user.get("role") == "provider_owner":
             # Even without an explicit hint, refresh stale provider rows so we
@@ -648,7 +648,7 @@ async def verify_otp(data: LoginVerifyOTP):
     if user.get("role") == "provider_owner" and user.get("provider_type") not in SUPPORTED_PROVIDER_TYPES:
         raise HTTPException(
             status_code=403,
-            detail="Your provider type is not yet supported in this portal. Contact the Master Admin.",
+            detail="Your provider type is not yet supported in this portal. Please contact Trata Health Admin.",
         )
 
     needs_setup = not user.get("password_hash")
