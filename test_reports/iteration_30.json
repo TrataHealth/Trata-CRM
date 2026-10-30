@@ -1,0 +1,45 @@
+{
+  "summary": "Iter 30 (read-only): Trata Providers directory (/users/providers), provider details card on /admin/onboarding/{id}, and Trata Patient Users (/users/patients). Backend: 15/16 pytest pass. The API is admin-only (403 for the sales manager, 401/403 with no login). Ids are unique. Admin, patient and customer roles are excluded. Role counts add up to 25. Role, search and kyc filters work. The kyc endpoint returns profile, profile_table and kyc_application for all 10 roles, including nurse, receptionist, paramedic, lab_tech and pharmacist, with no 400. Unknown id returns 404. Frontend: there are no Stage or Deal value columns (headers: Name/Type/Phone/KYC/Documents/Joined/Last login), 25 unique rows, role tabs with counts, search by name and phone, and the KYC filter. Rows open provider-details-card with Account/Profile/KYC application/KYC documents, plus the checklist and Overview/History. The patient list opens /admin/patients/{id} with Overview/History. Both nav items are hidden for the sales manager, and direct URLs redirect to /. All Users still loads. Main problems: the user's complaint about duplicate provider names is still visible, and 'Name not added yet' is not implemented.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/directory/providers", "issue": "The user still sees the same name twice. BASTI DIAGNOSTIC CENTER, New S S Diagnostic Centre and JK Labs each appear twice. These are separate users rows: one has a placeholder phone 'org…' and a pathologists profile; the other has 'pnd-…' and no profile. Ids are unique, but the visible result is what the user complained about. Merge or hide the placeholder 'pnd-' accounts (their phone does not look like a real number), or dedupe by org."},
+      {"endpoint": "GET /api/admin/directory/providers?kyc=", "issue": "The filter matches exact values only. Real verification_status values include pending_review (5), pending_address (1) and NULL (9), so kyc=pending hides pending_review and pending_address providers. The UI dropdown only offers pending/verified/rejected. It is also case-sensitive: kyc=Pending returns 0 and kyc=pending returns 21."},
+      {"endpoint": "supabase_db.fetch_provider_full_details", "issue": "_VERTICAL_PROFILE_SPEC has no 'ambulance' entry, so ambulance providers show 'no profile table for this role'. A public.ambulance_providers table with user_id exists. Nurse and receptionist also have no profile table."},
+      {"endpoint": "POST /api/admin/onboarding/providers/{id}/kyc/upload and /approve-all", "issue": "Not exercised (read-only). In the code, nurse, receptionist and paramedic are not in SUPABASE_ROLE_TO_PROVIDER_TYPE, so both endpoints raise 400 'Provider role not KYC-enabled'. Yet the details page now renders Upload buttons for those roles. The GET was fixed but the write paths were not."},
+      {"endpoint": "GET /api/admin/directory/providers", "issue": "The Master Admin's own account (9873117605, Supabase role=doctor, VERIFIED) is listed as a Doctor provider. 'Unnamed' paramedic with no phone is listed too. Confirm whether these are intended."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Patients.jsx admin roster", "issue": "Unnamed users show '—' instead of 'Name not added yet'. The string does not exist anywhere in src. All 12 current patients are unnamed, so the whole list reads as '—' plus an id prefix.", "selector": "[data-testid^='patient-row-'] td:first-child", "priority": "HIGH"},
+      {"component": "AdminProviderKyc header", "issue": "Phone shows a double prefix: '+91 +919000000003' for nurse, lab_tech and other staff whose phone is already stored with +91.", "selector": "[data-testid='admin-kyc-page']", "priority": "LOW"},
+      {"component": "AdminProviderKyc back link", "issue": "'All providers' (admin-kyc-back) goes to /admin/onboarding, not /users/providers. The sidebar highlights 'Onboarding' when the page is opened from Trata Providers.", "selector": "[data-testid='admin-kyc-back']", "priority": "LOW"},
+      {"component": "ProviderDirectory phone column", "issue": "Shows internal placeholder ids 'pnd-0e04d6f11d' and 'org77c712e08bc652c2' as phone numbers.", "selector": "[data-testid^='provider-row-'] td:nth-child(3)", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Trata Patient Users", "issues": ["Search only runs on Enter; there is no debounce, unlike Trata Providers. This is inconsistent."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_admin_directory.py", "/app/test_reports/pytest/pytest_admin_directory.xml"],
+  "action_items": [
+    "Patients.jsx: render 'Name not added yet' when p.name is empty in the admin roster",
+    "Dedupe or hide placeholder pnd-/org- duplicate pathology accounts (BASTI, New S S, JK Labs) so each provider name appears once, and hide fake phones",
+    "KYC filter: compare lowercase on both sides; add pending_review/pending_address options or treat pending* as pending",
+    "Add ambulance (ambulance_providers) to _VERTICAL_PROFILE_SPEC so ambulance providers get a Profile section",
+    "Make kyc/upload and approve-all accept staff roles (nurse/receptionist/paramedic), or hide Upload/Approve for those roles",
+    "Fix the '+91 +91…' double prefix in the AdminProviderKyc header; point the back link to /users/providers when opened from the directory"
+  ],
+  "critical_code_review_comments": [
+    "directory.py builds SQL with f-strings but every value is passed as a bound parameter, so it is safe. The kyc filter does lower(column) = $n without lowercasing the input.",
+    "fetch_provider_full_details picks the KYC application by the last 10 digits of the phone, so placeholder phones (pnd-/org-) never match. Of the 25 providers, none had a kyc_application.",
+    "lab_tech and pharmacist map to the pathologists and pharmacy_providers profile tables, which likely don't hold staff profiles; their profile is always empty."
+  ],
+  "updated_files": ["/app/backend/tests/test_admin_directory.py"],
+  "success_rate": {"backend": "94% (15/16)", "frontend": "85%"},
+  "seed_data_creation": "None (read-only)",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Login on /login requires clicking data-testid=login-as-staff before entering the phone for admin and the sales manager. Run: REACT_APP_BACKEND_URL=... pytest backend/tests/test_admin_directory.py. Directory has 25 providers across 10 roles. Patients has 12, all unnamed. No uploads or approvals were made."
+}

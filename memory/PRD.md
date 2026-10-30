@@ -476,3 +476,7 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Stored ONLY in shared Supabase consultation_ehr (contract: memory/CONSULTATION_EHR_CONTRACT.md). One row per appointment (uuid5), falls back to a Provider-app-created row (non-v5 id) for same patient+doctor+IST day. status draft -> signed on Share; private notes in `notes`; Share inserts Supabase notifications (consultation) for the patient if a users row exists.
 - Endpoints GET/PUT /api/provider/doctor/appointments/{source}/{id}/consult, POST .../consult/share. UI ConsultEditor (Save / Save & mark completed / Share / Print), print page /provider/rx/:source/:id (no layout).
 - Patient app must show only status=signed rows and never `notes` (needs Patient app dev work).
+
+## 2026-06 — User directories from shared users table
+- /users/providers = ProviderDirectory (GET /api/admin/directory/providers; one row per account, same-name placeholder accounts merged as linked_accounts; KYC filter groups). Row -> /admin/onboarding/:id which now shows ProviderDetailsCard (account, vertical profile, TrataX KYC application, documents); staff roles show no checklist (kyc_enabled false).
+- /users/patients = Patients page (Supabase users, one per account) -> /admin/patients/:id. Both nav items master-only. Contacts-based audience lists no longer used in nav.

@@ -61,7 +61,8 @@ export default function ProviderDirectory() {
               <th className="text-left px-4 py-2.5">KYC</th><th className="text-left px-4 py-2.5">Documents</th><th className="text-left px-4 py-2.5">Joined</th><th className="text-left px-4 py-2.5">Last login</th></tr></thead>
             <tbody>{s.items.map((p) => (
               <tr key={p.id} onClick={() => nav(`/admin/onboarding/${p.id}`)} className="border-t border-[#F4F5F7] hover:bg-[#F8F9FA] cursor-pointer" data-testid={`provider-row-${p.id}`}>
-                <td className="px-4 py-3"><div className="font-semibold text-[#091E42]">{p.name || "Unnamed"}</div>{p.email && <div className="text-xs text-[#5E6C84]">{p.email}</div>}</td>
+                <td className="px-4 py-3"><div className="font-semibold text-[#091E42]">{p.name || "Unnamed"}</div>{p.email && <div className="text-xs text-[#5E6C84]">{p.email}</div>}
+                  {p.linked_accounts?.length > 0 && <div className="text-[11px] text-[#97A0AF]" data-testid={`provider-linked-${p.id}`}>+{p.linked_accounts.length} linked account{p.linked_accounts.length > 1 ? "s" : ""} with the same name</div>}</td>
                 <td className="px-4 py-3"><span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-[#F4F5F7] text-[#42526E]">{roleLabel(p.role)}</span></td>
                 <td className="px-4 py-3 font-mono text-xs">{p.phone || "—"}</td>
                 <td className="px-4 py-3"><span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${KYC_TONE[String(p.kyc_status).toLowerCase()] || KYC_TONE.pending}`}>{p.kyc_status}</span></td>

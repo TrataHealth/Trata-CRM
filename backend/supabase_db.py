@@ -1628,12 +1628,13 @@ async def fetch_provider_full_details(user_id: str, vertical: str, phone: Option
     pool = await get_pool()
     async with pool.acquire() as conn:
         spec = _VERTICAL_PROFILE_SPEC.get(vertical)
-        profile = await conn.fetchrow(f"SELECT * FROM public.{spec[0]} WHERE user_id::text = $1 LIMIT 1", str(user_id)) if spec else None
+        table = spec[0] if spec else {"ambulance": "ambulance_providers"}.get(vertical)
+        profile = await conn.fetchrow(f"SELECT * FROM public.{table} WHERE user_id::text = $1 LIMIT 1", str(user_id)) if table else None
         key = re.sub(r"\D", "", phone or "")[-10:]
         app = await conn.fetchrow("""SELECT * FROM public.tratax_kyc_applications
                                       WHERE right(regexp_replace(coalesce(phone_key, phone, ''), '\\D', '', 'g'), 10) = $1
                                       ORDER BY updated_at DESC NULLS LAST LIMIT 1""", key) if key else None
-    return {"profile": clean(profile), "profile_table": spec[0] if spec else None, "kyc_application": clean(app)}
+    return {"profile": clean(profile), "profile_table": table, "kyc_application": clean(app)}
 
 
 # ── Patients (shared with mobile Provider App · Iter 38) ────────────────────

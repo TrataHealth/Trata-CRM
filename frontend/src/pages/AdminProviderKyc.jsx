@@ -145,7 +145,7 @@ export default function AdminProviderKyc() {
     <div className="p-4 sm:p-6 lg:p-8 space-y-6" data-testid="admin-kyc-page">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link to="/admin/onboarding" className="inline-flex items-center gap-1 text-xs text-[#5E6C84] hover:text-[#091E42]" data-testid="admin-kyc-back">
+          <Link to="/users/providers" className="inline-flex items-center gap-1 text-xs text-[#5E6C84] hover:text-[#091E42]" data-testid="admin-kyc-back">
             <ArrowLeft className="h-3 w-3" /> All providers
           </Link>
           <div className="overline flex items-center gap-1 mt-2"><ShieldCheck className="h-3 w-3" /> KYC onboarding · {vertical}</div>
@@ -153,7 +153,7 @@ export default function AdminProviderKyc() {
             {provider.name}
           </h1>
           <div className="text-sm text-[#5E6C84] mt-1 flex items-center gap-2">
-            <User className="h-3.5 w-3.5" /> +91 {provider.phone} · <StatusChip status={provider.verification_status} />
+            <User className="h-3.5 w-3.5" /> {/^\+?\d{10,13}$/.test(provider.phone || "") ? `+91 ${String(provider.phone).replace(/^\+?91(?=\d{10}$)/, "")}` : "No phone"} · <StatusChip status={provider.verification_status} />
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -181,7 +181,12 @@ export default function AdminProviderKyc() {
         </div>
       )}
 
-      <section className={T.card}>
+      {state.data.kyc_enabled === false && (
+        <div className="bg-[#F4F5F7] border border-[#DFE1E6] rounded-md p-3 text-xs text-[#42526E]" data-testid="admin-kyc-staff-note">
+          This is a staff account ({vertical}) under a provider organisation — KYC is done at the organisation level, so there's no checklist to upload here.
+        </div>
+      )}
+      {state.data.kyc_enabled !== false && <section className={T.card}>
         <div className={T.head}>
           <span>Checklist · {vertical}</span>
           <span className="normal-case text-[10px] text-[#5E6C84] font-normal">
@@ -240,7 +245,7 @@ export default function AdminProviderKyc() {
             );
           })}
         </div>
-      </section>
+      </section>}
 
       <div className="text-[10px] text-[#5E6C84]">
         Writes go directly to shared Supabase — the mobile Provider App and Trata Admin App reflect changes in real time.

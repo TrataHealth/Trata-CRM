@@ -146,7 +146,7 @@ export default function Patients({ mode = "admin" }) {
                         onClick={() => nav(`${basePath}/${uid}`)}
                         data-testid={`patient-row-${uid}`}>
                       <td className="px-3 py-2">
-                        <div className="font-semibold text-[#091E42]">{p.name || "—"}</div>
+                        <div className={`font-semibold ${p.name ? "text-[#091E42]" : "text-[#97A0AF] italic font-normal"}`}>{p.name || "Name not added yet"}</div>
                         <div className="text-[10px] text-[#5E6C84] font-mono">{String(uid).slice(0, 8)}…</div>
                       </td>
                       <td className="px-3 py-2 font-mono">{p.phone ? `+91 ${p.phone}` : "—"}</td>

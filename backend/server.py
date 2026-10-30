@@ -1660,7 +1660,8 @@ async def admin_onboarding_provider_kyc(user_id: str, current=Depends(get_curren
     if not summary:
         raise HTTPException(status_code=404, detail="Provider not found")
     vertical = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(summary.get("role") or "") or (summary.get("role") or "provider")
-    checklist = kyc_checklist_for(vertical)
+    kyc_enabled = (summary.get("role") or "") in SUPABASE_ROLE_TO_PROVIDER_TYPE
+    checklist = kyc_checklist_for(vertical) if kyc_enabled else []
     docs = await sb.list_provider_kyc_documents(user_id)
     latest_by_key: Dict[str, Dict[str, Any]] = {}
     for d in docs:
@@ -1684,6 +1685,7 @@ async def admin_onboarding_provider_kyc(user_id: str, current=Depends(get_curren
         "all_documents": docs,
         "required_submitted": required_submitted,
         "all_required_approved": all_approved,
+        "kyc_enabled": kyc_enabled,
         **(await sb.fetch_provider_full_details(user_id, vertical, summary.get("phone"))),
     }
 
