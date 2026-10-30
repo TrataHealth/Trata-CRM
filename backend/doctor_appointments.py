@@ -24,6 +24,7 @@ SOURCES = {
                 "NULL::text AS patient_name, NULL::text AS patient_phone, NULL::text AS age, NULL::text AS gender, reason, notes, NULL::text AS payment_status, NULL::text AS visit_type, NULL::text AS token"),
 }
 PATIENT_COL = {"clinic": "patient_id", "hospital": "patient_id", "video": "user_id", "general": "patient_id"}
+PHONE_COL = {"clinic": "patient_phone", "hospital": "patient_phone", "video": "patient_phone", "general": "NULL::text"}
 
 
 def create_doctor_router(get_current_user):
@@ -46,8 +47,8 @@ def create_doctor_router(get_current_user):
                 pc = PATIENT_COL[src]
                 rows = await conn.fetch(
                     f"""SELECT id, {pc} AS patient_id, {d} AS date, {tm} AS time, {mode} AS mode, {fee} AS fee, status, created_at, {cols}
-                          FROM public.{t} WHERE doctor_id = ANY($1::text[]) {extra.replace('{pc}', pc)}
-                         ORDER BY created_at DESC LIMIT 500""", ids, *args)
+                          FROM public.{t} WHERE doctor_id = ANY($1::text[]) {extra.replace('{pc}', pc).replace('{ph}', PHONE_COL[src])}
+                         ORDER BY created_at DESC LIMIT 2000""", ids, *args)
                 out += [{**dict(x), "source": src, "fee": x["fee"], "created_at": x["created_at"].isoformat() if x["created_at"] else None} for x in rows]
             missing = list({a["patient_id"] for a in out if a["patient_id"] and not a["patient_name"]})
             if missing:
@@ -84,22 +85,25 @@ def create_doctor_router(get_current_user):
             row = await conn.fetchrow(f"SELECT id, status FROM public.{table} WHERE id = $1 AND doctor_id = ANY($2::text[])", aid, ids)
             if not row:
                 raise HTTPException(status_code=404, detail="Appointment not found")
-            if str(row["status"] or "").lower() in DONE:
-                raise HTTPException(status_code=409, detail=f"Appointment is already {row['status']}")
             now = datetime.now(timezone.utc)
             if source in ("hospital", "video"):
                 entry = json.dumps([{"status": status, "at": now.isoformat(), "by": "doctor", "via": "admin_console"}])
-                await conn.execute(f"""UPDATE public.{table} SET status = $1, updated_at = $2,
-                                        status_history = (coalesce(status_history::jsonb, '[]'::jsonb) || $3::jsonb)::json WHERE id = $4""",
-                                   status, now, entry, aid)
+                done = await conn.fetchval(f"""UPDATE public.{table} SET status = $1, updated_at = $2,
+                                        status_history = (coalesce(status_history::jsonb, '[]'::jsonb) || $3::jsonb)::json
+                                        WHERE id = $4 AND lower(coalesce(status, '')) <> ALL($5::text[]) RETURNING id""",
+                                           status, now, entry, aid, list(DONE))
             else:
-                await conn.execute(f"UPDATE public.{table} SET status = $1, updated_at = $2 WHERE id = $3", status, now, aid)
+                done = await conn.fetchval(f"""UPDATE public.{table} SET status = $1, updated_at = $2
+                                        WHERE id = $3 AND lower(coalesce(status, '')) <> ALL($4::text[]) RETURNING id""",
+                                           status, now, aid, list(DONE))
+            if not done:  # became final in between (e.g. patient cancelled on the app)
+                raise HTTPException(status_code=409, detail=f"Appointment is already {row['status']}")
         return {"ok": True, "status": status}
 
     @r.get("/patients/{patient_id}/visits")
     async def visits(patient_id: str, phone: str = "", current=Depends(get_current_user)):
         ids = await doctor_ids(current)
-        items = [a for a in await fetch(ids) if str(a["patient_id"] or "") == patient_id or (phone and str(a.get("patient_phone") or "")[-10:] == phone[-10:])]
+        items = await fetch(ids, "AND ({pc} = $2 OR right(coalesce({ph}, ''), 10) = $3)", (patient_id, phone[-10:] if phone else "~"))
         items.sort(key=sort_key, reverse=True)
         return {"items": items}
 

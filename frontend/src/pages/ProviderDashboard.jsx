@@ -83,7 +83,7 @@ export default function ProviderDashboard() {
           <p className="text-sm text-[#5E6C84] mt-1 flex items-center gap-2 flex-wrap">
             <MapPin className="h-3 w-3" /> {[provider.city, provider.state].filter(Boolean).join(", ") || "Location not set"}
             <span className="text-[#DFE1E6]">·</span>
-            <StatusChip value={provider.status} />
+            <StatusChip value={provider.status || provider.verification_status || (provider.is_verified ? "verified" : "pending")} />
             {provider.average_rating != null && (
               <>
                 <span className="text-[#DFE1E6]">·</span>
@@ -104,7 +104,7 @@ export default function ProviderDashboard() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="provider-kpis">
+      <div className={`grid grid-cols-2 ${state.data.vertical === "doctor" ? "" : "lg:grid-cols-4"} gap-4`} data-testid="provider-kpis">
         {state.data.vertical === "ambulance" ? (
           <>
             <Tile label="Active trips" value={kpis.active_trips} sub="dispatched or en route" icon={Activity} tone="#DE350B" />

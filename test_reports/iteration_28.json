@@ -1,0 +1,37 @@
+{
+  "summary": "Iter 28: Tested the Doctor Appointments view (dashboard section, /provider/appointments page, patient side sheet with visit history, Completed/No-show/Cancel actions), the doctor-only API with its RBAC and error codes, and the per-vertical filtering of My Activities tabs. Backend: 18/18 pytest checks pass. Checked: response shape and counts, upcoming sorted ascending with no final statuses, 403 for hospital and Trata Health Admin, 401/403 when unauthenticated, 400 for invalid status or source, 404 for unknown ids in all 4 sources (uuid and non-uuid), 409 when the appointment is already final, and visit history returning all 3 TEST rows. Frontend: every requested flow passed. Doctor dashboard shows the Appointments section; 'Recent cases', 'Cases assigned' and 'Today' tiles are hidden; tabs read 'Upcoming · 1 / Past · 2'. The sidebar Appointments link opens the full page. The row click opens the sheet with phone 9999988877, when, type, fee ₹500, payment unpaid, reason, and 3 visits (current one highlighted); Esc closes it. The Cancel confirm dialog appears and dismissing it keeps the row. Clicking an action button does not open the sheet. Marking the 2026-11-02 TEST row Completed showed the 'Marked completed' toast and moved the row to Past · 3 with status COMPLETED and no action buttons; Upcoming is now 0 and appt-empty is shown. Hospital 9000020004 has no Appointments nav item and no section. Doctor activities chips are All / Appointments / KYC only.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/provider/doctor/appointments/{source}/{id}/status", "issue": "Check-then-update race: it SELECTs the status and then UPDATEs by id only. A concurrent patient-app cancel could be overwritten. Use UPDATE ... WHERE id=$x AND lower(status) NOT IN (DONE) RETURNING id, and return 409 when no row is updated."},
+      {"endpoint": "GET /api/provider/doctor/appointments", "issue": "Each source is capped at LIMIT 500 ORDER BY created_at DESC, so for busy doctors old-created future appointments could be silently dropped. The visits endpoint also fetches every appointment and filters in Python instead of filtering in SQL."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "/provider/appointments route", "issue": "Non-doctor providers (hospital) who open the URL directly see the page shell with the error 'Doctor account required' instead of being redirected. The API is secure; this is cosmetic.", "selector": "[data-testid='appt-error']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Doctor /provider dashboard", "issues": ["With the case tiles hidden, only 2 KPI tiles (Status, KYC docs) remain in a 4-column grid, which leaves the right half of the row empty. Consider adding doctor tiles (Today / Upcoming / Completed this month) or widening the grid.", "A stray '–' chip appears next to the location."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_doctor_appointments.py", "/app/test_reports/pytest/pytest_results_iter28.xml"],
+  "action_items": [
+    "Make the status update atomic (conditional UPDATE ... RETURNING) to avoid overwriting concurrent patient-side changes",
+    "Optional: guard the /provider/appointments route for non-doctor providers (redirect to /provider)",
+    "Optional: fill the doctor dashboard KPI row with doctor-specific tiles"
+  ],
+  "critical_code_review_comments": [
+    "doctor_appointments.py set_status: TOCTOU between SELECT and UPDATE; also no status_history or audit entry is written for clinic/general sources (only hospital/video), so there is no trail of who changed it",
+    "doctor_appointments.py visits: fetch(ids) loads up to 2000 rows per sheet open; filter by patient_id/phone in SQL",
+    "DoctorAppointments.jsx: the trata:live listener reloads the whole list on every SSE event; consider debouncing"
+  ],
+  "updated_files": ["/app/backend/tests/test_doctor_appointments.py"],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "100% of requested flows"},
+  "seed_data_creation": "None created. The TEST row 4c6880ff-b417-4214-9bdd-d5161d142937 (2026-11-02) was changed from confirmed to completed through the UI, as allowed. All 3 TEST rows are now final (no_show, completed, completed) and the doctor's upcoming list is empty.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Master admin must log in with login_as='staff'; doctor and hospital use 'provider'. There are no upcoming TEST rows left for Dr. Meera, so action-button tests need a new TEST row (doctor_appointments, reason 'TEST — ...'). Use domcontentloaded. The Cancel button uses window.confirm, so it needs a page.on('dialog') handler.",
+  "rca of the issue": "No functional bugs found."
+}

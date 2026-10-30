@@ -1,7 +1,11 @@
 import React from "react";
+import { Navigate } from "react-router-dom";
+import { useAuth } from "../lib/auth";
 import { DoctorAppointments } from "../components/doctor/DoctorAppointments";
 
 export default function DoctorAppointmentsPage() {
+  const { user } = useAuth();
+  if (user && user.provider_type !== "doctor") return <Navigate to="/provider" replace />;
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-5" data-testid="doctor-appointments-page">
       <div>

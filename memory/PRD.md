@@ -466,3 +466,8 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 ## 2026-06 — Doctor dashboard fix
 - Root cause: demo provider rows (users + doctors etc.) for 900002000x were removed from shared Supabase before audit tracking began; re-ran POST /api/admin/seed-demo-accounts to restore. Generic provider dashboard now falls back to the users row (profile_incomplete banner) when the vertical profile row is missing.
 - Known: pathology demo mirror fails (pathologists table is now read-only; canonical path_lab_* tables).
+
+## 2026-06 — Doctor appointments
+- doctor_appointments.py: GET /api/provider/doctor/appointments (doctor_appointments, consultation_bookings, teleconsultation_bookings, appointments; doctor_id matches users.id or doctors.id), POST .../{source}/{id}/status (completed|no_show|cancelled, atomic), GET .../patients/{pid}/visits. UI: DoctorAppointments on doctor dashboard + /provider/appointments (doctorOnly nav) with patient side sheet.
+- My Activities tabs filtered per vertical (VERTICAL_ACTIVITY_CATEGORIES).
+- TEST rows for Dr. Meera (9000020006) in doctor_appointments with reason "TEST — fever and cough".
