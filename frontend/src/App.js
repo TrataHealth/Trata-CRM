@@ -45,6 +45,7 @@ import DigestRecords from "./pages/DigestRecords";
 import NotificationCentre from "./pages/NotificationCentre";
 import DoctorAppointmentsPage from "./pages/DoctorAppointmentsPage";
 import PrescriptionPrint from "./pages/PrescriptionPrint";
+import ProviderDirectory from "./pages/ProviderDirectory";
 import EntityDashboard from "./pages/EntityDashboard";
 import Patients from "./pages/Patients";
 import Abha from "./pages/Abha";
@@ -110,8 +111,8 @@ function App() {
           {/* Admin / internal routes */}
           <Route path="/" element={<RequireAuth><RoleRoot /></RequireAuth>} />
           <Route path="/contacts" element={<RequireAuth internalOnly><Contacts /></RequireAuth>} />
-          <Route path="/users/patients" element={<RequireAuth internalOnly><Contacts key="patient" audience="patient" /></RequireAuth>} />
-          <Route path="/users/providers" element={<RequireAuth internalOnly><Contacts key="provider" audience="provider" /></RequireAuth>} />
+          <Route path="/users/patients" element={<RequireAuth adminOnly><Patients mode="admin" /></RequireAuth>} />
+          <Route path="/users/providers" element={<RequireAuth adminOnly><ProviderDirectory /></RequireAuth>} />
           <Route path="/contacts/:id" element={<RequireAuth internalOnly><ContactDetail /></RequireAuth>} />
           <Route path="/pipeline" element={<RequireAuth internalOnly><Pipeline /></RequireAuth>} />
           <Route path="/activities" element={<RequireAuth internalOnly><Activities /></RequireAuth>} />

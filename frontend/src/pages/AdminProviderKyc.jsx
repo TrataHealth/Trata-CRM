@@ -3,6 +3,7 @@ import { useNavigate, useParams, Link } from "react-router-dom";
 import api from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { RecordHistory, DetailTabs } from "../components/history/RecordHistory";
+import { ProviderDetailsCard } from "../components/ProviderDetailsCard";
 import { toast } from "sonner";
 import {
   AlertTriangle, ArrowLeft, BadgeCheck, CheckCircle2,
@@ -173,6 +174,7 @@ export default function AdminProviderKyc() {
       </div>
 
       {tab === "history" ? <RecordHistory recordId={userId} /> : <>
+      <ProviderDetailsCard data={state.data} />
       {alreadyApproved && (
         <div className="bg-[#E3FCEF] border border-[#57D9A3] rounded-md p-3 text-xs text-[#006644] flex items-center gap-2" data-testid="admin-kyc-approved-banner">
           <BadgeCheck className="h-4 w-4" /> Every required document is approved — this provider is now live on the mobile Provider App and Trata Admin App.

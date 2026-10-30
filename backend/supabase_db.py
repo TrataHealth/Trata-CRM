@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
@@ -1602,6 +1603,37 @@ async def list_admin_onboarded_providers(limit: int = 100) -> List[Dict[str, Any
              LIMIT $1
         """, limit)
     return _rows(rs)
+
+
+# ── Patients (shared with mobile Provider App · Iter 38) ────────────────────
+_SECRET_COL = ("password", "token", "secret", "otp", "pin_hash", "mpin")
+
+
+async def fetch_provider_full_details(user_id: str, vertical: str, phone: Optional[str]) -> Dict[str, Any]:
+    """Full profile row for the provider's vertical + the TrataX KYC application (fields/documents/timeline)."""
+    def clean(row):
+        if not row:
+            return None
+        out = {}
+        for k, v in dict(row).items():
+            if any(s in k.lower() for s in _SECRET_COL):
+                continue
+            if isinstance(v, str) and v[:1] in "[{":
+                try:
+                    v = json.loads(v)
+                except ValueError:
+                    pass
+            out[k] = v.isoformat() if hasattr(v, "isoformat") else (str(v) if v is not None and not isinstance(v, (int, float, bool, str, list, dict)) else v)
+        return out
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        spec = _VERTICAL_PROFILE_SPEC.get(vertical)
+        profile = await conn.fetchrow(f"SELECT * FROM public.{spec[0]} WHERE user_id::text = $1 LIMIT 1", str(user_id)) if spec else None
+        key = re.sub(r"\D", "", phone or "")[-10:]
+        app = await conn.fetchrow("""SELECT * FROM public.tratax_kyc_applications
+                                      WHERE right(regexp_replace(coalesce(phone_key, phone, ''), '\\D', '', 'g'), 10) = $1
+                                      ORDER BY updated_at DESC NULLS LAST LIMIT 1""", key) if key else None
+    return {"profile": clean(profile), "profile_table": spec[0] if spec else None, "kyc_application": clean(app)}
 
 
 # ── Patients (shared with mobile Provider App · Iter 38) ────────────────────

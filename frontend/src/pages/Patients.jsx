@@ -63,12 +63,12 @@ export default function Patients({ mode = "admin" }) {
             {isProviderView ? "Patient roster" : "Trata Health Admin · Patients"}
           </div>
           <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
-            {isProviderView ? "My patients" : "All Trata patients"}
+            {isProviderView ? "My patients" : "Trata Patient Users"}
           </h1>
           <p className="text-sm text-[#5E6C84] mt-1 max-w-2xl">
             {isProviderView
               ? "Same list your mobile Provider App shows — click a patient to see their clinical profile, admissions, appointments, and ambulance rides."
-              : "Network-wide roster of every patient on Trata. Search by name or phone. Click a row for the full history."}
+              : "Every account on the Trata Patient app — one row per person. Search by name or phone. Click a row for their full profile and history."}
           </p>
         </div>
         <form onSubmit={submitSearch} className="flex items-center gap-2">

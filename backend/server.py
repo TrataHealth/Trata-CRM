@@ -1659,9 +1659,7 @@ async def admin_onboarding_provider_kyc(user_id: str, current=Depends(get_curren
     summary = await sb.fetch_provider_summary(user_id)
     if not summary:
         raise HTTPException(status_code=404, detail="Provider not found")
-    vertical = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(summary.get("role") or "")
-    if not vertical:
-        raise HTTPException(status_code=400, detail=f"Provider role '{summary.get('role')}' is not KYC-enabled from the CRM")
+    vertical = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(summary.get("role") or "") or (summary.get("role") or "provider")
     checklist = kyc_checklist_for(vertical)
     docs = await sb.list_provider_kyc_documents(user_id)
     latest_by_key: Dict[str, Dict[str, Any]] = {}
@@ -1686,6 +1684,7 @@ async def admin_onboarding_provider_kyc(user_id: str, current=Depends(get_curren
         "all_documents": docs,
         "required_submitted": required_submitted,
         "all_required_approved": all_approved,
+        **(await sb.fetch_provider_full_details(user_id, vertical, summary.get("phone"))),
     }
 
 
@@ -6280,6 +6279,8 @@ import access_requests as _access_requests  # noqa: E402
 app.include_router(_access_requests.create_access_router(db, get_current_user, _alerts["notify"]))
 import doctor_appointments as _doctor_appts  # noqa: E402
 app.include_router(_doctor_appts.create_doctor_router(get_current_user))
+import directory as _directory  # noqa: E402
+app.include_router(_directory.create_directory_router(get_current_user))
 
 
 @app.on_event("startup")
