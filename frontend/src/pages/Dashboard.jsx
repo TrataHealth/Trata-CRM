@@ -79,7 +79,7 @@ export default function Dashboard() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="overline">Operations Overview</div>
-          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">Master Dashboard</h1>
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">Admin Dashboard</h1>
           <p className="text-sm text-[#5E6C84] mt-1">{stats.range?.label || "Realtime view of everything happening across the TrataHealth platform."}</p>
         </div>
         <div className="flex items-center gap-2">

@@ -2672,7 +2672,7 @@ async def kyc_admin_final(contact_id: str, data: KycAdminFinalBody, current=Depe
         "kyc_id": c.get("kyc_id"),
         "upstream_user_id": c.get("upstream_user_id"),
         "decision": data.decision,
-        "text": f"MASTER ADMIN FINAL: {data.decision.upper()}" + (f" — {data.notes}" if data.notes else ""),
+        "text": f"TRATA HEALTH ADMIN FINAL: {data.decision.upper()}" + (f" — {data.notes}" if data.notes else ""),
         "author_phone": current.get("phone"),
         "author_role": "admin",
         "author_name": current.get("name"),

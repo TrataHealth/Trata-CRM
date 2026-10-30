@@ -1,0 +1,43 @@
+{
+  "summary": "Iter 27: Tested provider access requests (public search + create), the Trata Health Admin Notification Centre, the 'access' push-alert preference, and the Master Admin -> Trata Health Admin rename. Backend: 19/20 pytest checks pass. The one failure is a security gap: the per-IP rate limit can be skipped by spoofing X-Forwarded-For. Frontend: every requested flow works end to end. Checked: login request-access link and button in Provider and Staff modes, dialog validation, provider search for 'lila', select and clear chip, submit success, duplicate 409 message, Notification Centre tabs, pending card with Open provider, decline with prompt so the status badge becomes DECLINED, the status filters, single Mark read, Mark all read, the bell 'Open Notification Centre' link (master only), the Settings 5th pref 'New provider access request', and sales-manager RBAC (no sidebar item, no link, gets redirected away from /admin/notifications).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/public/access-requests", "issue": "The per-IP rate limit (5/hour) trusts the first value in X-Forwarded-For, which the client controls. Sending a random X-Forwarded-For header gets past the limit: confirmed 200 after the real IP was already getting 429. Fix: use the right-most proxy-appended hop, or the ingress's trusted client IP, and/or also limit per phone or globally."},
+      {"endpoint": "POST /api/public/access-requests", "issue": "Search only returns contacts with supabase_user_id set and archived != true, but create accepts any non-patient contact id (archived or not onboarded). Apply the same filter in create."},
+      {"endpoint": "server.py:2675 (crm.kyc.admin_verified outbound)", "issue": "Rename missed: the outbound KYC note text is still 'MASTER ADMIN FINAL: ...', and providers may see it in the Provider app. Should say 'TRATA HEALTH ADMIN FINAL'."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AccessRequestDialog", "issue": "The validation error ('Choose your provider from the list') stays on screen after the user picks a provider. It only clears on the next submit. Clear err when fields change.", "selector": "[data-testid='access-request-error']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/admin/onboarding", "issues": ["Two provider rows are named 'Master Admin'. This is legacy data (Supabase/contacts names), not a UI label. Older Mongo data (contacts.kyc_admin_decision_by, activities agent_name/description, notification titles like 'Stale lead — Master Admin') also still contains 'Master Admin'. Consider a one-off data migration if 'everywhere' should include history."]},
+      {"screen": "Dashboard (/) for sales manager Priya", "issues": ["Heading reads 'Master Dashboard' for a non-master user. Not 'Master Admin' text, but it may be confusing after the rename."]},
+      {"screen": "Notification Centre All tab", "issues": ["The unread count starts very high (214 new) because every historical non-provider notification counts. This is expected but noisy."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_access_requests_centre.py", "/app/test_reports/pytest/pytest_results_iter27.xml"],
+  "action_items": [
+    "Harden the access-request rate limit against X-Forwarded-For spoofing (use a trusted proxy hop or a per-phone/global cap)",
+    "Make create_request use the same provider filter as search (supabase_user_id != null, not archived)",
+    "Rename 'MASTER ADMIN FINAL' in server.py:2675 outbound KYC text",
+    "Clear the AccessRequestDialog error when inputs change",
+    "Optional: migrate legacy 'Master Admin' strings in stored data; consider renaming 'Master Dashboard'"
+  ],
+  "critical_code_review_comments": [
+    "access_requests.py: rate limit key comes from the spoofable X-Forwarded-For[0]",
+    "access_requests.py: 'Approve' only changes the status. It does not create or invite a user account, so the approver must onboard the user manually. Make this clear in the UI or automate it.",
+    "access_requests.py mark_read without an id adds read_by to every non-provider notification, including other users' personal ones (harmless but broad); the filter does not match the centre's user_id scope",
+    "NotificationCentre.jsx: a load failure falls back silently to empty state with no error toast"
+  ],
+  "updated_files": ["/app/backend/tests/test_access_requests_centre.py"],
+  "success_rate": {"backend": "95% (19/20; XFF spoof bypass)", "frontend": "100% of requested flows"},
+  "seed_data_creation": "Created TEST_ access requests (phones 91111333xx/34xx/35xx/36xx) and deleted them afterwards along with their notifications. The pre-existing declined request for 9111122299 was left as is.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run the rate-limit tests (-k zz) last; they use up the per-IP quota (5/hour). Use domcontentloaded (SSE). Master login works through the UI with no forced security setup redirect. The decline prompt needs a page.on('dialog') handler.",
+  "rca of the issue": "Rate-limit bypass: ip = request.headers['x-forwarded-for'].split(',')[0]. The ingress appends the real client IP to whatever X-Forwarded-For the client sends, so the first entry is attacker-controlled. Repro: send 6 POSTs and get 429, then send the same POST with header X-Forwarded-For: 10.9.1.7 and get 200."
+}

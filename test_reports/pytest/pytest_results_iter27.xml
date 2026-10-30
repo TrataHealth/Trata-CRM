@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="2" time="1.240" timestamp="2026-10-30T10:28:43.468406+00:00" hostname="agent-env-337d85bf-730a-429f-b58c-56d76c810994"><testcase classname="tests.test_access_requests_centre" name="test_zz_rate_limit" time="1.047" /><testcase classname="tests.test_access_requests_centre" name="test_zz_rate_limit_xff_spoof" time="0.115"><failure message="AssertionError: XFF spoof bypassed rate limit: 200 {&quot;ok&quot;:true}&#10;assert 200 == 429&#10; +  where 200 = &lt;Response [200]&gt;.status_code">tests/test_access_requests_centre.py:177: in test_zz_rate_limit_xff_spoof
+    assert r.status_code == 429, f"XFF spoof bypassed rate limit: {r.status_code} {r.text}"
+E   AssertionError: XFF spoof bypassed rate limit: 200 {"ok":true}
+E   assert 200 == 429
+E    +  where 200 = &lt;Response [200]&gt;.status_code</failure></testcase></testsuite></testsuites>

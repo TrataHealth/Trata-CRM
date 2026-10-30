@@ -457,3 +457,8 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Digest highlights now counted from source tables by created_at: signups (patient/customer users), doctor_appointments, pathlab_bookings, diagnostics_bookings, pharmacy_orders, sos (DIGEST_METRICS in admin_alerts.py).
 
 - Digest: day-over-day arrows (stats.previous), chips link to /admin/summary/:metric?date= (DigestRecords page, GET /api/admin/digest/records). "Patients" nav removed from Patient app section (route kept; patient contact detail links to /admin/patients/:supabase_user_id).
+
+## 2026-06 — Rename + provider access requests
+- All UI/API/email text "Master Admin" -> "Trata Health Admin" (Mongo history migrated; crm_users name updated). Dashboard heading "Admin Dashboard".
+- access_requests.py: public GET /api/public/providers/search, POST /api/public/access-requests (name, phone, role provider_admin|provider_staff, provider entity, note; dup-pending 409, 5/h per IP (3rd-from-right XFF hop) + 60/h global). Creates Mongo notifications (audience master_admin, kind access_request) + push kind "access".
+- Notification Centre /admin/notifications (master only): All feed with read state (read_by), Access requests tab with Approve/Decline/Open provider. Bell links to it. Approve only marks the request; account creation is still done on the provider page.

@@ -47,13 +47,18 @@ def create_access_router(db, get_current_user, notify):
             raise HTTPException(status_code=400, detail="Enter a valid 10-digit phone")
         if body.role_wanted not in ROLES:
             raise HTTPException(status_code=400, detail="Choose the access you need")
-        provider = await db.contacts.find_one({"id": body.provider_contact_id, "type": {"$ne": "patient"}}, {"_id": 0})
+        provider = await db.contacts.find_one({"id": body.provider_contact_id, "type": {"$nin": ["patient", None]},
+                                               "supabase_user_id": {"$ne": None}, "archived": {"$ne": True}}, {"_id": 0})
         if not provider:
             raise HTTPException(status_code=400, detail="Choose your provider from the list")
         if await db.access_requests.find_one({"phone": phone, "status": "pending"}):
             raise HTTPException(status_code=409, detail="You already have a request waiting. Trata Health Admin will get back to you.")
-        ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[0].strip()
-        if await db.access_requests.count_documents({"ip": ip, "created_at": {"$gte": (now() - timedelta(hours=1)).isoformat()}}) >= 5:
+        # Ingress chain is "<client-supplied…>, client, edge proxy, load balancer": take the hop the edge saw, not a client-supplied one.
+        hops = [h.strip() for h in (request.headers.get("x-forwarded-for") or "").split(",") if h.strip()]
+        ip = hops[-3] if len(hops) >= 3 else (hops[0] if hops else (request.client.host if request.client else ""))
+        since = (now() - timedelta(hours=1)).isoformat()
+        if (await db.access_requests.count_documents({"ip": ip, "created_at": {"$gte": since}}) >= 5
+                or await db.access_requests.count_documents({"created_at": {"$gte": since}}) >= 60):
             raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
         doc = {"id": str(uuid.uuid4()), "name": body.name.strip(), "phone": phone, "role_wanted": body.role_wanted,
                "provider_contact_id": provider["id"], "provider_name": provider.get("name"), "provider_type": provider.get("type"),

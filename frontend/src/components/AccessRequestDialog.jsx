@@ -38,7 +38,8 @@ export function AccessRequestDialog({ phone, onClose }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [done, setDone] = useState(false);
-  const set = (k) => (e) => setF({ ...f, [k]: k === "phone" ? e.target.value.replace(/\D/g, "").slice(0, 10) : e.target.value });
+  const set = (k) => (e) => { setErr(""); setF({ ...f, [k]: k === "phone" ? e.target.value.replace(/\D/g, "").slice(0, 10) : e.target.value }); };
+  const pick = (p) => { setErr(""); setProvider(p); };
 
   const submit = async (e) => {
     e.preventDefault(); setErr("");
@@ -76,7 +77,7 @@ export function AccessRequestDialog({ phone, onClose }) {
               <div className="grid grid-cols-2 gap-2 mt-1">{ROLES.map(([k, l]) => (
                 <button key={k} type="button" onClick={() => setF({ ...f, role_wanted: k })} data-testid={`access-role-${k}`}
                         className={`px-3 py-2 text-sm rounded-md border ${f.role_wanted === k ? "border-[#0052CC] bg-[#DEEBFF] text-[#091E42]" : "border-[#DFE1E6] text-[#42526E]"}`}>{l}</button>))}</div></div>
-            <div className="text-xs font-semibold text-[#42526E]">Your provider (onboarded with Trata Health)<ProviderPicker value={provider} onChange={setProvider} /></div>
+            <div className="text-xs font-semibold text-[#42526E]">Your provider (onboarded with Trata Health)<ProviderPicker value={provider} onChange={pick} /></div>
             <label className="block text-xs font-semibold text-[#42526E]">Note <span className="font-normal text-[#97A0AF]">(optional)</span>
               <textarea value={f.note} onChange={set("note")} maxLength={500} rows={2} placeholder="e.g. I'm the front-desk manager" className={input} data-testid="access-note-input" /></label>
             {err && <div className="text-sm text-[#FF5630]" data-testid="access-request-error">{err}</div>}
