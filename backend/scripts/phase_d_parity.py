@@ -37,7 +37,7 @@ async def main():
         out.append("\n## 4. Verified counts (legacy is_verified vs canonical)")
         for t, (tbl, _) in cp.TABLES.items():
             lv = await c.fetchval("SELECT count(*) FROM public.crm_provider_leads WHERE type = $1 AND is_verified", t)
-            cv = await c.fetchval(f"SELECT count(*) FROM ({cp._UNION}) u WHERE type = $1 AND verification_status = 'verified'", t)
+            cv = await c.fetchval(f"SELECT count(*) FROM ({await cp.union_sql(c)}) u WHERE type = $1 AND verification_status = 'verified'", t)
             out.append(f"- {t}: legacy {lv} vs canonical {cv} {'PASS' if lv == cv else 'DIFF'}")
     print("\n".join(out))
 

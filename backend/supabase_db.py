@@ -1395,12 +1395,12 @@ async def approve_all_provider_kyc(user_id: str, vertical: str, admin_name: Opti
                 """, user_id, json.dumps({"lat": lat, "lng": lng}))
             elif vertical == "ambulance":
                 await conn.execute("""
-                    UPDATE public.ambulance_providers SET status='approved', approved_at=now(), approved_by=$2,
+                    UPDATE public.ambulance_providers SET status='approved', verification_status='verified', approved_at=now(), approved_by=$2,
                            business_lat=$3, business_lng=$4, updated_at=now() WHERE user_id=$1::text
                 """, user_id, admin, lat, lng)
             elif vertical == "doctor":
                 await conn.execute(
-                    "UPDATE public.doctors SET is_verified=TRUE, is_active=TRUE, updated_at=now() WHERE user_id=$1::text",
+                    "UPDATE public.doctors SET verification_status='verified', is_verified=TRUE, is_active=TRUE, updated_at=now() WHERE user_id=$1::text",
                     user_id)
             elif vertical == "pathology" and await lab_split_live() and (await _lab_profile(conn, user_id))[0]:
                 kind, prof = await _lab_profile(conn, user_id)

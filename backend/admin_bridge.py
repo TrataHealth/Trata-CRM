@@ -170,26 +170,8 @@ def verify_signature(raw: bytes, signature_header: Optional[str]) -> bool:
 
 
 async def queue_outbound(db, event: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    """Enqueue an outbound event. Returns the queued record."""
-    if event not in OUTBOUND_EVENTS:
-        logger.warning(f"queue_outbound: unknown event '{event}' — not queued")
-        return {"queued": False, "reason": "unknown_event"}
-    record = {
-        "id": str(uuid.uuid4()),
-        "event": event,
-        "data": data,
-        "status": "pending",
-        "attempts": 0,
-        "last_error": None,
-        "created_at": _now(),
-        "next_attempt_at": _now(),
-        "sent_at": None,
-    }
-    await db.admin_bridge_outbound.insert_one(record.copy())
-    record.pop("_id", None)
-    # Fire-and-forget — dispatcher will pick it up on next tick.
-    asyncio.create_task(_send_one(db, record["id"]))
-    return record
+    """Retired (Phase D follow-up): the Provider App reads the canonical tables directly, so no outbound pushes are sent."""
+    return {"queued": False, "reason": "outbound_retired", "event": event}
 
 
 async def _send_one(db, record_id: str) -> bool:
@@ -484,9 +466,6 @@ _esc_task: Optional[asyncio.Task] = None
 
 def start_dispatcher(db):
     global _bg_task, _sync_task, _esc_task
-    if _bg_task is None or _bg_task.done():
-        _bg_task = asyncio.create_task(dispatcher_loop(db))
-        logger.info("admin_bridge dispatcher started")
     if _sync_task is None or _sync_task.done():
         _sync_task = asyncio.create_task(user_sync_loop(db))
         logger.info("admin_users sync loop started (5min interval)")

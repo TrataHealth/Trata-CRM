@@ -23,7 +23,11 @@ TABLES = {
     "doctor": ("doctors", "full_name"),
     "pharmacy": ("pharmacy_providers", "business_name"),
     "ambulance_provider": ("ambulance_providers", "business_name"),
+    "diagnostic_centre": ("diagnostic_centre_profiles", "name"),
 }
+# Phase D follow-up: nurse / paramedic leads are a users row only (right role, no profile table yet).
+USER_ONLY = {"nurse", "paramedic"}
+ADDRESS_RULE_TABLES = {"path_lab_profiles", "diagnostic_centre_profiles"}
 LICENSE_COL = {"path_lab_profiles": "registration_number", "pharmacy_providers": "drug_license_number"}
 RENAME = {"source": "lead_source", "ambulance_count": "total_ambulances"}
 # Fields the CRM owns — synced on every CRM write.
@@ -120,7 +124,7 @@ def _canonical_values(c: Dict[str, Any], keys: Iterable[str], table: str, name_c
 
 async def _ensure_user(conn, c: Dict[str, Any], phone: str) -> Optional[str]:
     """§2 — a canonical row never exists without a users row. users.phone is unique, so an
-    existing same-role account is reused; a phone owned by another role is left alone."""
+    existing same-role account is reused (confirmed by the Provider App team)."""
     u = await conn.fetchrow("SELECT id, role FROM public.users WHERE phone = ANY($1::text[]) LIMIT 1", [phone, f"+91{phone}"])
     if u:
         return u["id"] if u["role"] in (None, c.get("type")) else None
@@ -130,95 +134,123 @@ async def _ensure_user(conn, c: Dict[str, Any], phone: str) -> Optional[str]:
     return uid
 
 
+async def _table_for(conn, type_: str, uid: Optional[str]):
+    """Pathologist accounts may live in diagnostic_centre_profiles (6th canonical table, same users.id)."""
+    table, name_col = TABLES[type_]
+    if type_ == "pathologist" and uid and not await conn.fetchval(
+            "SELECT 1 FROM public.path_lab_profiles WHERE user_id = $1", uid) and await conn.fetchval(
+            "SELECT 1 FROM public.diagnostic_centre_profiles WHERE user_id = $1", uid):
+        return TABLES["diagnostic_centre"]
+    return table, name_col
+
+
+async def _sync_user_only(conn, c: Dict[str, Any], create: bool) -> Dict[str, Any]:
+    uid = user_id_of(c)
+    if uid and await conn.fetchval("SELECT 1 FROM public.users WHERE id = $1", uid):
+        return {"success": True, "user_id": uid, "created": False}
+    phone = clean_phone(c.get("phone"))
+    if not create or not phone:
+        return {"success": False, "reason": "not_created"}
+    uid = await _ensure_user(conn, c, phone)
+    return {"success": bool(uid), "user_id": uid, "created": bool(uid)} if uid else {"success": False, "reason": "phone_owned_by_other_role"}
+
+
 async def sync_contact(c: Dict[str, Any], keys: Optional[Iterable[str]] = None, create: bool = True,
                        raw_contacts=None) -> Dict[str, Any]:
     """Write a CRM contact's fields onto its canonical provider row (WHERE user_id = users.id)."""
     if not sb.is_configured() or not c:
         return {"success": False, "reason": "skipped"}
-    spec = TABLES.get(c.get("type") or "")
-    if not spec:
+    type_ = c.get("type") or ""
+    if type_ not in TABLES and type_ not in USER_ONLY:
         return {"success": False, "reason": "no_canonical_table"}
-    table, name_col = spec
     keys = set(CRM_OWNED if keys is None else keys) & (CRM_OWNED | DISPLAY)
     pool = await sb.get_pool()
     async with pool.acquire() as conn:
+        if type_ in USER_ONLY:
+            res = await _sync_user_only(conn, c, create)
+            uid = res.get("user_id")
+        else:
+            res, uid = await _sync_profile(conn, c, type_, keys, create)
+    if res.get("success") and raw_contacts is not None and c.get("id") and uid and uid != user_id_of(c):
+        await raw_contacts.update_one({"id": c["id"]}, {"$set": {"upstream_user_id": uid, "supabase_user_id": uid}})
+    return res
+
+
+async def _sync_profile(conn, c: Dict[str, Any], type_: str, keys: set, create: bool):
+    uid = user_id_of(c)
+    if uid and not await conn.fetchval("SELECT 1 FROM public.users WHERE id = $1", uid):
+        uid = None
+    async with conn.transaction():
+        if not uid:
+            phone = clean_phone(c.get("phone"))
+            if not create or not phone:
+                return {"success": False, "reason": "no_canonical_row" if create else "not_created"}, None
+            uid = await _ensure_user(conn, c, phone)
+            if not uid:
+                return {"success": False, "reason": "phone_owned_by_other_role"}, None
+        table, name_col = await _table_for(conn, type_, uid)
         cols = await _columns(conn, table)
-        uid = user_id_of(c)
-        if uid and not await conn.fetchval("SELECT 1 FROM public.users WHERE id = $1", uid):
-            uid = None
-        async with conn.transaction():
-            exists = bool(uid) and await conn.fetchval(f"SELECT 1 FROM public.{table} WHERE user_id = $1 LIMIT 1", uid)
-            if not exists:
-                phone = clean_phone(c.get("phone"))
-                if not create or not phone:
-                    return {"success": False, "reason": "no_canonical_row" if create else "not_created", "user_id": uid}
-                if not uid:
-                    uid = await _ensure_user(conn, c, phone)
-                    if not uid:
-                        return {"success": False, "reason": "phone_owned_by_other_role"}
-                    if await conn.fetchval(f"SELECT 1 FROM public.{table} WHERE user_id = $1 LIMIT 1", uid):
-                        exists = True
-                if not exists and table == "path_lab_profiles" and await conn.fetchval(
-                        "SELECT 1 FROM public.diagnostic_centre_profiles WHERE user_id = $1 LIMIT 1", uid):
-                    return {"success": False, "reason": "lives_in_diagnostic_centre_profiles", "user_id": uid}
-                if not exists:
-                    keys = keys | DISPLAY
-            vals = {k: _coerce(v, cols[k], k) for k, v in _canonical_values(c, keys, table, name_col).items()
-                    if k in cols and (v is not None or k not in _DISPLAY_COLS)}
-            vals.pop("user_id", None)
-            if exists:
-                if not vals:
-                    return {"success": True, "user_id": uid, "updated": 0}
+        exists = bool(await conn.fetchval(f"SELECT 1 FROM public.{table} WHERE user_id = $1", uid))
+        if not exists:
+            if not create or not clean_phone(c.get("phone")):
+                return {"success": False, "reason": "no_canonical_row" if create else "not_created", "user_id": uid}, uid
+            keys = keys | DISPLAY
+        vals = {k: _coerce(v, cols[k], k) for k, v in _canonical_values(c, keys, table, name_col).items()
+                if k in cols and (v is not None or k not in _DISPLAY_COLS)}
+        for k in ("id", "user_id", "verification_status"):
+            vals.pop(k, None)
+        if exists:
+            if vals:
                 sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(vals))
                 await conn.execute(f"UPDATE public.{table} SET {sets}, updated_at = now() WHERE user_id = $1", uid, *vals.values())
-            else:
-                base = {"id": str(uuid.uuid4()), "user_id": uid, "phone": clean_phone(c.get("phone")),
-                        name_col: c.get("name") or "Unnamed"}
-                if "owner_name" in cols:
-                    base["owner_name"] = c.get("contact_person") or c.get("owner_name") or c.get("name") or "Unnamed"
-                if "verification_status" in cols:
-                    base["verification_status"] = "pending_review" if table == "path_lab_profiles" else "pending"
-                row = {**vals, **base}
-                ph = ", ".join(f"${i + 1}" for i in range(len(row)))
-                await conn.execute(f"INSERT INTO public.{table} ({', '.join(row)}, created_at, updated_at) VALUES ({ph}, now(), now())",
-                                   *row.values())
-    if raw_contacts is not None and c.get("id") and uid != user_id_of(c):
-        await raw_contacts.update_one({"id": c["id"]}, {"$set": {"upstream_user_id": uid, "supabase_user_id": uid}})
-    return {"success": True, "user_id": uid, "created": not exists}
+            return {"success": True, "user_id": uid, "created": False, "table": table}, uid
+        base = {"id": str(uuid.uuid4()), "user_id": uid, "phone": clean_phone(c.get("phone")) or "",
+                name_col: c.get("name") or "Unnamed"}
+        if "owner_name" in cols:
+            base["owner_name"] = c.get("contact_person") or c.get("owner_name") or c.get("name") or "Unnamed"
+        base["verification_status"] = "pending"
+        row = {**base, **vals}
+        ph = ", ".join(f"${i + 1}" for i in range(len(row)))
+        upd = ", ".join(f"{k} = EXCLUDED.{k}" for k in vals) or "user_id = EXCLUDED.user_id"
+        # §2 + follow-up Q6: idempotent on UNIQUE(user_id)
+        await conn.execute(f"""INSERT INTO public.{table} ({', '.join(row)}, created_at, updated_at) VALUES ({ph}, now(), now())
+                               ON CONFLICT (user_id) WHERE user_id IS NOT NULL DO UPDATE SET {upd}, updated_at = now()""", *row.values())
+    return {"success": True, "user_id": uid, "created": True, "table": table}, uid
 
 
 async def set_verification(user_id: str, type_: str, decision: str, actor: Optional[str],
                            reason: Optional[str] = None) -> Dict[str, Any]:
-    """§6/§8 — the one status write. decision: 'verified' | 'rejected'. Path labs with an incomplete address → pending_address."""
-    spec = TABLES.get(type_)
-    if not spec or not sb.is_configured():
+    """§6/§8 — the one status write (verification_status on every canonical table).
+    Path labs / diagnostic centres with an incomplete address → pending_address."""
+    if not sb.is_configured() or (type_ not in TABLES and type_ not in USER_ONLY):
         return {"success": False, "reason": "no_canonical_table"}
     if not user_id:
         return {"success": False, "reason": "no_canonical_row"}
-    table, _ = spec
     pool = await sb.get_pool()
     async with pool.acquire() as conn:
-        cols = await _columns(conn, table)
+        if type_ in USER_ONLY:
+            r = await conn.execute("UPDATE public.users SET verification_status = $2, updated_at = now() WHERE id = $1", user_id, decision)
+            return {"success": r.rsplit(" ", 1)[-1] != "0", "verification_status": decision}
+        table, _ = await _table_for(conn, type_, user_id)
         status = decision
-        if decision == "verified" and table == "path_lab_profiles":
-            missing = await conn.fetchval(f"""SELECT count(*) FROM public.path_lab_profiles WHERE user_id = $1
+        if decision == "verified" and table in ADDRESS_RULE_TABLES:
+            missing = await conn.fetchval(f"""SELECT count(*) FROM public.{table} WHERE user_id = $1
                                                AND ({' OR '.join(f'{k} IS NULL' for k in PATH_LAB_ADDRESS)})""", user_id)
             if missing:
                 status = "pending_address"
+        cols = await _columns(conn, table)
         decision_json = json.dumps({"decision": status, "reason": reason, "by": actor,
                                     "at": datetime.now(timezone.utc).isoformat()})
-        sets = ["local_decision = coalesce(local_decision, '{}'::jsonb) || $2::jsonb", "updated_at = now()"]
-        if status in ("verified", "rejected"):
+        args = [user_id, status]
+        sets = ["verification_status = $2", "updated_at = now()"]
+        if "local_decision" in cols:
+            args.append(decision_json)
+            sets.append(f"local_decision = coalesce(local_decision, '{{}}'::jsonb) || ${len(args)}::jsonb")
+        if status in ("verified", "rejected") and "pipeline_stage" in cols:
             sets.append(f"pipeline_stage = '{status}'")
-        if status == "verified":
-            sets += ["ai_fields_applied_by = $3", "ai_fields_applied_at = now()"]
-        if "verification_status" in cols:
-            sets.append(f"verification_status = '{status}'")
-        elif table == "doctors":
-            sets.append(f"is_verified = {'TRUE' if status == 'verified' else 'FALSE'}")
-        elif table == "ambulance_providers":
-            sets.append("status = 'approved', approved_at = now()" if status == "verified" else "status = 'rejected'")
-        args = [user_id, decision_json] + ([actor] if status == "verified" else [])
+        if status == "verified" and "ai_fields_applied_by" in cols:
+            args.append(actor)
+            sets += [f"ai_fields_applied_by = ${len(args)}", "ai_fields_applied_at = now()"]
         try:
             async with conn.transaction():
                 r = await conn.execute(f"UPDATE public.{table} SET {', '.join(sets)} WHERE user_id = $1", *args)
@@ -227,18 +259,31 @@ async def set_verification(user_id: str, type_: str, decision: str, actor: Optio
                 await conn.execute("UPDATE public.users SET verification_status = $2, updated_at = now() WHERE id = $1", user_id, status)
         except asyncpg.exceptions.CheckViolationError as e:
             return {"success": False, "reason": "check_violation", "detail": str(e)}
-    return {"success": True, "verification_status": status}
+    return {"success": True, "verification_status": status, "table": table}
 
 
 # ── Read path (§7) ───────────────────────────────────────────────────────────
-_UNION = " UNION ALL ".join(
-    f"""SELECT '{t}'::text AS type, id::text, user_id::text, {n}::text AS name, phone::text, email::text, city::text, state::text,
-               pipeline_stage::text, kyc_status::text, deal_value, assigned_agent_id::text, assigned_agent_name::text, lead_source::text,
-               {"verification_status::text" if t not in ("doctor", "ambulance_provider") else
-                ("CASE WHEN is_verified THEN 'verified' ELSE 'pending' END" if t == "doctor" else
-                 "CASE WHEN status = 'approved' THEN 'verified' ELSE coalesce(status, 'pending') END")} AS verification_status,
-               created_at, updated_at FROM public.{tbl}"""
-    for t, (tbl, n) in TABLES.items())
+_UNION_COLS = ("phone", "email", "city", "state", "pipeline_stage", "kyc_status", "deal_value", "assigned_agent_id",
+               "assigned_agent_name", "lead_source", "verification_status", "created_at", "updated_at")
+_union_sql: Optional[str] = None
+
+
+async def union_sql(conn) -> str:
+    """UNION ALL of the 6 canonical tables (diagnostic centres show up as type 'pathologist' for the CRM)."""
+    global _union_sql
+    if _union_sql is None:
+        parts = []
+        for t, (tbl, n) in TABLES.items():
+            cols = await _columns(conn, tbl)
+            crm_type = "pathologist" if t == "diagnostic_centre" else t
+            sel = ", ".join((f"{k}::numeric" if k == "deal_value" else (k if k.endswith("_at") else f"{k}::text")) + f" AS {k}"
+                            if k in cols else (f"NULL::numeric AS {k}" if k == "deal_value" else
+                                               (f"NULL::timestamptz AS {k}" if k.endswith("_at") else f"NULL::text AS {k}"))
+                            for k in _UNION_COLS)
+            parts.append(f"SELECT '{crm_type}'::text AS type, '{tbl}'::text AS canonical_table, id::text, user_id::text, "
+                         f"{n}::text AS name, {sel} FROM public.{tbl}")
+        _union_sql = " UNION ALL ".join(parts)
+    return _union_sql
 
 
 async def list_leads(type_: Optional[str] = None, stage: Optional[str] = None, q: Optional[str] = None,
@@ -253,8 +298,9 @@ async def list_leads(type_: Optional[str] = None, stage: Optional[str] = None, q
         where.append(f"(lower(coalesce(name, '')) LIKE ${len(args)} OR phone LIKE ${len(args)})")
     pool = await sb.get_pool()
     async with pool.acquire() as conn:
-        total = await conn.fetchval(f"SELECT count(*) FROM ({_UNION}) p WHERE {' AND '.join(where)}", *args)
-        rows = await conn.fetch(f"""SELECT * FROM ({_UNION}) p WHERE {' AND '.join(where)}
+        u = await union_sql(conn)
+        total = await conn.fetchval(f"SELECT count(*) FROM ({u}) p WHERE {' AND '.join(where)}", *args)
+        rows = await conn.fetch(f"""SELECT * FROM ({u}) p WHERE {' AND '.join(where)}
                                      ORDER BY updated_at DESC NULLS LAST LIMIT ${len(args) + 1}""", *args, limit)
     return {"items": sb._rows(rows), "total": total}
 
@@ -262,7 +308,7 @@ async def list_leads(type_: Optional[str] = None, stage: Optional[str] = None, q
 async def get_lead(key: str) -> Optional[Dict[str, Any]]:
     pool = await sb.get_pool()
     async with pool.acquire() as conn:
-        r = await conn.fetchrow(f"SELECT * FROM ({_UNION}) p WHERE user_id = $1 OR id = $1 LIMIT 1", key)
+        r = await conn.fetchrow(f"SELECT * FROM ({await union_sql(conn)}) p WHERE user_id = $1 OR id = $1 LIMIT 1", key)
     return sb._row(r)
 
 
@@ -343,7 +389,7 @@ class SyncedDB:
 
 async def backfill(raw_contacts, create: bool = True) -> Dict[str, Any]:
     stats: Dict[str, int] = {}
-    async for c in raw_contacts.find({"type": {"$in": list(TABLES)}, "archived": {"$ne": True}}, {"_id": 0}):
+    async for c in raw_contacts.find({"type": {"$in": list(TABLES) + list(USER_ONLY)}, "archived": {"$ne": True}}, {"_id": 0}):
         try:
             res = await sync_contact(c, None, create=create, raw_contacts=raw_contacts)
             k = "created" if res.get("created") else ("updated" if res.get("success") else res.get("reason", "failed"))
