@@ -510,3 +510,9 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Trata Providers directory hides accounts whose canonical rows are all deactivated, and ignores deactivated profiles when naming an account (Xenon's account now shows "Trata Ambulance Service").
 - Fixed: bulk Delete failed (500) for reasons longer than ~35 chars, because users.archived_reason is varchar(50).
 - Deleted from the console on 2026-11-04 (user's request, 30-day bin): Sahayak 1b945702… (9811798926), JK Labs 7f301877… (pnd-), BASTI DIAGNOSTIC CENTER ebfb8757… (pnd-).
+
+## 2026-06 — Diagnostic-centre services (mapping doc §3 update)
+- Pathology/Imaging switches on the provider profile page (`ServiceTypesToggle`) → GET/PUT /api/admin/directory/providers/{user_id}/service-types (writes diagnostic_centre_profiles.service_types; at least one service; Trata Health Admin only).
+- Lead UNION: a diagnostic centre counts as 'pathologist' only when 'pathology' = ANY(service_types), otherwise 'diagnostic_centre'. Diagnostic-centre row wins over a deprecated shadow path_lab row. sibling_path_lab_id never written; no shadow rows created.
+- Provider profile card falls back to whichever canonical table holds the users.id (diagnostic centres / pharmacies now show their profile). CRM user edits no longer write to the legacy `pathologists` table.
+- Removed leftover TEST_PhaseD diagnostic centre (user + profile + contact).

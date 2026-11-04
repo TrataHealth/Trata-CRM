@@ -1491,6 +1491,13 @@ async def fetch_provider_full_details(user_id: str, vertical: str, phone: Option
         spec = _VERTICAL_PROFILE_SPEC.get(vertical)
         table = spec[0] if spec else {"ambulance": "ambulance_providers"}.get(vertical)
         profile = await conn.fetchrow(f"SELECT * FROM public.{table} WHERE user_id::text = $1 LIMIT 1", str(user_id)) if table else None
+        if not profile:  # Phase D: fall back to whichever canonical table holds this users.id
+            for t in ("diagnostic_centre_profiles", "path_lab_profiles", "hospital_profiles", "doctors",
+                      "pharmacy_providers", "ambulance_providers"):
+                profile = await conn.fetchrow(f"SELECT * FROM public.{t} WHERE user_id::text = $1 LIMIT 1", str(user_id))
+                if profile:
+                    table = t
+                    break
         key = re.sub(r"\D", "", phone or "")[-10:]
         app = await conn.fetchrow("""SELECT * FROM public.tratax_kyc_applications
                                       WHERE right(regexp_replace(coalesce(phone_key, phone, ''), '\\D', '', 'g'), 10) = $1
@@ -1873,7 +1880,8 @@ _PROFILE_TABLE_BY_ROLE = {
     "hospital":           "hospital_profiles",
     "ambulance_provider": "ambulance_providers",
     "doctor":             "doctors",
-    "pathologist":        "pathologists",
+    "pharmacy":           "pharmacy_providers",
+    "diagnostic_centre":  "diagnostic_centre_profiles",
 }
 
 

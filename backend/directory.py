@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 import supabase_db as sb
 
@@ -12,8 +13,39 @@ NON_PROVIDER = ("admin", "patient", "customer")
 ORG_ROLES = ("hospital", "pathologist", "ambulance_provider", "pharmacy")
 
 
+SERVICE_TYPES = ("pathology", "imaging")
+
+
+class ServiceTypes(BaseModel):
+    service_types: List[str]
+
+
 def create_directory_router(get_current_user):
     r = APIRouter(prefix="/api/admin/directory")
+
+    @r.get("/providers/{user_id}/service-types")
+    async def get_service_types(user_id: str, current=Depends(get_current_user)):
+        if not current.get("is_master_admin"):
+            raise HTTPException(status_code=403, detail="Trata Health Admin only")
+        pool = await sb.get_pool()
+        async with pool.acquire() as conn:
+            v = await conn.fetchrow("SELECT service_types FROM public.diagnostic_centre_profiles WHERE user_id = $1", user_id)
+        return {"applicable": bool(v), "service_types": list(v["service_types"] or []) if v else []}
+
+    @r.put("/providers/{user_id}/service-types")
+    async def put_service_types(user_id: str, body: ServiceTypes, current=Depends(get_current_user)):
+        if not current.get("is_master_admin"):
+            raise HTTPException(status_code=403, detail="Trata Health Admin only")
+        types = sorted({t for t in body.service_types if t in SERVICE_TYPES})
+        if not types:
+            raise HTTPException(status_code=400, detail="A diagnostic centre must offer at least one service")
+        pool = await sb.get_pool()
+        async with pool.acquire() as conn:
+            res = await conn.execute("""UPDATE public.diagnostic_centre_profiles SET service_types = $2::text[], updated_at = now()
+                                         WHERE user_id = $1""", user_id, types)
+        if res.endswith(" 0"):
+            raise HTTPException(status_code=404, detail="No diagnostic centre for this account")
+        return {"success": True, "service_types": types}
 
     @r.get("/providers")
     async def providers(role: Optional[str] = None, q: Optional[str] = None, kyc: Optional[str] = None, limit: int = 500,

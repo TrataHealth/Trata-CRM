@@ -139,10 +139,10 @@ async def _ensure_user(conn, c: Dict[str, Any], phone: str) -> Optional[str]:
 
 
 async def _table_for(conn, type_: str, uid: Optional[str]):
-    """Pathologist accounts may live in diagnostic_centre_profiles (6th canonical table, same users.id)."""
+    """Pathologist accounts may live in diagnostic_centre_profiles (6th canonical table, same users.id).
+    The diagnostic-centre row wins over a deprecated shadow path_lab row (sibling_path_lab_id)."""
     table, name_col = TABLES[type_]
-    if type_ == "pathologist" and uid and not await conn.fetchval(
-            "SELECT 1 FROM public.path_lab_profiles WHERE user_id = $1", uid) and await conn.fetchval(
+    if type_ == "pathologist" and uid and await conn.fetchval(
             "SELECT 1 FROM public.diagnostic_centre_profiles WHERE user_id = $1", uid):
         return TABLES["diagnostic_centre"]
     return table, name_col
@@ -281,12 +281,14 @@ async def union_sql(conn) -> str:
         parts = []
         for t, (tbl, n) in TABLES.items():
             cols = await _columns(conn, tbl)
-            crm_type = "pathologist" if t == "diagnostic_centre" else t
+            # §3: a centre counts as pathology only when 'pathology' = ANY(service_types)
+            crm_type = ("CASE WHEN 'pathology' = ANY(service_types) THEN 'pathologist' ELSE 'diagnostic_centre' END"
+                        if t == "diagnostic_centre" else f"'{t}'::text")
             sel = ", ".join((f"{k}::numeric" if k == "deal_value" else (k if k.endswith("_at") else f"{k}::text")) + f" AS {k}"
                             if k in cols else (f"NULL::numeric AS {k}" if k == "deal_value" else
                                                (f"NULL::timestamptz AS {k}" if k.endswith("_at") else f"NULL::text AS {k}"))
                             for k in _UNION_COLS)
-            parts.append(f"SELECT '{crm_type}'::text AS type, '{tbl}'::text AS canonical_table, id::text, user_id::text, "
+            parts.append(f"SELECT {crm_type} AS type, '{tbl}'::text AS canonical_table, id::text, user_id::text, "
                          f"{n}::text AS name, {sel} FROM public.{tbl}")
         _union_sql = " UNION ALL ".join(parts)
     return _union_sql
