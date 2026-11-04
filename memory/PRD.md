@@ -480,3 +480,7 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 ## 2026-06 — User directories from shared users table
 - /users/providers = ProviderDirectory (GET /api/admin/directory/providers; one row per account, same-name placeholder accounts merged as linked_accounts; KYC filter groups). Row -> /admin/onboarding/:id which now shows ProviderDetailsCard (account, vertical profile, TrataX KYC application, documents); staff roles show no checklist (kyc_enabled false).
 - /users/patients = Patients page (Supabase users, one per account) -> /admin/patients/:id. Both nav items master-only. Contacts-based audience lists no longer used in nav.
+
+## 2026-06 — Trata Providers: two name columns
+- /api/admin/directory/providers now returns org_name (hospital/lab/pharmacy/ambulance or the hospital a doctor/nurse/staff belongs to) + admin_name (contact person/owner/account name); search matches both.
+- ProviderDirectory.jsx shows "<Type> name" + "Admin name" columns ("Not linked"/"Not set" when missing).
