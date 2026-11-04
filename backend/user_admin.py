@@ -54,7 +54,7 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
             await conn.execute(SUSPENSION_DDL)
 
     async def notify(contact: Dict[str, Any], suspended: bool, reason: Optional[str], app_url: Optional[str]):
-        bp = await db.billing_profiles.find_one({"provider_user_id": contact.get("supabase_user_id")}, {"_id": 0, "email": 1}) or {}
+        bp = await db.billing_profiles.find_one({"provider_user_id": contact.get("supabase_user_id") or contact.get("upstream_user_id")}, {"_id": 0, "email": 1}) or {}
         to = bp.get("email") or contact.get("email")
         name = _html.escape(contact.get("name") or "there")
         if suspended:
@@ -69,7 +69,7 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
             body = (f"<h2 style='margin:0 0 8px;font-size:18px'>Account restored</h2><p style='font-size:14px'>Hello {name},</p>"
                     "<p style='font-size:14px;line-height:20px'>Your Trata Health account suspension has been lifted. You can use the "
                     "Trata Provider app, TrataX and the Trata CRM again.</p>")
-        await db.notifications.insert_one({"id": os.urandom(8).hex(), "user_id": contact.get("supabase_user_id"), "provider_id": contact.get("id"),
+        await db.notifications.insert_one({"id": os.urandom(8).hex(), "user_id": contact.get("supabase_user_id") or contact.get("upstream_user_id"), "provider_id": contact.get("id"),
                                            "kind": "account_suspended" if suspended else "account_restored", "title": subject,
                                            "message": reason or subject, "read": False, "created_at": _now()})
         if not to:
@@ -116,11 +116,11 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
         contacts = await db.contacts.find(q, {"_id": 0}).to_list(500)
         skipped, done = [], []
         for c in contacts:
-            if (c.get("phone") or "")[-10:] in master_phones or (current.get("supabase_user_id") and c.get("supabase_user_id") == current.get("supabase_user_id")):
+            if (c.get("phone") or "")[-10:] in master_phones or (current.get("supabase_user_id") and current.get("supabase_user_id") in (c.get("supabase_user_id"), c.get("upstream_user_id"))):
                 skipped.append({"id": c["id"], "name": c.get("name"), "why": "Trata Health Admin / yourself"})
                 continue
             done.append(c)
-        uids = [c["supabase_user_id"] for c in done if c.get("supabase_user_id")]
+        uids = list({u for c in done for u in (c.get("supabase_user_id"), c.get("upstream_user_id")) if u})
         ids, phones = [c["id"] for c in done], [c["phone"] for c in done if c.get("phone")]
         by = current.get("name") or current.get("phone")
         pool = await sb.get_pool()
@@ -146,7 +146,7 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
                 "archive": {"archived": True, "archived_at": _now(), "archived_reason": reason, "archived_by": by, "purge_after": purge_at},
                 "restore": {"archived": False, "archived_at": None, "archived_reason": None, "archived_by": None, "purge_after": None}}[body.action]
         await db.contacts.update_many({"id": {"$in": ids}}, {"$set": cset})
-        uq = {"$or": [{"provider_id": {"$in": ids}}, {"supabase_user_id": {"$in": uids}}, {"phone": {"$in": phones}}], "is_master_admin": {"$ne": True}}
+        uq = {"$or": [{"provider_id": {"$in": ids}}, {"supabase_user_id": {"$in": uids}}, {"upstream_user_id": {"$in": uids}}, {"phone": {"$in": phones}}], "is_master_admin": {"$ne": True}}
         if body.action in ("suspend", "unsuspend"):
             await db.crm_users.update_many(uq, {"$set": susp if body.action == "suspend" else unsusp})
         else:
@@ -175,7 +175,7 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
         due = await db.contacts.find({"archived": True, "purge_after": {"$lt": _now()}}, {"_id": 0}).to_list(500)
         if not due:
             return {"erased": 0}
-        uids = [c["supabase_user_id"] for c in due if c.get("supabase_user_id")]
+        uids = list({u for c in due for u in (c.get("supabase_user_id"), c.get("upstream_user_id")) if u})
         pool = await sb.get_pool()
         hard = soft = 0
         async with pool.acquire() as conn:
@@ -200,7 +200,8 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
                         phone = left('del-' || id, 20), phone_key = NULL, trata_phone = NULL, archived_reason = 'erased',
                         purge_after = NULL, updated_at = now() WHERE id = $1""", uid)
                     soft += 1
-        ids = [c["id"] for c in due if not c.get("supabase_user_id") or c["supabase_user_id"] in ready]
+        ids = [c["id"] for c in due if not (c.get("supabase_user_id") or c.get("upstream_user_id"))
+               or (c.get("supabase_user_id") or c.get("upstream_user_id")) in ready]
         phones = [c["phone"] for c in due if c["id"] in ids and c.get("phone")]
         await db.contacts.delete_many({"id": {"$in": ids}})
         await db.crm_users.delete_many({"$or": [{"provider_id": {"$in": ids}}, {"phone": {"$in": phones}}], "is_master_admin": {"$ne": True}})

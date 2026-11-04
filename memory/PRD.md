@@ -516,3 +516,7 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Lead UNION: a diagnostic centre counts as 'pathologist' only when 'pathology' = ANY(service_types), otherwise 'diagnostic_centre'. Diagnostic-centre row wins over a deprecated shadow path_lab row. sibling_path_lab_id never written; no shadow rows created.
 - Provider profile card falls back to whichever canonical table holds the users.id (diagnostic centres / pharmacies now show their profile). CRM user edits no longer write to the legacy `pathologists` table.
 - Removed leftover TEST_PhaseD diagnostic centre (user + profile + contact).
+
+## 2026-06 — Fix: bulk Delete/Suspend didn't reach the shared DB for some accounts
+- Root cause: user_admin bulk/erase only read `contact.supabase_user_id`; contacts created by the users mirror carry only `upstream_user_id`, so Mongo was archived but users.is_archived stayed FALSE (rows kept showing in Trata Providers). Now uses supabase_user_id OR upstream_user_id everywhere (bulk, erase, self-skip, notifications, billing email).
+- Repaired: 8 diagnostic centres deleted 2026-11-04 ("test users") and Branch Admin (deleted 30 Oct) re-applied to Supabase (new 30-day purge date).
