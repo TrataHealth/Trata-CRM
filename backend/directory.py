@@ -20,7 +20,7 @@ def create_directory_router(get_current_user):
                         current=Depends(get_current_user)):
         if not current.get("is_master_admin"):
             raise HTTPException(status_code=403, detail="Trata Health Admin only")
-        where = ["u.role IS NOT NULL", "u.role <> ALL($1::text[])", "coalesce(u.is_archived, FALSE) = FALSE"]
+        where = ["u.role IS NOT NULL", "u.role <> ALL($1::text[])", "coalesce(u.is_archived, FALSE) = FALSE", "NOT u.deactivated"]
         args: list = [list(NON_PROVIDER)]
         if role:
             args.append(role)
@@ -42,20 +42,31 @@ def create_directory_router(get_current_user):
                 WITH base AS (
                   SELECT u.*, coalesce(oe.name, nullif(u.organization_name, ''), hp.name, pp.business_name, ph.pharmacy_name,
                                        pl.name, dc.name, ap.business_name, dr.org, pm.hospital_name, hs.org) AS org_name,
+                         coalesce(dz.all_off, FALSE) AS deactivated,
                          coalesce(nullif(oe.contact_person, ''), nullif(pp.owner_name, ''), nullif(ph.owner_name, ''),
                                   nullif(ap.owner_name, ''), CASE WHEN u.role = 'doctor' THEN nullif(dr.full_name, '') END, u.name) AS admin_name
                     FROM public.users u
-                    LEFT JOIN LATERAL (SELECT name, contact_person FROM public.org_entities WHERE entity_user_id = u.id ORDER BY created_at LIMIT 1) oe ON TRUE
-                    LEFT JOIN LATERAL (SELECT name FROM public.hospital_profiles WHERE user_id = u.id OR admin_user_id = u.id LIMIT 1) hp ON TRUE
-                    LEFT JOIN LATERAL (SELECT business_name, owner_name FROM public.pharmacy_providers WHERE user_id = u.id LIMIT 1) pp ON TRUE
+                    LEFT JOIN LATERAL (SELECT name, contact_person FROM public.org_entities e WHERE e.entity_user_id = u.id
+                                         AND NOT EXISTS (SELECT 1 FROM public.hospital_profiles x WHERE x.user_id = u.id AND x.verification_status = 'deactivated'
+                                                         AND lower(x.name) = lower(e.name))
+                                       ORDER BY created_at LIMIT 1) oe ON TRUE
+                    LEFT JOIN LATERAL (SELECT name FROM public.hospital_profiles WHERE (user_id = u.id OR admin_user_id = u.id) AND verification_status IS DISTINCT FROM 'deactivated' LIMIT 1) hp ON TRUE
+                    LEFT JOIN LATERAL (SELECT business_name, owner_name FROM public.pharmacy_providers WHERE user_id = u.id AND verification_status IS DISTINCT FROM 'deactivated' LIMIT 1) pp ON TRUE
                     LEFT JOIN LATERAL (SELECT pharmacy_name, owner_name FROM public.pharmacy_profiles WHERE user_id = u.id LIMIT 1) ph ON TRUE
-                    LEFT JOIN LATERAL (SELECT coalesce(display_name, name) AS name FROM public.path_lab_profiles WHERE user_id = u.id LIMIT 1) pl ON TRUE
-                    LEFT JOIN LATERAL (SELECT name FROM public.diagnostic_centre_profiles WHERE user_id = u.id LIMIT 1) dc ON TRUE
-                    LEFT JOIN LATERAL (SELECT business_name, owner_name FROM public.ambulance_providers WHERE user_id = u.id LIMIT 1) ap ON TRUE
+                    LEFT JOIN LATERAL (SELECT coalesce(display_name, name) AS name FROM public.path_lab_profiles WHERE user_id = u.id AND verification_status IS DISTINCT FROM 'deactivated' LIMIT 1) pl ON TRUE
+                    LEFT JOIN LATERAL (SELECT name FROM public.diagnostic_centre_profiles WHERE user_id = u.id AND verification_status IS DISTINCT FROM 'deactivated' LIMIT 1) dc ON TRUE
+                    LEFT JOIN LATERAL (SELECT business_name, owner_name FROM public.ambulance_providers WHERE user_id = u.id AND verification_status IS DISTINCT FROM 'deactivated' LIMIT 1) ap ON TRUE
                     LEFT JOIN LATERAL (SELECT d.full_name, coalesce(d.hospital_name, h.name, d.clinic_name, d.facility_name) AS org
                                          FROM public.doctors d LEFT JOIN public.hospital_profiles h ON h.id = d.hospital_id WHERE d.user_id = u.id LIMIT 1) dr ON TRUE
                     LEFT JOIN LATERAL (SELECT coalesce(p.hospital_name, h.name) AS hospital_name FROM public.paramedic_profiles p
                                          LEFT JOIN public.hospital_profiles h ON h.id = p.hospital_id WHERE p.user_id = u.id LIMIT 1) pm ON TRUE
+                    LEFT JOIN LATERAL (SELECT bool_and(z.v = 'deactivated') AS all_off FROM (
+                        SELECT verification_status v FROM public.hospital_profiles WHERE user_id = u.id
+                        UNION ALL SELECT verification_status FROM public.path_lab_profiles WHERE user_id = u.id
+                        UNION ALL SELECT verification_status FROM public.doctors WHERE user_id = u.id
+                        UNION ALL SELECT verification_status FROM public.pharmacy_providers WHERE user_id = u.id
+                        UNION ALL SELECT verification_status FROM public.ambulance_providers WHERE user_id = u.id
+                        UNION ALL SELECT verification_status FROM public.diagnostic_centre_profiles WHERE user_id = u.id) z) dz ON TRUE
                     LEFT JOIN LATERAL (SELECT h.name AS org FROM public.hospital_staff s JOIN public.hospital_profiles h ON h.id = s.hospital_id
                                         WHERE s.user_id = u.id LIMIT 1) hs ON TRUE)
                 SELECT u.id, u.name, u.org_name, u.admin_name, u.phone, u.email, u.role, coalesce(u.verification_status, 'pending') AS kyc_status,

@@ -1271,8 +1271,10 @@ async def _sync_supabase_users_into_contacts() -> Dict[str, Any]:
                 await db._db.contacts.insert_one(new_row)
                 inserted += 1
                 await _notify_new_upstream_provider(new_row)
+        removed = await cp.sync_removed_to_contacts(db._db.contacts)
         _SB_CONTACTS_SYNC_STATE["last_run_at"] = _time.time()
-        return {"success": True, "inserted": inserted, "updated": updated, "skipped": skipped, "total": inserted + updated + skipped}
+        return {"success": True, "inserted": inserted, "updated": updated, "skipped": skipped, "total": inserted + updated + skipped,
+                "removed_upstream": removed}
     except Exception as e:
         logger.warning(f"supabase-users → contacts sync failed: {e}")
         return {"success": False, "reason": str(e)}

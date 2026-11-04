@@ -134,7 +134,7 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
             elif body.action == "archive":
                 await conn.execute("""UPDATE public.users SET is_archived = TRUE, is_active = FALSE, archived_at = now(),
                                       archived_reason = $2, purge_after = now() + interval '30 days', updated_at = now()
-                                      WHERE id = ANY($1::text[])""", uids, f"admin_deleted: {reason}"[:250])
+                                      WHERE id = ANY($1::text[])""", uids, f"admin_deleted: {reason}"[:50])
             else:
                 await conn.execute("""UPDATE public.users SET is_archived = FALSE, is_active = TRUE, archived_at = NULL,
                                       archived_reason = NULL, purge_after = NULL, updated_at = now()

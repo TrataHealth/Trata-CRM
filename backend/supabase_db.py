@@ -1775,7 +1775,8 @@ async def list_all_users_for_crm_sync(limit: int = 2000) -> List[Dict[str, Any]]
                    u.is_active, u.verification_status, u.created_at, u.updated_at,
                    p.name AS profile_name, p.city, p.state, p.address, p.vstatus
               FROM public.users u
-              LEFT JOIN LATERAL (SELECT * FROM prof WHERE prof.user_id = u.id ORDER BY pri LIMIT 1) p ON TRUE
+              LEFT JOIN LATERAL (SELECT * FROM prof WHERE prof.user_id = u.id
+                                  ORDER BY (lower(coalesce(prof.vstatus, '')) = 'deactivated'), pri LIMIT 1) p ON TRUE
              WHERE coalesce(u.role, 'patient') <> 'admin'
                AND coalesce(u.is_archived, FALSE) = FALSE
              ORDER BY u.created_at DESC NULLS LAST

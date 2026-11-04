@@ -504,3 +504,9 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Checkbox selection + Suspend / Restore access / Delete bar (same as All Users) on both pages; /api/admin/users/bulk now accepts `user_ids` (users.id), mapping to CRM contacts (creates a plain contact if missing so 'Deleted users' bin works). Provider rows include linked_accounts. Suspended rows tagged + "Any access / Active / Suspended" filter. Restore stays in 'Deleted users'.
 - Incident: 30 Oct "Test users" delete batch archived real accounts Tathastu (3164f651…) and Hi Tech Medical Centre (055687aa…); restored 2026-11-04. Sahayak/"Master Admin" (fc6a4d35…) was restored by mistake and put back to its original deleted state (purge 29 Nov).
 - OPEN for Provider App team: block sign-in / app use for users.is_archived = TRUE (Provider App still lets deleted accounts log in). Also: something on the Provider App side flips users.role hospital↔doctor for Tathastu's owner account (3164f651…), which also has a doctors row (DM Upadhyay) on the same user_id.
+
+## 2026-06 — Provider App removals mirrored into the console
+- Users mirror now runs `cp.sync_removed_to_contacts`: users.is_archived, or every canonical profile row 'deactivated' → CRM contact archived (reason "Removed in the Provider App", no purge date, `upstream_removed`), and un-hidden automatically if the Provider App brings them back.
+- Trata Providers directory hides accounts whose canonical rows are all deactivated, and ignores deactivated profiles when naming an account (Xenon's account now shows "Trata Ambulance Service").
+- Fixed: bulk Delete failed (500) for reasons longer than ~35 chars, because users.archived_reason is varchar(50).
+- Deleted from the console on 2026-11-04 (user's request, 30-day bin): Sahayak 1b945702… (9811798926), JK Labs 7f301877… (pnd-), BASTI DIAGNOSTIC CENTER ebfb8757… (pnd-).

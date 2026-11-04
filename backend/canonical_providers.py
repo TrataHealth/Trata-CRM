@@ -292,6 +292,30 @@ async def union_sql(conn) -> str:
     return _union_sql
 
 
+async def removed_user_ids(conn) -> set:
+    """Accounts the Provider App removed: users.is_archived, or every canonical profile row deactivated."""
+    rows = await conn.fetch(f"""SELECT id FROM public.users WHERE coalesce(is_archived, FALSE)
+                                UNION SELECT user_id FROM ({await union_sql(conn)}) p WHERE user_id IS NOT NULL
+                                GROUP BY user_id HAVING bool_and(verification_status = 'deactivated')""")
+    return {r[0] for r in rows}
+
+
+async def sync_removed_to_contacts(raw_contacts) -> Dict[str, int]:
+    """Mirror Provider App removals onto CRM contacts (archived, no purge date — the CRM never erases these)."""
+    pool = await sb.get_pool()
+    async with pool.acquire() as conn:
+        gone = list(await removed_user_ids(conn))
+    now = datetime.now(timezone.utc).isoformat()
+    by_uid = {"$or": [{"supabase_user_id": {"$in": gone}}, {"upstream_user_id": {"$in": gone}}]}
+    hid = await raw_contacts.update_many({**by_uid, "archived": {"$ne": True}}, {"$set": {
+        "archived": True, "archived_at": now, "archived_reason": "Removed in the Provider App", "archived_by": "Provider App",
+        "purge_after": None, "upstream_removed": True, "is_active": False}})
+    back = await raw_contacts.update_many({"upstream_removed": True, "supabase_user_id": {"$nin": gone}, "upstream_user_id": {"$nin": gone}},
+                                          {"$set": {"archived": False, "archived_at": None, "archived_reason": None, "archived_by": None,
+                                                    "upstream_removed": False}})
+    return {"hidden": hid.modified_count, "unhidden": back.modified_count}
+
+
 async def list_leads(type_: Optional[str] = None, stage: Optional[str] = None, q: Optional[str] = None,
                      assigned_agent_id: Optional[str] = None, limit: int = 200) -> Dict[str, Any]:
     where, args = ["1=1"], []
