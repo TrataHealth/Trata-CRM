@@ -182,7 +182,7 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
             ready = {x["id"] for x in await conn.fetch("""SELECT id FROM public.users WHERE id = ANY($1::text[]) AND is_archived
                                                         AND coalesce(archived_reason,'') LIKE 'admin_deleted%' AND purge_after < now()""", uids)}
             for tbl, col in (("kyc_documents", "user_id"), ("hospital_staff", "user_id"), ("hospital_profiles", "user_id"),
-                             ("ambulance_providers", "user_id"), ("doctors", "user_id"), ("pathologists", "user_id"),
+                             ("ambulance_providers", "user_id"), ("doctors", "user_id"),
                              ("path_lab_profiles", "user_id"), ("diagnostic_centre_profiles", "user_id")):
                 try:
                     async with conn.transaction():

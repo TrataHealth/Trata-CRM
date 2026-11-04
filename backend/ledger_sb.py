@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import supabase_db as sb
 
 LEDGER_ROLES = {"hospital": "hospital", "ambulance_provider": "ambulance",
-                "pathologist": "pathology", "doctor": "doctor"}
+                "path_lab": "pathology", "diagnostic_centre": "pathology", "doctor": "doctor"}
 
 
 def _j(v):
@@ -37,12 +37,11 @@ async def list_providers(uid: Optional[str] = None) -> List[Dict[str, Any]]:
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT u.id, u.name, u.phone, u.role, u.verification_status, u.created_at,
-                   coalesce(hp.name, ap.business_name, pa.lab_name, d.full_name, u.name) AS display_name,
-                   coalesce(hp.city, ap.city, pa.city, d.city) AS city
+                   coalesce(hp.name, ap.business_name, d.full_name, u.name) AS display_name,
+                   coalesce(hp.city, ap.city, d.city) AS city
               FROM public.users u
          LEFT JOIN public.hospital_profiles hp ON hp.user_id = u.id
          LEFT JOIN public.ambulance_providers ap ON ap.user_id = u.id
-         LEFT JOIN public.pathologists pa ON pa.user_id = u.id
          LEFT JOIN public.doctors d ON d.user_id = u.id
              WHERE u.role = ANY($1::text[]) AND coalesce(u.is_archived, FALSE) = FALSE
                AND ($2::text IS NULL OR u.id = $2::text)
@@ -58,7 +57,6 @@ async def list_providers(uid: Optional[str] = None) -> List[Dict[str, Any]]:
     for r in rows:
         d = dict(r)
         if d["id"] in split:
-            d["role"] = "pathologist"
             kind, nm, city = split[d["id"]]
             d.update(display_name=nm or d["display_name"], city=city or d["city"], lab_kind=kind)
         if _is_test(d["display_name"]) or _is_test(d["name"]):
@@ -78,7 +76,6 @@ async def _id_map(conn, user_ids: Optional[List[str]] = None) -> Dict[str, Dict[
           LEFT JOIN LATERAL (
                SELECT id AS pid FROM public.hospital_profiles WHERE user_id=u.id AND u.role='hospital'
          UNION ALL SELECT id FROM public.ambulance_providers WHERE user_id=u.id AND u.role='ambulance_provider'
-         UNION ALL SELECT id FROM public.pathologists WHERE user_id=u.id AND u.role='pathologist'
          UNION ALL SELECT id FROM public.doctors WHERE user_id=u.id AND u.role='doctor') x ON TRUE""",
         list(LEDGER_ROLES), user_ids)
     m: Dict[str, Dict[str, Any]] = {}

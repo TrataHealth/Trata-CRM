@@ -26,7 +26,7 @@ SPECIALISED = ("cancer_care", "diabetes", "women_baby", "elderly_care", "skin_ha
 ROLES: Dict[str, tuple] = {
     "hospital": ("hospital", "hospital", {}),
     **{r: ("hospital", "hospital", {"hospitalType": "specialised_centre"}) for r in SPECIALISED},
-    "pathologist": ("pathologist", "pathologist", {"providerSubtype": "path_lab"}),
+    "path_lab": ("pathologist", "pathologist", {"providerSubtype": "path_lab"}),
     "diagnostic_centre": ("pathologist", "pathologist", {"providerSubtype": "diagnostic_centre"}),
     "pharmacy": ("pharmacy", "pharmacy", {}),
     "doctor": ("doctor", "doctor", {}),
@@ -44,7 +44,7 @@ ROLES: Dict[str, tuple] = {
 
 
 CONTACT_TYPE = {**{r: "hospital" for r in SPECIALISED}, "mental_wellness": "wellness", "veterinarian": "vet"}
-ROOT_BY_ROLE = {"hospital": "hospital", "pharmacy": "pharmacy", "pathologist": "path_lab", "diagnostic_centre": "diagnostic_centre",
+ROOT_BY_ROLE = {"hospital": "hospital", "pharmacy": "pharmacy", "path_lab": "path_lab", "diagnostic_centre": "diagnostic_centre",
                 "ambulance_provider": "ambulance"}
 
 
@@ -176,7 +176,7 @@ class PendingBody(BaseModel):
 
 
 ENTITY_CONTACT_TYPE = {"hospital": "hospital", "hospital_branch": "hospital", "poly_clinic": "hospital", "health_centre": "hospital",
-                       "pharmacy": "pharmacy", "path_lab": "pathologist", "diagnostic_centre": "diagnostic_centre", "ambulance": "ambulance_provider"}
+                       "pharmacy": "pharmacy", "path_lab": "path_lab", "diagnostic_centre": "diagnostic_centre", "ambulance": "ambulance_provider"}
 ENTITY_LABEL = {"hospital": "Hospital", "hospital_branch": "Hospital branch", "pharmacy": "Pharmacy", "path_lab": "Path lab",
                 "diagnostic_centre": "Diagnostic centre", "poly_clinic": "Poly clinic", "health_centre": "Health centre", "ambulance": "Ambulance unit"}
 

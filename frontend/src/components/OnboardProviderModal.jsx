@@ -8,7 +8,7 @@ const ROLE_OPTIONS = [
   { value: "hospital",           label: "Hospital",           icon: "🏥" },
   { value: "doctor",             label: "Doctor (clinic)",    icon: "🩺" },
   { value: "paramedic",          label: "Paramedic",          icon: "➕" },
-  { value: "pathologist",        label: "Pathology lab",      icon: "🧪" },
+  { value: "path_lab",           label: "Path lab",           icon: "🧪" },
   { value: "pharmacy",           label: "Pharmacy",           icon: "💊" },
   { value: "diagnostic_centre",  label: "Diagnostic centre",  icon: "🔬" },
   { value: "nurse",              label: "Nurse",              icon: "🩹" },
@@ -34,7 +34,7 @@ const ROLE_EXTRA_FIELDS = {
     { key: "specialization",  label: "Skill area",           type: "text",   placeholder: "e.g. ALS / BLS" },
     { key: "license_number",  label: "Certification #",      type: "text",   placeholder: "Optional" },
   ],
-  pathologist: [
+  path_lab: [
     { key: "lab_specialty",   label: "Lab specialty",        type: "text",   placeholder: "e.g. Pathology, Radiology" },
     { key: "license_number",  label: "Lab licence #",        type: "text",   placeholder: "Optional" },
   ],

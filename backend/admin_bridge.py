@@ -279,8 +279,8 @@ async def sync_users_from_admin(db) -> Dict[str, int]:
     Test users (names matching test/probe/it84/demo hospital/dr test) are skipped so the CRM directory
     stays clean of dev fixtures."""
     import re as _re
-    PROVIDER_ROLES = {"ambulance_provider", "hospital", "doctor", "paramedic", "lab", "pathologist", "pharmacy"}
-    ROLE_TO_TYPE = {"lab": "pathologist"}
+    PROVIDER_ROLES = {"ambulance_provider", "hospital", "doctor", "paramedic", "lab", "path_lab", "diagnostic_centre", "pharmacy"}
+    ROLE_TO_TYPE = {"lab": "path_lab", "pathologist": "path_lab"}
     TEST_NAME_RX = _re.compile(r"(test|probe|it84|demo hospital|dr\s*test)", _re.IGNORECASE)
     TEST_NAME_EXACT = {"Sunrise Care Hospital", "Metro Ambulance Ltd", "UI Tester"}
     payload = await admin_api_get("/api/admin/users")
@@ -397,7 +397,7 @@ async def escalation_loop(db, interval_seconds: int = ESCALATION_INTERVAL_SECOND
                 "assigned_agent_id": {"$ne": None},
                 "created_at": {"$lt": rep_cutoff},
                 "escalation_rep_at": {"$exists": False},
-                "type": {"$in": ["ambulance_provider", "hospital", "doctor", "paramedic", "pathologist", "pharmacy"]},
+                "type": {"$in": ["ambulance_provider", "hospital", "doctor", "paramedic", "path_lab", "diagnostic_centre", "pharmacy"]},
             }):
                 agent = await db.crm_users.find_one({"id": c["assigned_agent_id"]}, {"_id": 0, "id": 1, "name": 1, "reports_to": 1})
                 if not agent:

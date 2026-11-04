@@ -10,7 +10,7 @@ from pydantic import BaseModel
 import supabase_db as sb
 
 NON_PROVIDER = ("admin", "patient", "customer")
-ORG_ROLES = ("hospital", "pathologist", "ambulance_provider", "pharmacy")
+ORG_ROLES = ("hospital", "path_lab", "diagnostic_centre", "ambulance_provider", "pharmacy")
 
 
 SERVICE_TYPES = ("pathology", "imaging")

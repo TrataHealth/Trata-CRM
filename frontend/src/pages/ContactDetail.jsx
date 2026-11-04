@@ -156,7 +156,7 @@ export default function ContactDetail() {
         </Link>
       )}
 
-      {c.supabase_user_id && ["hospital", "pharmacy", "pathologist", "diagnostic_centre"].includes(c.type) && (user?.is_master_admin || c.assigned_agent_id === user?.id) && (
+      {c.supabase_user_id && ["hospital", "pharmacy", "path_lab", "diagnostic_centre"].includes(c.type) && (user?.is_master_admin || c.assigned_agent_id === user?.id) && (
         <EntitiesPanel base="/admin/provider-app/contact-entities" params={{ contact_id: c.id }} />
       )}
 

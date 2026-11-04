@@ -5,7 +5,7 @@ import api from "../lib/api";
 import { T, money, thisMonth, STATUS_TONE, pretty, toastErr } from "../components/ledger/ui";
 
 const V_ICON = { hospital: Building2, ambulance: Ambulance, pathology: FlaskConical, path_lab: FlaskConical, diagnostic_centre: ScanLine, doctor: Stethoscope };
-const V_LABEL = { pathology: "Lab (legacy)", path_lab: "Lab Partner", diagnostic_centre: "Imaging & Diagnostics Partner" };
+const V_LABEL = { path_lab: "Path Lab", diagnostic_centre: "Diagnostic Centre" };
 
 const Kpi = ({ label, value, sub, testid }) => (
   <div className={`${T.card} p-4`} data-testid={testid}>
@@ -71,8 +71,8 @@ export default function AdminLedger() {
             </div>
             <select value={vertical} onChange={(e) => setVertical(e.target.value)} className="text-xs normal-case tracking-normal font-normal border border-[#DFE1E6] rounded bg-white px-2 py-1" data-testid="ledger-vertical">
               <option value="all">All types</option><option value="hospital">Hospitals</option><option value="ambulance">Ambulance</option>
-              <option value="pathology">Labs (legacy)</option><option value="path_lab">Lab Partners</option>
-              <option value="diagnostic_centre">Imaging & Diagnostics Partners</option><option value="doctor">Doctors</option>
+              <option value="path_lab">Path Labs</option>
+              <option value="diagnostic_centre">Diagnostic Centres</option><option value="doctor">Doctors</option>
             </select>
             <label className="flex items-center gap-1 normal-case tracking-normal font-normal text-xs text-[#42526E]">
               <input type="checkbox" checked={onlyActive} onChange={(e) => setOnlyActive(e.target.checked)} data-testid="ledger-only-active" /> With Trata patients only

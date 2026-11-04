@@ -223,7 +223,7 @@ async def fetch_network_stats() -> Dict[str, Any]:
               (SELECT count(*) FROM public.users WHERE role = 'ambulance_provider')     AS ambulance_providers,
               (SELECT count(*) FROM public.users WHERE role = 'hospital')               AS hospitals,
               (SELECT count(*) FROM public.users WHERE role = 'doctor')                 AS doctors,
-              (SELECT count(*) FROM public.users WHERE role IN ('lab','pathologist'))   AS pathologists,
+              (SELECT count(*) FROM public.users WHERE role IN ('path_lab','diagnostic_centre','lab')) AS pathologists,
               (SELECT count(*) FROM public.users WHERE role = 'paramedic')              AS paramedics,
               (SELECT count(*) FROM public.users WHERE role = 'pharmacy')               AS pharmacies,
               (SELECT count(*) FROM public.emergency_cases)                             AS cases_total,
@@ -267,7 +267,7 @@ async def fetch_kyc_overview() -> List[Dict[str, Any]]:
               FROM public.users u
          LEFT JOIN public.ambulance_providers ap ON ap.user_id = u.id
          LEFT JOIN public.hospital_profiles  hp ON hp.user_id = u.id
-             WHERE u.role IN ('ambulance_provider','hospital','doctor','paramedic','lab','pathologist','pharmacy')
+             WHERE u.role IN ('ambulance_provider','hospital','doctor','paramedic','lab','path_lab','diagnostic_centre','pharmacy')
           ORDER BY (case when lower(coalesce(u.verification_status,'')) in ('pending','pending_review','pending_address','submitted','') then 0 else 1 end),
                    u.created_at DESC NULLS LAST
         """)
@@ -453,7 +453,7 @@ _VERTICAL_PROFILE_SPEC = {
     "hospital":   ("hospital_profiles",  "name",         ["capacity", "available_beds", "specialization", "facilities"]),
     "doctor":     ("doctors",            "full_name",    ["specialization", "qualification", "experience", "doctor_type"]),
     "paramedic":  ("paramedic_profiles", "full_name",    ["skills", "average_response_time", "total_cases_handled", "rating"]),
-    "pathology":  ("pathologists",       "lab_name",     ["registration_number", "gst_number", "display_name"]),
+    "pathology":  ("path_lab_profiles",  "name",         ["registration_number", "licence_no", "gst_number", "display_name", "service_types"]),
     "pharmacy":   ("pharmacy_providers", "business_name",["drug_license_number", "gst_number", "owner_name"]),
 }
 
@@ -467,6 +467,8 @@ async def fetch_generic_provider_dashboard(user_id: str, vertical: str) -> Dict[
     table, name_col, extras = spec
     pool = await get_pool()
     async with pool.acquire() as conn:
+        if vertical == "pathology":
+            table = LAB_KINDS[(await _lab_profile(conn, user_id))[0] or "path_lab"][0]
         # Columns to always fetch when they exist. We check first to keep this table-agnostic.
         cols = {c["column_name"] for c in await conn.fetch(
             "SELECT column_name FROM information_schema.columns WHERE table_name=$1", table)}
@@ -967,7 +969,6 @@ _PROFILE_TABLE_BY_VERTICAL = {
     "hospital":  "hospital_profiles",
     "ambulance": "ambulance_providers",
     "doctor":    "doctors",
-    "pathology": "pathologists",
 }
 
 
@@ -1145,29 +1146,20 @@ _SB_ROLE_BY_VERTICAL = {
     "hospital": "hospital",
     "ambulance": "ambulance_provider",
     "doctor": "doctor",
-    "pathology": "pathologist",
 }
+# Labs: users.role is the entity type itself (path_lab | diagnostic_centre) — 'pathologist' is a staff type now.
+LAB_ROLES = ("path_lab", "diagnostic_centre")
 
 
 # ── Path Lab / Diagnostic Centre split (Provider-app owned canonical tables) ──
-LAB_KINDS = {"path_lab": ("path_lab_profiles", "path_lab_branches", "path_lab_profile_id"),
-             "diagnostic_centre": ("diagnostic_centre_profiles", "diagnostic_centre_branches", "diagnostic_centre_profile_id")}
-_lab_split = {"at": 0.0, "live": False}
+# Diagnostic centre first: some DC accounts still own a deprecated shadow path_lab row.
+LAB_KINDS = {"diagnostic_centre": ("diagnostic_centre_profiles", "diagnostic_centre_branches", "diagnostic_centre_profile_id"),
+             "path_lab": ("path_lab_profiles", "path_lab_branches", "path_lab_profile_id")}
 
 
 async def lab_split_live() -> bool:
-    """True once all four new tables exist; re-checked every 10 min so the CRM
-    switches over automatically on cut-over day without a deploy."""
-    import time as _t
-    if _t.time() - _lab_split["at"] < 600:
-        return _lab_split["live"]
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        n = await conn.fetchval("""SELECT count(*) FROM information_schema.tables WHERE table_schema='public'
-                                   AND table_name = ANY($1::text[])""",
-                                ["path_lab_profiles", "path_lab_bookings", "diagnostic_centre_profiles", "diagnostic_bookings"])
-    _lab_split.update(at=_t.time(), live=n == 4)
-    return _lab_split["live"]
+    """Labs consolidation (2026-06-15) is live — the legacy pathologists tables are gone."""
+    return True
 
 
 async def _lab_profile(conn, user_id: str):
@@ -1196,8 +1188,8 @@ async def create_provider_from_admin(phone: str, name: str, vertical: str,
                                      lab_kind: str = "path_lab") -> Dict[str, Any]:
     """Canonical onboarding: `users` row + canonical profile row (user_id = users.id)
     with coordinates in each table's native shape. Never writes tratax_tenants."""
-    sb_role = _SB_ROLE_BY_VERTICAL.get(vertical)
-    if not sb_role:
+    sb_role = lab_kind if vertical == "pathology" else _SB_ROLE_BY_VERTICAL.get(vertical)
+    if not sb_role or (vertical == "pathology" and lab_kind not in LAB_ROLES):
         return {"success": False, "reason": f"unsupported_vertical:{vertical}"}
     has_loc = valid_coords(lat, lng)
     if vertical != "doctor" and not has_loc:
@@ -1206,7 +1198,6 @@ async def create_provider_from_admin(phone: str, name: str, vertical: str,
     flat = float(lat) if has_loc else None
     flng = float(lng) if has_loc else None
     import uuid as _uuid
-    split = vertical == "pathology" and await lab_split_live()
     pool = await get_pool()
     existing = None
     async with pool.acquire() as conn:
@@ -1254,7 +1245,7 @@ async def create_provider_from_admin(phone: str, name: str, vertical: str,
                     SELECT $1::text, $2::text, $3, $4, $5, $6, $7, FALSE, TRUE, now()
                      WHERE NOT EXISTS (SELECT 1 FROM public.doctors WHERE user_id = $2::text)
                 """, prof_id, user_id, name, phone, email, city, state)
-            elif vertical == "pathology" and split:
+            elif vertical == "pathology":
                 tbl, btbl, fk = LAB_KINDS[lab_kind]
                 await conn.execute(f"""
                     INSERT INTO public.{tbl}
@@ -1270,46 +1261,8 @@ async def create_provider_from_admin(phone: str, name: str, vertical: str,
                     SELECT $1::text, $2::text, $3, $4, $5, $6, $7, $8, $9, FALSE, FALSE, now(), now()
                      WHERE NOT EXISTS (SELECT 1 FROM public.{btbl} WHERE {fk} = $2::text)
                 """, str(_uuid.uuid4()), pid, name, phone, address, city, state, flat, flng)
-            elif vertical == "pathology":
-                await conn.execute("""
-                    INSERT INTO public.pathologists
-                      (id, user_id, name, lab_name, phone, city, state, address, email,
-                       latitude, longitude, location, status, is_active, is_verified, created_at)
-                    SELECT $1::text, $2::text, $3, $3, $4, $5, $6, $7, $8, $9, $10, $11::json,
-                           'pending', TRUE, FALSE, now()
-                     WHERE NOT EXISTS (SELECT 1 FROM public.pathologists WHERE user_id = $2::text)
-                """, prof_id, user_id, name, phone, city, state, address, email, flat, flng, loc_json)
-                await conn.execute("""
-                    UPDATE public.pathologists SET latitude=$2, longitude=$3, location=$4::json
-                     WHERE user_id=$1::text AND latitude IS NULL""", user_id, flat, flng, loc_json)
-                path_id = await conn.fetchval("SELECT id FROM public.pathologists WHERE user_id=$1::text", user_id)
-                await _ensure_lab_branch(conn, path_id, active=False, lab_type=lab_kind)
     return {"success": True, "user_id": user_id, "role": sb_role, "already_existed": bool(existing),
-            "storage": (LAB_KINDS[lab_kind][0] if split else "pathologists+labs") if vertical == "pathology" else None}
-
-
-async def _ensure_lab_branch(conn, pathologist_id: str, active: bool, lab_type: Optional[str] = None) -> None:
-    """Create/refresh the `labs` branch row linked via labs.pathologist_profile_id.
-    `labs` has no status column — visibility = is_active + latitude/longitude."""
-    p = await conn.fetchrow("""SELECT id, name, lab_name, display_name, phone, email, city, state,
-                                      address, pincode, latitude, longitude
-                                 FROM public.pathologists WHERE id=$1""", pathologist_id)
-    if not p:
-        return
-    r = await conn.execute("""
-        UPDATE public.labs SET is_active=$2, is_verified=$2,
-               latitude=COALESCE($3, latitude), longitude=COALESCE($4, longitude), updated_at=now()
-         WHERE pathologist_profile_id=$1""", pathologist_id, active, p["latitude"], p["longitude"])
-    if r.endswith(" 0"):
-        import uuid as _uuid
-        await conn.execute("""
-            INSERT INTO public.labs
-              (id, name, display_name, phone, email, address, city, state, pincode,
-               latitude, longitude, is_active, is_verified, pathologist_profile_id, lab_type, created_at, updated_at)
-            VALUES ($1::text, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13, $14, now(), now())
-        """, str(_uuid.uuid4()), p["lab_name"] or p["name"], p["display_name"] or p["lab_name"] or p["name"],
-             p["phone"], p["email"], p["address"], p["city"], p["state"], p["pincode"],
-             p["latitude"], p["longitude"], active, pathologist_id, lab_type or "path_lab")
+            "storage": LAB_KINDS[lab_kind][0] if vertical == "pathology" else None}
 
 
 async def admin_upload_kyc_document(user_id: str, vertical: str,
@@ -1350,11 +1303,7 @@ async def _profile_coords(conn, user_id: str, vertical: str):
         except Exception:
             return None, None
     if vertical == "pathology":
-        if await lab_split_live():
-            _k, r = await _lab_profile(conn, user_id)
-            if r:
-                return r["latitude"], r["longitude"]
-        r = await conn.fetchrow("SELECT latitude, longitude FROM public.pathologists WHERE user_id=$1::text", user_id)
+        _k, r = await _lab_profile(conn, user_id)
         return (r["latitude"], r["longitude"]) if r else (None, None)
     if vertical == "ambulance":
         r = await conn.fetchrow("SELECT business_lat, business_lng FROM public.ambulance_providers WHERE user_id=$1::text", user_id)
@@ -1402,7 +1351,7 @@ async def approve_all_provider_kyc(user_id: str, vertical: str, admin_name: Opti
                 await conn.execute(
                     "UPDATE public.doctors SET verification_status='verified', is_verified=TRUE, is_active=TRUE, updated_at=now() WHERE user_id=$1::text",
                     user_id)
-            elif vertical == "pathology" and await lab_split_live() and (await _lab_profile(conn, user_id))[0]:
+            elif vertical == "pathology" and (await _lab_profile(conn, user_id))[0]:
                 kind, prof = await _lab_profile(conn, user_id)
                 tbl, btbl, fk = LAB_KINDS[kind]
                 await conn.execute(f"""UPDATE public.{tbl} SET is_verified=TRUE, is_active=TRUE, needs_admin_review=FALSE,
@@ -1410,15 +1359,6 @@ async def approve_all_provider_kyc(user_id: str, vertical: str, admin_name: Opti
                 await conn.execute(f"""UPDATE public.{btbl} SET is_verified=TRUE, is_active=TRUE,
                                         latitude=COALESCE(latitude, $2), longitude=COALESCE(longitude, $3), updated_at=now()
                                         WHERE {fk}=$1""", prof["id"], lat, lng)
-            elif vertical == "pathology":
-                path_id = await conn.fetchval("""
-                    UPDATE public.pathologists SET status='approved', is_verified=TRUE, is_active=TRUE,
-                           approved_at=now(), approved_by=$2, latitude=$3, longitude=$4,
-                           location=$5::json, updated_at=now()
-                     WHERE user_id=$1::text RETURNING id
-                """, user_id, admin, lat, lng, json.dumps({"lat": lat, "lng": lng}))
-                if path_id:
-                    await _ensure_lab_branch(conn, path_id, active=True)
     return {"success": True, "docs_approved": approved_docs, "vertical": vertical,
             "location": {"lat": lat, "lng": lng} if lat is not None else None}
 
@@ -1459,7 +1399,7 @@ async def list_admin_onboarded_providers(limit: int = 100) -> List[Dict[str, Any
                    (SELECT count(*) FROM public.kyc_documents k
                       WHERE k.user_id = u.id AND lower(coalesce(k.status,'')) IN ('','pending','submitted','uploaded')) AS docs_pending
               FROM public.users u
-             WHERE u.role IN ('hospital','ambulance_provider','doctor','pathologist')
+             WHERE u.role IN ('hospital','ambulance_provider','doctor','path_lab','diagnostic_centre')
              ORDER BY u.created_at DESC NULLS LAST
              LIMIT $1
         """, limit)
@@ -1490,6 +1430,8 @@ async def fetch_provider_full_details(user_id: str, vertical: str, phone: Option
     async with pool.acquire() as conn:
         spec = _VERTICAL_PROFILE_SPEC.get(vertical)
         table = spec[0] if spec else {"ambulance": "ambulance_providers"}.get(vertical)
+        if vertical == "pathology":
+            table = LAB_KINDS[(await _lab_profile(conn, str(user_id)))[0] or "path_lab"][0]
         profile = await conn.fetchrow(f"SELECT * FROM public.{table} WHERE user_id::text = $1 LIMIT 1", str(user_id)) if table else None
         if not profile:  # Phase D: fall back to whichever canonical table holds this users.id
             for t in ("diagnostic_centre_profiles", "path_lab_profiles", "hospital_profiles", "doctors",
@@ -1727,12 +1669,14 @@ _SB_ROLE_TO_CRM_TYPE = {
     "hospital":           "hospital",
     "ambulance_provider": "ambulance_provider",
     "doctor":             "doctor",
-    "pathologist":        "pathologist",
+    "path_lab":           "path_lab",
+    "diagnostic_centre":  "diagnostic_centre",
+    "pathologist":        "path_lab",
     "paramedic":          "paramedic",
     "pharmacy":           "pharmacy",
     "pharmacist":         "pharmacy",
-    "lab":                "pathologist",
-    "lab_tech":           "pathologist",
+    "lab":                "path_lab",
+    "lab_tech":           "path_lab",
     "dental":             "dental",
     "nutritionist":       "nutritionist",
     "wellness":           "wellness",
@@ -1774,9 +1718,8 @@ async def list_all_users_for_crm_sync(limit: int = 2000) -> List[Dict[str, Any]]
               SELECT 1, user_id, business_name, phone, city, state, address, verification_status
                 FROM public.pharmacy_providers
               UNION ALL
-              SELECT 2, user_id, coalesce(lab_name, name) AS name, phone, city, state, address,
-                     status AS vstatus
-                FROM public.pathologists
+              SELECT 1, user_id, name, phone, city, state, address, verification_status
+                FROM public.diagnostic_centre_profiles
             )
             SELECT u.id, u.phone, u.name AS user_name, u.email, u.role, u.user_type,
                    u.is_active, u.verification_status, u.created_at, u.updated_at,

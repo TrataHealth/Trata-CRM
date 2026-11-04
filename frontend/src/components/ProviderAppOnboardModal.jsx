@@ -4,7 +4,7 @@ import api from "../lib/api";
 
 // Mirrors the Provider app role picker (mobile/app/index.tsx) and each role's sign-up form (unified-signup.tsx).
 const GROUPS = [
-  ["Hospitals and its Care Facilities", [["hospital", "Multi & Super Speciality Hospital"], ["pathologist", "Path Lab"], ["diagnostic_centre", "Diagnostic Centre"], ["pharmacy", "Pharmacy"]]],
+  ["Hospitals and its Care Facilities", [["hospital", "Multi & Super Speciality Hospital"], ["path_lab", "Path Lab"], ["diagnostic_centre", "Diagnostic Centre"], ["pharmacy", "Pharmacy"]]],
   ["Speciality centres", [["cancer_care", "Cancer Care"], ["diabetes", "Diabetes"], ["women_baby", "Women & Baby Care"], ["nursing_home", "Nursing Homes"], ["elderly_care", "Elderly Care"]]],
   ["Doctor and Other Healthcare Professionals", [["doctor", "Doctor"], ["nurse", "Nurse"], ["mental_wellness", "Mental Wellness"], ["nutritionist", "Nutritionist"]]],
   ["Emergency and Medical Support", [["ambulance_provider", "Ambulance Service"], ["ambulance_driver", "Ambulance Driver"], ["paramedic", "Paramedic"], ["blood_bank", "Blood Banks"]]],
@@ -23,7 +23,7 @@ const WELLNESS = [F("fullName", "Full name", { req: true }), F("email", "Email")
   F("yearsExperience", "Years of experience", { num: true }), F("businessName", "Clinic name"), ...ADDR.slice(1)];
 const SCHEMA = {
   hospital: HOSPITAL, cancer_care: HOSPITAL, diabetes: HOSPITAL, women_baby: HOSPITAL, nursing_home: HOSPITAL, elderly_care: HOSPITAL, skin_hair: HOSPITAL,
-  pathologist: LAB, diagnostic_centre: LAB,
+  path_lab: LAB, diagnostic_centre: LAB,
   pharmacy: [F("ownerName", "Owner name", { req: true }), F("businessName", "Pharmacy name", { req: true }), F("email", "Email"), F("drugLicenseNumber", "Drug licence number", { req: true }),
     F("gstNumber", "GST number"), F("pharmacistCouncilReg", "Pharmacist council reg."), F("is24x7", "Open 24x7", { bool: true }), F("homeDelivery", "Home delivery", { bool: true }),
     F("deliveryRadiusKm", "Delivery radius (km)", { num: true }), ...ADDR],

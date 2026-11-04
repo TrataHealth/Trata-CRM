@@ -20,7 +20,7 @@ PATIENT_EXCLUDE_RE = PROVIDER_RE.replace("|users$)", ")")
 
 
 # Rows that "are" a person/organisation; ids found on them pull in that record's linked rows (tenant, KYC application...).
-PROFILE_RE = (r"^(users|.*_profiles|.*_providers|labs|doctors|pathologists|org_entities|organisations|tratax_tenants|"
+PROFILE_RE = (r"^(users|.*_profiles|.*_providers|labs|doctors|lab_staff|org_entities|organisations|tratax_tenants|"
               r"tratax_kyc_applications|customer_profiles|sanjeevani_agents)$")
 
 

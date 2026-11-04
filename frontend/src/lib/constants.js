@@ -4,7 +4,7 @@ export const CONTACT_TYPES = [
   { value: "hospital", label: "Hospitals", icon: "Building2" },
   { value: "paramedic", label: "Paramedics", icon: "Cross" },
   { value: "ambulance_provider", label: "Ambulance", icon: "Ambulance" },
-  { value: "pathologist", label: "Pathology Labs", icon: "FlaskConical" },
+  { value: "path_lab", label: "Path Labs", icon: "FlaskConical" },
   { value: "diagnostic_centre", label: "Diagnostic Centres", icon: "ScanSearch" },
   { value: "pharmacy", label: "Pharmacies", icon: "Pill" },
   { value: "blood_bank", label: "Blood Banks", icon: "Droplet" },

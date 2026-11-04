@@ -81,7 +81,7 @@ PROVIDER_ROLES = {"provider_owner"}
 PROVIDER_TYPE_TO_CONTACT_TYPE = {
     "ambulance":   "ambulance_provider",
     "hospital":    "hospital",
-    "pathology":   "pathologist",
+    "pathology":   "path_lab",
     "doctor":      "doctor",
     "paramedic":   "paramedic",
     "pharmacy":    "pharmacy",
@@ -399,6 +399,8 @@ SUPABASE_ROLE_TO_PROVIDER_TYPE = {
     "ambulance_provider": "ambulance",
     "hospital":           "hospital",
     "doctor":             "doctor",
+    "path_lab":           "pathology",
+    "diagnostic_centre":  "pathology",
     "pathologist":        "pathology",
     "lab":                "pathology",
     "lab_tech":           "pathology",
@@ -445,7 +447,7 @@ async def _refresh_provider_user_from_supabase(existing: Dict[str, Any], phone: 
                        -- Prefer a row whose role is one of our supported provider verticals,
                        -- so a stale duplicate (e.g. same phone kept with role='admin') never
                        -- shadows the real provider record.
-                       CASE WHEN role IN ('ambulance_provider','hospital','doctor','pathologist','lab','lab_tech','pharmacy','pharmacist')
+                       CASE WHEN role IN ('ambulance_provider','hospital','doctor','path_lab','diagnostic_centre','lab','lab_tech','pharmacy','pharmacist')
                             THEN 0 ELSE 1 END,
                        -- Then prefer the exact 10-digit variant we normalise on
                        CASE WHEN phone = $1 THEN 0 ELSE 1 END,
@@ -502,7 +504,7 @@ async def _try_supabase_provider_lookup(phone: str) -> Optional[dict]:
                 WHERE phone IN ($1, $2)
                 ORDER BY
                    -- Prefer any row whose role is a supported provider vertical
-                   CASE WHEN role IN ('ambulance_provider','hospital','doctor','pathologist','lab','lab_tech','pharmacy','pharmacist')
+                   CASE WHEN role IN ('ambulance_provider','hospital','doctor','path_lab','diagnostic_centre','lab','lab_tech','pharmacy','pharmacist')
                         THEN 0 ELSE 1 END,
                    -- Then prefer paramedic (blocked, but we still want a clean message)
                    CASE WHEN role = 'paramedic' THEN 0 ELSE 1 END,
@@ -528,11 +530,12 @@ async def _try_supabase_provider_lookup(phone: str) -> Optional[dict]:
             "hospital":  "hospital_profiles",
             "doctor":    "doctors",
             "paramedic": "paramedic_profiles",
-            "pathology": "pathologists",
             "pharmacy":  "pharmacy_providers",
         }
         profile_id = None
         table = _PROFILE_TABLE.get(provider_type)
+        if provider_type == "pathology":
+            table = sb.LAB_KINDS[(await sb._lab_profile(conn, str(r["id"])))[0] or "path_lab"][0]
         if table:
             pr = await conn.fetchrow(f"SELECT id FROM public.{table} WHERE user_id = $1", r["id"])
             profile_id = pr["id"] if pr else None
@@ -745,7 +748,8 @@ _BUSINESS_NAME_SQL = {
     "hospital": "SELECT name FROM public.hospital_profiles WHERE user_id = $1",
     "ambulance": "SELECT business_name FROM public.ambulance_providers WHERE user_id = $1",
     "pharmacy": "SELECT business_name FROM public.pharmacy_providers WHERE user_id = $1",
-    "pathology": "SELECT coalesce(lab_name, name) FROM public.pathologists WHERE user_id = $1",
+    "pathology": """SELECT coalesce((SELECT name FROM public.diagnostic_centre_profiles WHERE user_id = $1),
+                                    (SELECT coalesce(display_name, name) FROM public.path_lab_profiles WHERE user_id = $1))""",
     "doctor": "SELECT full_name FROM public.doctors WHERE user_id = $1",
 }
 
@@ -1052,7 +1056,7 @@ async def dashboard_stats(range_key: str = Query("7d", alias="range"), current=D
 
     total_contacts = await db.contacts.count_documents(_REAL_ONLY)
     by_type = {}
-    for t in ["patient", "doctor", "hospital", "paramedic", "ambulance_provider", "pathologist", "diagnostic_centre",
+    for t in ["patient", "doctor", "hospital", "paramedic", "ambulance_provider", "path_lab", "diagnostic_centre",
               "pharmacy", "blood_bank", "ambulance_driver", "nurse", "dental", "nutritionist", "wellness", "vet", "wellness_event"]:
         by_type[t] = await db.contacts.count_documents({**_REAL_ONLY, "type": t})
 
@@ -1349,7 +1353,7 @@ async def list_contacts(
 # admin app's onboarding flow). Creates a CRM contact and emits crm.lead.created →
 # user.upsert outbound so the Trata Admin App + Provider App see the same user.
 PROVIDER_ROLES_ALLOWED = {
-    "ambulance_provider", "hospital", "doctor", "paramedic", "pathologist", "pharmacy",
+    "ambulance_provider", "hospital", "doctor", "paramedic", "path_lab", "pharmacy",
     "nurse", "diagnostic_centre",
 }
 
@@ -1478,7 +1482,7 @@ def _user_type_for_role(role: str) -> str:
         "hospital": "hospital_admin",
         "doctor": "doctor",
         "paramedic": "paramedic",
-        "pathologist": "lab",
+        "path_lab": "lab",
         "diagnostic_centre": "lab",
         "nurse": "nurse",
         "pharmacy": "pharmacy",
@@ -1561,7 +1565,7 @@ async def admin_onboarding_create_provider(body: AdminOnboardProviderBody, curre
     if not phone or len(phone) != 10:
         raise HTTPException(status_code=400, detail="A valid 10-digit phone is required")
     if body.vertical == "pathology" and body.lab_kind not in sb.LAB_KINDS:
-        raise HTTPException(status_code=400, detail="Choose Lab Partner (path_lab) or Imaging & Diagnostics Partner (diagnostic_centre)")
+        raise HTTPException(status_code=400, detail="Choose Path Lab (path_lab) or Diagnostic Centre (diagnostic_centre)")
     if body.vertical != "doctor" and not sb.valid_coords(body.lat, body.lng):
         raise HTTPException(status_code=400, detail="Valid latitude and longitude are required so the provider is discoverable in the Patient App")
 
@@ -1577,7 +1581,7 @@ async def admin_onboarding_create_provider(body: AdminOnboardProviderBody, curre
     sb_user_id = sb_res["user_id"]
 
     # 2) CRM crm_users row so this phone can log in on the PC console.
-    contact_type = PROVIDER_TYPE_TO_CONTACT_TYPE.get(body.vertical, body.vertical)
+    contact_type = body.lab_kind if body.vertical == "pathology" else PROVIDER_TYPE_TO_CONTACT_TYPE.get(body.vertical, body.vertical)
     existing_cu = await db.crm_users.find_one({"phone": phone}, {"_id": 0})
     if existing_cu:
         await db.crm_users.update_one({"phone": phone}, {"$set": {
@@ -1941,7 +1945,7 @@ async def get_pipeline(current=Depends(require_internal)):
     out = {}
     for s in stages:
         items = await db.contacts.find(
-            {"pipeline_stage": s, "type": {"$in": ["doctor", "hospital", "paramedic", "ambulance_provider", "pathologist"]}},
+            {"pipeline_stage": s, "type": {"$in": ["doctor", "hospital", "paramedic", "ambulance_provider", "path_lab", "diagnostic_centre"]}},
             {"_id": 0, "id": 1, "name": 1, "type": 1, "phone": 1, "city": 1, "specialization": 1, "created_at": 1, "deal_value": 1, "avatar": 1},
         ).sort("created_at", -1).limit(50).to_list(50)
         out[s] = items
@@ -3903,7 +3907,7 @@ async def seed_demo_accounts(current=Depends(get_current_user)):
     PROVIDER_TYPE_TO_SB_ROLE = {
         "ambulance": "ambulance_provider", "hospital": "hospital",
         "doctor": "doctor",
-        "pathology": "pathologist",
+        "pathology": "path_lab",
     }
     default_pwd_hash = hash_password("Trata@123")
     _DEMO_NS = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -3974,10 +3978,10 @@ async def seed_demo_accounts(current=Depends(get_current_user)):
                         sb_profile_id, sb_user_id, name, phone)
                 elif ptype == "pathology":
                     await conn.execute("""
-                        INSERT INTO public.pathologists
-                          (id, user_id, name, lab_name, phone, city, state, status, is_active, created_at)
-                        SELECT $1::text, $2::text, $3, $3, $4, $5, $6, 'pending', TRUE, now()
-                         WHERE NOT EXISTS (SELECT 1 FROM public.pathologists WHERE user_id = $2::text)""",
+                        INSERT INTO public.path_lab_profiles
+                          (id, user_id, name, phone, city, state, verification_status, is_active, is_demo, created_at, updated_at)
+                        SELECT $1::text, $2::text, $3, $4, $5, $6, 'pending', TRUE, TRUE, now(), now()
+                         WHERE NOT EXISTS (SELECT 1 FROM public.path_lab_profiles WHERE user_id = $2::text)""",
                         sb_profile_id, sb_user_id, name, phone, city, state)
             return sb_user_id
         except Exception as e:
@@ -4156,7 +4160,8 @@ async def purge_test_users(body: Optional[TestUserPurgeBody] = None, current=Dep
             await conn.execute("DELETE FROM public.hospital_profiles    WHERE user_id = ANY($1::text[])", user_ids)
             await conn.execute("DELETE FROM public.ambulance_providers  WHERE user_id = ANY($1::text[])", user_ids)
             await conn.execute("DELETE FROM public.doctors              WHERE user_id = ANY($1::text[])", user_ids)
-            await conn.execute("DELETE FROM public.pathologists         WHERE user_id = ANY($1::text[])", user_ids)
+            await conn.execute("DELETE FROM public.path_lab_profiles    WHERE user_id = ANY($1::text[])", user_ids)
+            await conn.execute("DELETE FROM public.diagnostic_centre_profiles WHERE user_id = ANY($1::text[])", user_ids)
             # Soft-archive the user (no cascade needed, history preserved)
             archived = await conn.execute("""
                 UPDATE public.users
@@ -4353,7 +4358,7 @@ async def _do_seed(force: bool = False) -> dict:
             name = f"{random.choice(['Speed', 'Quick', 'Rapid', 'Lifesaver', 'Emergency', 'Sanjeevani', 'Helping'])} Ambulance Service"
             avatar = None
             spec = f"{random.randint(2, 25)} vehicles"
-        elif type_ == "pathologist":
+        elif type_ == "path_lab":
             name = f"{random.choice(['Dr.', ''])} {first} {last} Lab".strip()
             avatar = None
             spec = random.choice(["Blood Tests", "Imaging", "Pathology", "Full Diagnostic"])
@@ -4385,7 +4390,7 @@ async def _do_seed(force: bool = False) -> dict:
             "created_at": (datetime.now(timezone.utc) - timedelta(days=random.randint(0, 90))).isoformat(),
             "notes": None,
             "meta": {
-                "license_number": f"LIC-{random.randint(10000, 99999)}" if type_ in ("doctor", "hospital", "ambulance_provider", "pathologist") else None,
+                "license_number": f"LIC-{random.randint(10000, 99999)}" if type_ in ("doctor", "hospital", "ambulance_provider", "path_lab") else None,
                 "experience_years": random.randint(2, 30) if type_ == "doctor" else None,
                 "total_beds": random.randint(50, 500) if type_ == "hospital" else None,
                 "available_beds": random.randint(0, 100) if type_ == "hospital" else None,
@@ -4394,7 +4399,7 @@ async def _do_seed(force: bool = False) -> dict:
         }
 
     # build dataset
-    counts = {"patient": 80, "doctor": 35, "hospital": 18, "paramedic": 25, "ambulance_provider": 14, "pathologist": 10}
+    counts = {"patient": 80, "doctor": 35, "hospital": 18, "paramedic": 25, "ambulance_provider": 14, "path_lab": 10}
     for t, n in counts.items():
         for i in range(n):
             contacts.append(make_contact(t, i))
@@ -4412,7 +4417,7 @@ async def _do_seed(force: bool = False) -> dict:
     doctor_contacts = [c for c in contacts if c["type"] == "doctor"]
     hospital_contacts = [c for c in contacts if c["type"] == "hospital"]
     ambulance_contacts = [c for c in contacts if c["type"] == "ambulance_provider"]
-    pathology_contacts = [c for c in contacts if c["type"] == "pathologist"]
+    pathology_contacts = [c for c in contacts if c["type"] in ("path_lab", "diagnostic_centre")]
 
     def make_activity(category, contact, days_back_max=60, extra=None):
         days_back = random.randint(0, days_back_max)
@@ -4594,7 +4599,7 @@ async def _do_seed(force: bool = False) -> dict:
     name_by_id = {}
     async for u in db.crm_users.find({"id": {"$in": sales_agent_ids}}, {"_id": 0, "id": 1, "name": 1}):
         name_by_id[u["id"]] = u["name"]
-    provider_contacts_for_sales = [c for c in contacts if c["type"] in ("hospital", "doctor", "ambulance_provider", "pathologist", "paramedic")]
+    provider_contacts_for_sales = [c for c in contacts if c["type"] in ("hospital", "doctor", "ambulance_provider", "path_lab", "diagnostic_centre", "paramedic")]
     for idx, c in enumerate(provider_contacts_for_sales):
         if not sales_agent_ids:
             break
@@ -5365,7 +5370,7 @@ async def upstream_kyc_overview(current=Depends(require_internal)):
     users_payload = await admin_api_get_via_bridge("/api/admin/users")
     users = (users_payload or {}).get("users", []) if users_payload else []
     # Provider verticals only — patients/admins shouldn't appear in the KYC manager.
-    PROVIDER_ROLES = {"ambulance_provider", "hospital", "doctor", "paramedic", "lab", "pathologist", "pharmacy"}
+    PROVIDER_ROLES = {"ambulance_provider", "hospital", "doctor", "paramedic", "lab", "path_lab", "diagnostic_centre", "pharmacy"}
     providers = [u for u in users if u.get("role") in PROVIDER_ROLES]
 
     # Cross-reference with this CRM's contacts so we can show the assigned agent, KYC status,
@@ -6254,6 +6259,8 @@ import doctor_appointments as _doctor_appts  # noqa: E402
 app.include_router(_doctor_appts.create_doctor_router(get_current_user))
 import directory as _directory  # noqa: E402
 app.include_router(_directory.create_directory_router(get_current_user))
+import lab_staff as _lab_staff  # noqa: E402
+app.include_router(_lab_staff.create_lab_staff_router(get_current_user))
 
 
 @app.on_event("startup")

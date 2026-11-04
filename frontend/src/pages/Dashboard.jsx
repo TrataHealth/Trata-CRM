@@ -20,7 +20,7 @@ import {
 
 const TYPE_ICONS = {
   patient: UserIcon, doctor: Stethoscope, hospital: Building2,
-  paramedic: Cross, ambulance_provider: Ambulance, pathologist: FlaskConical, diagnostic_centre: ScanSearch,
+  paramedic: Cross, ambulance_provider: Ambulance, path_lab: FlaskConical, diagnostic_centre: ScanSearch,
   pharmacy: Pill, blood_bank: Droplet, ambulance_driver: Truck, nurse: HeartPulse, dental: Smile,
   nutritionist: Apple, wellness: Brain, vet: PawPrint, wellness_event: Tent,
 };

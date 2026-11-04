@@ -48,8 +48,10 @@ ROLE_TO_TYPE = {
     "doctor": "doctor",
     "hospital": "hospital",
     "ambulance_provider": "ambulance_provider",
-    "pathologist": "pathologist",
-    "pathology": "pathologist",
+    "path_lab": "path_lab",
+    "diagnostic_centre": "diagnostic_centre",
+    "pathologist": "path_lab",
+    "pathology": "path_lab",
 }
 
 
@@ -174,7 +176,7 @@ class UpstreamSync:
 
         # 1) Users (paginate)
         all_users: List[Dict[str, Any]] = []
-        for role in ["customer", "patient", "doctor", "paramedic", "hospital", "ambulance_provider", "pathologist"]:
+        for role in ["customer", "patient", "doctor", "paramedic", "hospital", "ambulance_provider", "path_lab", "diagnostic_centre"]:
             for skip in range(0, 2000, 200):
                 data = await self._get("/api/admin/users", {"role": role, "skip": skip, "limit": 200})
                 if not data:

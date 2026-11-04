@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # crm type -> (canonical table, name column)
 TABLES = {
     "hospital": ("hospital_profiles", "name"),
-    "pathologist": ("path_lab_profiles", "name"),
+    "path_lab": ("path_lab_profiles", "name"),
     "doctor": ("doctors", "full_name"),
     "pharmacy": ("pharmacy_providers", "business_name"),
     "ambulance_provider": ("ambulance_providers", "business_name"),
@@ -27,7 +27,7 @@ TABLES = {
 }
 # Phase D follow-up: nurse / paramedic leads are a users row only (right role, no profile table yet).
 USER_ONLY = {"nurse", "paramedic"}
-ROLE_ALIASES = {"lab": "pathologist", "lab_tech": "pathologist", "pathology": "pathologist", "ambulance": "ambulance_provider",
+ROLE_ALIASES = {"lab": "path_lab", "lab_tech": "path_lab", "pathology": "path_lab", "pathologist": "path_lab", "ambulance": "ambulance_provider",
                 "diagnostic_centre_admin": "diagnostic_centre"}
 ADDRESS_RULE_TABLES = {"path_lab_profiles", "diagnostic_centre_profiles"}
 LICENSE_COL = {"path_lab_profiles": "registration_number", "pharmacy_providers": "drug_license_number"}
@@ -142,7 +142,7 @@ async def _table_for(conn, type_: str, uid: Optional[str]):
     """Pathologist accounts may live in diagnostic_centre_profiles (6th canonical table, same users.id).
     The diagnostic-centre row wins over a deprecated shadow path_lab row (sibling_path_lab_id)."""
     table, name_col = TABLES[type_]
-    if type_ == "pathologist" and uid and await conn.fetchval(
+    if type_ == "path_lab" and uid and await conn.fetchval(
             "SELECT 1 FROM public.diagnostic_centre_profiles WHERE user_id = $1", uid):
         return TABLES["diagnostic_centre"]
     return table, name_col
@@ -275,15 +275,13 @@ _union_sql: Optional[str] = None
 
 
 async def union_sql(conn) -> str:
-    """UNION ALL of the 6 canonical tables (diagnostic centres show up as type 'pathologist' for the CRM)."""
+    """UNION ALL of the 6 canonical tables; labs report as entity type path_lab / diagnostic_centre (§7)."""
     global _union_sql
     if _union_sql is None:
         parts = []
         for t, (tbl, n) in TABLES.items():
             cols = await _columns(conn, tbl)
-            # §3: a centre counts as pathology only when 'pathology' = ANY(service_types)
-            crm_type = ("CASE WHEN 'pathology' = ANY(service_types) THEN 'pathologist' ELSE 'diagnostic_centre' END"
-                        if t == "diagnostic_centre" else f"'{t}'::text")
+            crm_type = f"'{t}'::text"
             sel = ", ".join((f"{k}::numeric" if k == "deal_value" else (k if k.endswith("_at") else f"{k}::text")) + f" AS {k}"
                             if k in cols else (f"NULL::numeric AS {k}" if k == "deal_value" else
                                                (f"NULL::timestamptz AS {k}" if k.endswith("_at") else f"NULL::text AS {k}"))

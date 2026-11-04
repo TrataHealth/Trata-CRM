@@ -5,10 +5,10 @@ import api from "../lib/api";
 import { relativeTime } from "../lib/constants";
 import { BulkBar, BulkActionDialog, SuspendedTag, RowCheck, useSelection } from "../components/users/BulkActions";
 
-const ROLE_LABEL = { pathologist: "Pathology / Diagnostics", ambulance_provider: "Ambulance", hospital: "Hospital", doctor: "Doctor", paramedic: "Paramedic",
+const ROLE_LABEL = { path_lab: "Path Lab", ambulance_provider: "Ambulance", hospital: "Hospital", doctor: "Doctor", paramedic: "Paramedic",
   pharmacy: "Pharmacy", diagnostic_centre: "Diagnostic centre", pharmacist: "Pharmacist", lab_tech: "Lab technician", nurse: "Nurse", receptionist: "Receptionist" };
 const roleLabel = (r) => ROLE_LABEL[r] || String(r || "").replace(/_/g, " ");
-const ORG_ROLES = ["hospital", "pathologist", "ambulance_provider", "pharmacy"];
+const ORG_ROLES = ["hospital", "path_lab", "diagnostic_centre", "ambulance_provider", "pharmacy"];
 const orgHeader = (r) => (ORG_ROLES.includes(r) ? `${roleLabel(r).split(" /")[0]} name` : "Provider name");
 const KYC_TONE = { verified: "bg-[#E3FCEF] text-[#006644]", approved: "bg-[#E3FCEF] text-[#006644]", rejected: "bg-[#FFEBE6] text-[#BF2600]", pending: "bg-[#FFFAE6] text-[#974F0C]" };
 

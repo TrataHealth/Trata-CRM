@@ -20,8 +20,8 @@ const VERTICALS = [
   { key: "hospital", label: "Hospital",   icon: Building2   },
   { key: "ambulance", label: "Ambulance", icon: Ambulance   },
   { key: "doctor", label: "Doctor",       icon: Stethoscope },
-  { key: "path_lab", label: "Lab Partner", icon: FlaskConical },
-  { key: "diagnostic_centre", label: "Imaging & Diagnostics", icon: ScanLine },
+  { key: "path_lab", label: "Path Lab", icon: FlaskConical },
+  { key: "diagnostic_centre", label: "Diagnostic Centre", icon: ScanLine },
 ];
 
 const STATUS_TONE = {
@@ -112,7 +112,7 @@ export default function AdminOnboarding() {
             Onboard providers &amp; approve KYC
           </h1>
           <p className="text-sm text-[#5E6C84] mt-1 max-w-2xl">
-            Create a new hospital, ambulance, doctor, Lab Partner or Imaging & Diagnostics Partner account here — it will appear in the mobile Provider App
+            Create a new hospital, ambulance, doctor, Path Lab or Diagnostic Centre account here — it will appear in the mobile Provider App
             and the Trata Admin App instantly. Then upload the checklist docs and one-click approve.
           </p>
         </div>
