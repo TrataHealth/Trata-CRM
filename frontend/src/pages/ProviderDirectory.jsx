@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Search, Loader2, Building2, UserPlus } from "lucide-react";
 import api from "../lib/api";
 import { relativeTime } from "../lib/constants";
+import { BulkBar, BulkActionDialog, SuspendedTag, RowCheck, useSelection } from "../components/users/BulkActions";
 
 const ROLE_LABEL = { pathologist: "Pathology / Diagnostics", ambulance_provider: "Ambulance", hospital: "Hospital", doctor: "Doctor", paramedic: "Paramedic",
   pharmacy: "Pharmacy", pharmacist: "Pharmacist", lab_tech: "Lab technician", nurse: "Nurse", receptionist: "Receptionist" };
@@ -19,7 +20,13 @@ export default function ProviderDirectory() {
   const kyc = sp.get("kyc") || "";
   const [q, setQ] = useState("");
   const [s, setS] = useState({ loading: true, items: [], roles: [] });
+  const [status, setStatus] = useState("");
+  const [action, setAction] = useState(null);
+  const [tick, setTick] = useState(0);
   const total = s.roles.reduce((n, r) => n + r.count, 0);
+  const items = s.items.filter((p) => !status || (status === "suspended") === !!p.is_suspended);
+  const pick = useSelection(items);
+  const targetIds = items.filter((p) => pick.sel.has(p.id)).flatMap((p) => [p.id, ...(p.linked_accounts || [])]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -28,7 +35,7 @@ export default function ProviderDirectory() {
         .then(({ data }) => setS({ loading: false, ...data })).catch(() => setS((p) => ({ ...p, loading: false })));
     }, 250);
     return () => clearTimeout(t);
-  }, [role, kyc, q]);
+  }, [role, kyc, q, tick]);
   const setParam = (k, v) => { const n = new URLSearchParams(sp); v ? n.set(k, v) : n.delete(k); setSp(n); };
 
   return (
@@ -53,17 +60,25 @@ export default function ProviderDirectory() {
         <select value={kyc} onChange={(e) => setParam("kyc", e.target.value)} className="px-3 py-2 text-sm border border-[#DFE1E6] rounded-md bg-white" data-testid="provider-directory-kyc-filter">
           <option value="">Any KYC status</option><option value="pending">Pending</option><option value="verified">Verified</option><option value="rejected">Rejected</option>
         </select>
+        <select value={status} onChange={(e) => setStatus(e.target.value)} className="px-3 py-2 text-sm border border-[#DFE1E6] rounded-md bg-white" data-testid="provider-directory-status-filter">
+          <option value="">Any access</option><option value="active">Active</option><option value="suspended">Suspended</option>
+        </select>
       </div>
+      <BulkBar count={pick.sel.size} onAction={setAction} onClear={pick.clear} />
+      <BulkActionDialog action={action} ids={targetIds} field="user_ids" onClose={() => setAction(null)}
+                        onDone={() => { setAction(null); pick.clear(); setTick((t) => t + 1); }} />
       <section className="bg-white border border-[#DFE1E6] rounded-md overflow-x-auto">
-        {s.loading && !s.items.length ? <div className="p-6 text-xs text-[#5E6C84] flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…</div>
-          : !s.items.length ? <div className="p-10 text-center text-sm text-[#5E6C84]" data-testid="provider-directory-empty">No providers match.</div>
+        {s.loading && !items.length ? <div className="p-6 text-xs text-[#5E6C84] flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…</div>
+          : !items.length ? <div className="p-10 text-center text-sm text-[#5E6C84]" data-testid="provider-directory-empty">No providers match.</div>
           : <table className="w-full text-sm min-w-[920px]">
             <thead className="bg-[#F8F9FA] text-[10px] uppercase tracking-wider text-[#5E6C84]"><tr>
+              <th className="pl-4 py-2.5 w-8"><RowCheck checked={pick.all} onChange={pick.toggleAll} testId="provider-select-all" /></th>
               <th className="text-left px-4 py-2.5" data-testid="provider-col-org">{orgHeader(role)}</th><th className="text-left px-4 py-2.5" data-testid="provider-col-admin">Admin name</th><th className="text-left px-4 py-2.5">Type</th><th className="text-left px-4 py-2.5">Phone</th>
               <th className="text-left px-4 py-2.5">KYC</th><th className="text-left px-4 py-2.5">Documents</th><th className="text-left px-4 py-2.5">Joined</th><th className="text-left px-4 py-2.5">Last login</th></tr></thead>
-            <tbody>{s.items.map((p) => (
-              <tr key={p.id} onClick={() => nav(`/admin/onboarding/${p.id}`)} className="border-t border-[#F4F5F7] hover:bg-[#F8F9FA] cursor-pointer" data-testid={`provider-row-${p.id}`}>
-                <td className="px-4 py-3"><div className={p.org_name ? "font-semibold text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-org-${p.id}`}>{p.org_name || "Not linked"}</div>
+            <tbody>{items.map((p) => (
+              <tr key={p.id} onClick={() => nav(`/admin/onboarding/${p.id}`)} className={`border-t border-[#F4F5F7] hover:bg-[#F8F9FA] cursor-pointer ${pick.sel.has(p.id) ? "bg-[#DEEBFF]/40" : ""}`} data-testid={`provider-row-${p.id}`}>
+                <td className="pl-4 py-3"><RowCheck checked={pick.sel.has(p.id)} onChange={() => pick.toggle(p.id)} testId={`provider-select-${p.id}`} /></td>
+                <td className="px-4 py-3"><div className={p.org_name ? "font-semibold text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-org-${p.id}`}>{p.org_name || "Not linked"}{p.is_suspended && <SuspendedTag reason={p.suspended_reason} testId={`provider-suspended-${p.id}`} />}</div>
                   {p.linked_accounts?.length > 0 && <div className="text-[11px] text-[#97A0AF]" data-testid={`provider-linked-${p.id}`}>+{p.linked_accounts.length} linked account{p.linked_accounts.length > 1 ? "s" : ""} with the same name</div>}</td>
                 <td className="px-4 py-3"><div className={p.admin_name ? "text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-admin-${p.id}`}>{p.admin_name || "Not set"}</div>{p.email && <div className="text-xs text-[#5E6C84]">{p.email}</div>}</td>
                 <td className="px-4 py-3"><span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-[#F4F5F7] text-[#42526E]">{roleLabel(p.role)}</span></td>

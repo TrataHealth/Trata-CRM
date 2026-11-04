@@ -1513,6 +1513,7 @@ async def list_all_patients_admin(q: Optional[str], limit: int = 200) -> List[Di
     async with pool.acquire() as conn:
         rs = await conn.fetch(f"""
             SELECT u.id, u.name, u.phone, u.email, u.dob, u.patient_id, u.is_active,
+                   coalesce(u.is_suspended, FALSE) AS is_suspended, u.suspended_reason,
                    u.verification_status, u.created_at, u.last_login_at,
                    (SELECT count(*) FROM public.emergency_cases c WHERE c.patient_id = u.id OR c.customer_id = u.id) AS cases,
                    (SELECT count(*) FROM public.consultation_bookings a WHERE a.patient_id = u.id)                 AS appts,

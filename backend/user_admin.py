@@ -6,6 +6,7 @@ import math
 import html as _html
 import logging
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 
@@ -34,7 +35,8 @@ def _now() -> str:
 
 
 class BulkBody(BaseModel):
-    contact_ids: List[str] = Field(..., min_length=1, max_length=500)
+    contact_ids: List[str] = Field(default_factory=list, max_length=500)
+    user_ids: List[str] = Field(default_factory=list, max_length=500)
     action: Literal["suspend", "unsuspend", "archive", "restore"]
     reason: Optional[str] = Field(None, max_length=500)
 
@@ -79,13 +81,36 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
             log.warning("suspension email failed: %s", ex)
             return "failed"
 
+    async def contacts_for_users(user_ids: List[str]) -> List[str]:
+        """Patient / Provider directory rows are users.id — map them to CRM contacts, creating a plain one if missing."""
+        raw = getattr(db, "_db", db).contacts
+        found = await raw.find({"$or": [{"supabase_user_id": {"$in": user_ids}}, {"upstream_user_id": {"$in": user_ids}}]},
+                               {"_id": 0, "id": 1, "supabase_user_id": 1, "upstream_user_id": 1}).to_list(2000)
+        have = {c.get("supabase_user_id") for c in found} | {c.get("upstream_user_id") for c in found}
+        missing = [u for u in user_ids if u not in have]
+        ids = [c["id"] for c in found]
+        if missing:
+            pool = await sb.get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("SELECT id, name, phone, email, role FROM public.users WHERE id = ANY($1::text[])", missing)
+            for u in rows:
+                cid = str(uuid.uuid4())
+                await raw.insert_one({"id": cid, "name": u["name"], "phone": (u["phone"] or "")[-10:], "email": u["email"],
+                                      "type": u["role"] or "patient", "supabase_user_id": u["id"], "upstream_user_id": u["id"],
+                                      "source": "directory_bulk", "created_at": _now(), "updated_at": _now()})
+                ids.append(cid)
+        return ids
+
     @r.post("/admin/users/bulk")
     async def bulk(body: BulkBody, request: Request, current=Depends(get_current_user)):
         require_master(current)
         reason = (body.reason or "").strip()
         if body.action in ("suspend", "archive") and len(reason) < 5:
             raise HTTPException(status_code=400, detail="Please give a reason (at least 5 characters)")
-        q = {"id": {"$in": body.contact_ids}}
+        if not body.contact_ids and not body.user_ids:
+            raise HTTPException(status_code=400, detail="Select at least one user")
+        contact_ids = list(body.contact_ids) + (await contacts_for_users(body.user_ids) if body.user_ids else [])
+        q = {"id": {"$in": contact_ids}}
         if body.action == "restore":
             q["archived"] = True
         contacts = await db.contacts.find(q, {"_id": 0}).to_list(500)

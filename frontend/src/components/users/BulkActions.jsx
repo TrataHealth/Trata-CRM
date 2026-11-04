@@ -15,7 +15,7 @@ const COPY = {
     help: "They come back to every Trata app with their data." },
 };
 
-export function BulkActionDialog({ action, ids, onClose, onDone }) {
+export function BulkActionDialog({ action, ids, onClose, onDone, field = "contact_ids" }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => setReason(""), [action]);
@@ -24,7 +24,7 @@ export function BulkActionDialog({ action, ids, onClose, onDone }) {
   const submit = async () => {
     setBusy(true);
     try {
-      const { data } = await api.post("/admin/users/bulk", { contact_ids: ids, action, reason: reason.trim() || null });
+      const { data } = await api.post("/admin/users/bulk", { [field]: ids, action, reason: reason.trim() || null });
       const sent = Object.values(data.emails || {}).filter((v) => v === "sent").length;
       toast.success(`${c.verb}: ${data.updated} user${data.updated === 1 ? "" : "s"}${sent ? ` · ${sent} emailed` : ""}${data.skipped.length ? ` · skipped: ${data.skipped.map((x) => `${x.name || "user"} (${x.why})`).join(", ")}` : ""}`);
       onDone();
@@ -49,6 +49,27 @@ export function BulkActionDialog({ action, ids, onClose, onDone }) {
     </Dialog>
   );
 }
+
+export const SuspendedTag = ({ reason, testId }) => (
+  <span title={reason || "Suspended"} data-testid={testId}
+        className="inline-flex items-center gap-1 ml-2 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded bg-[#FFEBE6] text-[#BF2600] align-middle">
+    <Ban className="h-3 w-3" />Suspended</span>
+);
+
+/** Row-selection state for user tables keyed by users.id. */
+export function useSelection(rows) {
+  const [sel, setSel] = useState(() => new Set());
+  const ids = rows.map((r) => r.id);
+  const all = ids.length > 0 && ids.every((i) => sel.has(i));
+  const toggle = (id) => setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleAll = () => setSel(all ? new Set() : new Set(ids));
+  return { sel, all, toggle, toggleAll, clear: () => setSel(new Set()) };
+}
+
+export const RowCheck = ({ checked, onChange, testId }) => (
+  <input type="checkbox" checked={checked} onChange={onChange} onClick={(e) => e.stopPropagation()} data-testid={testId}
+         className="h-4 w-4 accent-[#0052CC] cursor-pointer" />
+);
 
 export function BulkBar({ count, archivedView, onAction, onClear }) {
   if (!count) return null;

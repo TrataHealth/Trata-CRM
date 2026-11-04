@@ -43,7 +43,7 @@ def create_directory_router(get_current_user):
                   SELECT u.*, coalesce(oe.name, nullif(u.organization_name, ''), hp.name, pp.business_name, ph.pharmacy_name,
                                        pl.name, dc.name, ap.business_name, dr.org, pm.hospital_name, hs.org) AS org_name,
                          coalesce(nullif(oe.contact_person, ''), nullif(pp.owner_name, ''), nullif(ph.owner_name, ''),
-                                  nullif(ap.owner_name, ''), nullif(dr.full_name, ''), u.name) AS admin_name
+                                  nullif(ap.owner_name, ''), CASE WHEN u.role = 'doctor' THEN nullif(dr.full_name, '') END, u.name) AS admin_name
                     FROM public.users u
                     LEFT JOIN LATERAL (SELECT name, contact_person FROM public.org_entities WHERE entity_user_id = u.id ORDER BY created_at LIMIT 1) oe ON TRUE
                     LEFT JOIN LATERAL (SELECT name FROM public.hospital_profiles WHERE user_id = u.id OR admin_user_id = u.id LIMIT 1) hp ON TRUE
@@ -59,13 +59,13 @@ def create_directory_router(get_current_user):
                     LEFT JOIN LATERAL (SELECT h.name AS org FROM public.hospital_staff s JOIN public.hospital_profiles h ON h.id = s.hospital_id
                                         WHERE s.user_id = u.id LIMIT 1) hs ON TRUE)
                 SELECT u.id, u.name, u.org_name, u.admin_name, u.phone, u.email, u.role, coalesce(u.verification_status, 'pending') AS kyc_status,
-                       u.is_active, u.created_at, u.last_login_at,
+                       u.is_active, coalesce(u.is_suspended, FALSE) AS is_suspended, u.suspended_reason, u.created_at, u.last_login_at,
                        count(k.id) AS docs_total,
                        count(k.id) FILTER (WHERE lower(coalesce(k.status, '')) = 'approved') AS docs_approved,
                        count(k.id) FILTER (WHERE lower(coalesce(k.status, '')) = 'rejected') AS docs_rejected
                   FROM base u LEFT JOIN public.kyc_documents k ON k.user_id = u.id
                  WHERE {' AND '.join(where)}
-                 GROUP BY u.id, u.name, u.org_name, u.admin_name, u.phone, u.email, u.role, u.verification_status, u.is_active, u.created_at, u.last_login_at
+                 GROUP BY u.id, u.name, u.org_name, u.admin_name, u.phone, u.email, u.role, u.verification_status, u.is_active, u.is_suspended, u.suspended_reason, u.created_at, u.last_login_at
                  ORDER BY u.created_at DESC NULLS LAST LIMIT ${len(args)}""", *args)
             roles = await conn.fetch("""SELECT role, count(*) n FROM public.users WHERE role IS NOT NULL AND role <> ALL($1::text[])
                                          AND coalesce(is_archived, FALSE) = FALSE GROUP BY 1 ORDER BY 2 DESC""", list(NON_PROVIDER))

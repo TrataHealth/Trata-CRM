@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../lib/api";
 import { relativeTime } from "../lib/constants";
+import { BulkBar, BulkActionDialog, SuspendedTag, RowCheck, useSelection } from "../components/users/BulkActions";
 import {
   Users, Search, Loader2, AlertTriangle, ChevronRight, HeartPulse,
   Activity, Calendar, Bed, Ambulance, ShieldCheck,
@@ -51,8 +52,11 @@ export default function Patients({ mode = "admin" }) {
 
   const submitSearch = (e) => { e?.preventDefault(); load(q.trim()); };
 
-  const rows = state.patients;
   const isProviderView = mode === "provider";
+  const [status, setStatus] = useState("");
+  const [action, setAction] = useState(null);
+  const rows = state.patients.filter((p) => isProviderView || !status || (status === "suspended") === !!p.is_suspended);
+  const pick = useSelection(isProviderView ? [] : rows);
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6" data-testid="patients-page">
@@ -82,8 +86,20 @@ export default function Patients({ mode = "admin" }) {
               data-testid="patients-search"
             />
           </div>
+          {!isProviderView && (
+            <select value={status} onChange={(e) => setStatus(e.target.value)} data-testid="patients-status-filter"
+                    className={T.input + " py-[7px]"}>
+              <option value="">Any access</option><option value="active">Active</option><option value="suspended">Suspended</option>
+            </select>
+          )}
         </form>
       </div>
+
+      {!isProviderView && <>
+        <BulkBar count={pick.sel.size} onAction={setAction} onClear={pick.clear} />
+        <BulkActionDialog action={action} ids={[...pick.sel]} field="user_ids" onClose={() => setAction(null)}
+                          onDone={() => { setAction(null); pick.clear(); load(q.trim()); }} />
+      </>}
 
       {state.message && (
         <div className="bg-[#DEEBFF] border border-[#B3D4FF] rounded-md px-4 py-2 text-xs text-[#0747A6]" data-testid="patients-scope-message">
@@ -116,6 +132,7 @@ export default function Patients({ mode = "admin" }) {
             <table className="min-w-full text-xs">
               <thead className="bg-[#F8F9FA] text-[#5E6C84] uppercase text-[10px]">
                 <tr>
+                  {!isProviderView && <th className="pl-3 py-2 w-8"><RowCheck checked={pick.all} onChange={pick.toggleAll} testId="patients-select-all" /></th>}
                   <th className="px-3 py-2 text-left">Patient</th>
                   <th className="px-3 py-2 text-left">Phone</th>
                   {isProviderView ? (
@@ -142,11 +159,12 @@ export default function Patients({ mode = "admin" }) {
                   // For provider view we key on the patient_id (link to user), fall back to hp row id
                   const uid = isProviderView ? (p.patient_id || p.trata_patient_id || p.id) : p.id;
                   return (
-                    <tr key={p.id} className="border-t border-[#DFE1E6] hover:bg-[#F8F9FA] cursor-pointer"
+                    <tr key={p.id} className={`border-t border-[#DFE1E6] hover:bg-[#F8F9FA] cursor-pointer ${pick.sel.has(p.id) ? "bg-[#DEEBFF]/40" : ""}`}
                         onClick={() => nav(`${basePath}/${uid}`)}
                         data-testid={`patient-row-${uid}`}>
+                      {!isProviderView && <td className="pl-3 py-2"><RowCheck checked={pick.sel.has(p.id)} onChange={() => pick.toggle(p.id)} testId={`patient-select-${p.id}`} /></td>}
                       <td className="px-3 py-2">
-                        <div className={`font-semibold ${p.name ? "text-[#091E42]" : "text-[#97A0AF] italic font-normal"}`}>{p.name || "Name not added yet"}</div>
+                        <div className={`font-semibold ${p.name ? "text-[#091E42]" : "text-[#97A0AF] italic font-normal"}`}>{p.name || "Name not added yet"}{p.is_suspended && <SuspendedTag reason={p.suspended_reason} testId={`patient-suspended-${p.id}`} />}</div>
                         <div className="text-[10px] text-[#5E6C84] font-mono">{String(uid).slice(0, 8)}…</div>
                       </td>
                       <td className="px-3 py-2 font-mono">{p.phone ? `+91 ${p.phone}` : "—"}</td>
