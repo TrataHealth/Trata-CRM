@@ -527,3 +527,8 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - CRM contact type 'pathologist' → reclassified 195 contacts (136 path_lab, 59 diagnostic_centre by where the users.id lives). All UI copy/dropdowns now "Path Lab" / "Diagnostic Centre". Lead UNION reports entity type path_lab / diagnostic_centre (§7). Diagnostic-centre row wins over shadow path_lab rows everywhere (LAB_KINDS order).
 - New `lab_staff.py`: GET/POST/PUT/DELETE /api/admin/labs/{lab_id|users.id}/staff + toggle-duty (Trata Health Admin only; role allow-list per entity). `LabStaffCard` on the provider profile page (counts, on-duty badge, add/edit/remove).
 - Declined `crm_labs_unified` view (console UNIONs itself). Provider App ROLES still posts lab signups to their `pathologist` signup endpoint with providerSubtype — confirm with Provider App team.
+
+## 2026-06 — Provider App reply v2 applied
+- Provider-App onboarding of labs now calls POST /api/self-signup/path-lab (role path_lab) and /api/self-signup/diagnostic-centre (role diagnostic_centre); old /self-signup/pathologist no longer used.
+- Merged duplicate CRM leads pointing at the same users.id (Tathastu ×2 groups, New S S Diagnostic Centre ×3 → 1); survivor keeps agent/activities, fills blanks from extras, records `merged_contact_ids`. Users mirror now matches existing leads by users.id first, phone second (prevents new duplicates).
+- Placeholder-phone labs: 97 of 99 rows belong to accounts already archived; the only active stale account (064c4413 "New S S Diagnostic Centre", pnd phone, no profile) moved to 'Deleted users'. Dashboard tiles left unchanged (user choice).

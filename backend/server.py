@@ -1241,7 +1241,11 @@ async def _sync_supabase_users_into_contacts() -> Dict[str, Any]:
             if not phone:
                 skipped += 1
                 continue
-            existing = await db.contacts.find_one({"phone": phone}, {"_id": 0, "id": 1, "pipeline_stage": 1, "assigned_agent_id": 1, "kyc_status": 1})
+            # Key by users.id first (Phase D identity contract), phone only as a fallback — avoids duplicate leads.
+            existing = await db._db.contacts.find_one(
+                {"$or": [{"supabase_user_id": r["supabase_user_id"]}, {"upstream_user_id": r["supabase_user_id"]}, {"phone": phone}]},
+                {"_id": 0, "id": 1, "pipeline_stage": 1, "assigned_agent_id": 1, "kyc_status": 1},
+                sort=[("archived", 1), ("assigned_agent_id", -1)])
             if existing:
                 # Patch only upstream-owned fields; preserve CRM state.
                 patch: Dict[str, Any] = {

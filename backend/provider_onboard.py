@@ -26,8 +26,8 @@ SPECIALISED = ("cancer_care", "diabetes", "women_baby", "elderly_care", "skin_ha
 ROLES: Dict[str, tuple] = {
     "hospital": ("hospital", "hospital", {}),
     **{r: ("hospital", "hospital", {"hospitalType": "specialised_centre"}) for r in SPECIALISED},
-    "path_lab": ("pathologist", "pathologist", {"providerSubtype": "path_lab"}),
-    "diagnostic_centre": ("pathologist", "pathologist", {"providerSubtype": "diagnostic_centre"}),
+    "path_lab": ("path-lab", "path_lab", {}),
+    "diagnostic_centre": ("diagnostic-centre", "diagnostic_centre", {}),
     "pharmacy": ("pharmacy", "pharmacy", {}),
     "doctor": ("doctor", "doctor", {}),
     "nurse": ("doctor", "doctor", {"subtype": "nurse"}),
