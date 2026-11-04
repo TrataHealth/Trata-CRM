@@ -10,19 +10,24 @@ export function LabStaffCard({ userId }) {
   const [d, setD] = useState(null);
   const [editing, setEditing] = useState(null); // null | "new" | staff row
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
   const base = `/admin/labs/${userId}/staff`;
 
-  useEffect(() => { api.get(base).then(({ data }) => setD(data)).catch(() => setD(null)); }, [base]);
+  useEffect(() => {
+    api.get(base).then(({ data }) => setD(data))
+      .catch((e) => { setD(null); if (e?.response?.status !== 404) setErr("Couldn't load this lab's staff right now."); });
+  }, [base]);
 
-  const run = useCallback(async (fn, ok) => {
+  const run = useCallback(async (fn, ok, closeForm = false) => {
     setBusy(true);
-    try { const { data } = await fn(); setD(data); setEditing(null); if (ok) toast.success(ok); }
+    try { const { data } = await fn(); setD(data); if (closeForm) setEditing(null); if (ok) toast.success(ok); }
     catch (e) { toast.error(e?.response?.data?.detail || "Could not update staff"); }
     finally { setBusy(false); }
   }, []);
 
+  if (err) return <div className="text-sm text-[#BF2600] bg-[#FFEBE6] rounded-md p-3" data-testid="lab-staff-error">{err}</div>;
   if (!d) return null;
-  const save = (f) => run(() => (editing === "new" ? api.post(base, f) : api.put(`${base}/${editing.id}`, f)), editing === "new" ? "Staff added" : "Staff updated");
+  const save = (f) => run(() => (editing === "new" ? api.post(base, f) : api.put(`${base}/${editing.id}`, f)), editing === "new" ? "Staff added" : "Staff updated", true);
 
   return (
     <section className="bg-white border border-[#DFE1E6] rounded-md p-4 space-y-3" data-testid="lab-staff-card">

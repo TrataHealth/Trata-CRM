@@ -5,7 +5,9 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import BaseModel, StringConstraints
 
 import supabase_db as sb
 
@@ -15,7 +17,7 @@ COLS = ("name", "phone", "email", "role", "specialization", "qualification", "sh
 
 
 class StaffIn(BaseModel):
-    name: str = Field(..., min_length=1, max_length=120)
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
     role: str
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -24,6 +26,9 @@ class StaffIn(BaseModel):
     shift_start: Optional[str] = None
     shift_end: Optional[str] = None
     is_active: bool = True
+
+    def clean(self):
+        return {k: (v.strip() or None) if isinstance(v, str) else v for k, v in self.model_dump().items()}
 
 
 def create_lab_staff_router(get_current_user):
@@ -66,7 +71,7 @@ def create_lab_staff_router(get_current_user):
         async with (await sb.get_pool()).acquire() as conn:
             lab = await _lab(conn, lab_id)
             _check_role(lab["entity_type"], body.role)
-            vals = body.model_dump()
+            vals = body.clean()
             await conn.execute(f"""INSERT INTO public.lab_staff (id, lab_id, entity_type, {', '.join(COLS)}, is_on_duty, created_at, updated_at)
                                    VALUES ($1, $2, $3, {', '.join(f'${i + 4}' for i in range(len(COLS)))}, FALSE, now(), now())""",
                                str(uuid.uuid4()), lab["id"], lab["entity_type"], *[vals[k] for k in COLS])
@@ -78,7 +83,7 @@ def create_lab_staff_router(get_current_user):
         async with (await sb.get_pool()).acquire() as conn:
             lab = await _lab(conn, lab_id)
             _check_role(lab["entity_type"], body.role)
-            vals = body.model_dump()
+            vals = body.clean()
             res = await conn.execute(f"""UPDATE public.lab_staff SET {', '.join(f'{k} = ${i + 3}' for i, k in enumerate(COLS))}, updated_at = now()
                                           WHERE id = $1 AND lab_id = $2""", staff_id, lab["id"], *[vals[k] for k in COLS])
             if res.endswith(" 0"):

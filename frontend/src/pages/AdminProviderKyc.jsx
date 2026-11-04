@@ -177,7 +177,7 @@ export default function AdminProviderKyc() {
 
       {tab === "history" ? <RecordHistory recordId={userId} /> : <>
       <ProviderDetailsCard data={state.data} />
-      <ServiceTypesToggle userId={userId} />
+      <ServiceTypesToggle userId={userId} onChange={load} />
       <LabStaffCard userId={userId} />
       {alreadyApproved && (
         <div className="bg-[#E3FCEF] border border-[#57D9A3] rounded-md p-3 text-xs text-[#006644] flex items-center gap-2" data-testid="admin-kyc-approved-banner">

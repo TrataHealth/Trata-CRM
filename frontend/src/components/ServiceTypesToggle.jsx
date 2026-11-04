@@ -9,7 +9,7 @@ const SERVICES = [
 ];
 
 /** Diagnostic-centre service switches — writes service_types on diagnostic_centre_profiles. */
-export function ServiceTypesToggle({ userId }) {
+export function ServiceTypesToggle({ userId, onChange }) {
   const [types, setTypes] = useState(null);
   const [busy, setBusy] = useState("");
 
@@ -27,6 +27,7 @@ export function ServiceTypesToggle({ userId }) {
     try {
       const { data } = await api.put(`/admin/directory/providers/${userId}/service-types`, { service_types: next });
       setTypes(data.service_types);
+      onChange?.();
       toast.success(`${SERVICES.find((s) => s.key === key).label} ${data.service_types.includes(key) ? "switched on" : "switched off"}`);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Could not update services");

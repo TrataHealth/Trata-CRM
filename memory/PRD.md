@@ -520,3 +520,10 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 ## 2026-06 — Fix: bulk Delete/Suspend didn't reach the shared DB for some accounts
 - Root cause: user_admin bulk/erase only read `contact.supabase_user_id`; contacts created by the users mirror carry only `upstream_user_id`, so Mongo was archived but users.is_archived stayed FALSE (rows kept showing in Trata Providers). Now uses supabase_user_id OR upstream_user_id everywhere (bulk, erase, self-skip, notifications, billing email).
 - Repaired: 8 diagnostic centres deleted 2026-11-04 ("test users") and Branch Admin (deleted 30 Oct) re-applied to Supabase (new 30-day purge date).
+
+## 2026-06 — Lab / Diagnostic Centre consolidation (Provider App doc, effective 2026-06-15)
+- Two lab entities only: `path_lab` (path_lab_profiles) and `diagnostic_centre` (diagnostic_centre_profiles). 'pathologist' is a lab staff type only.
+- Removed every read/write of dropped `pathologists` / `pathologist_profiles` / `provider_subtype` (onboarding, approve-all, coords, users mirror, ledger, demo seed, test cleanup, erase, business-name lookup, CRM login profile id). Onboarding sets users.role = path_lab | diagnostic_centre; contact type = same.
+- CRM contact type 'pathologist' → reclassified 195 contacts (136 path_lab, 59 diagnostic_centre by where the users.id lives). All UI copy/dropdowns now "Path Lab" / "Diagnostic Centre". Lead UNION reports entity type path_lab / diagnostic_centre (§7). Diagnostic-centre row wins over shadow path_lab rows everywhere (LAB_KINDS order).
+- New `lab_staff.py`: GET/POST/PUT/DELETE /api/admin/labs/{lab_id|users.id}/staff + toggle-duty (Trata Health Admin only; role allow-list per entity). `LabStaffCard` on the provider profile page (counts, on-duty badge, add/edit/remove).
+- Declined `crm_labs_unified` view (console UNIONs itself). Provider App ROLES still posts lab signups to their `pathologist` signup endpoint with providerSubtype — confirm with Provider App team.

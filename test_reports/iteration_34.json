@@ -1,0 +1,41 @@
+{
+  "summary": "Tested the Lab / Diagnostic Centre consolidation end to end against the real shared Supabase plus Mongo. Backend: 23/23 pytest pass (new file test_lab_consolidation.py). No 500s from the dropped legacy tables in: sync-supabase-users, /contacts, /supabase/contacts, /ledger/providers(+detail), KYC GET (City X-Ray, New S S, a path lab, and the new TEST labs). The pathologists, pathologist_profiles and path_lab_profiles.provider_subtype objects are gone in the DB. /supabase/contacts types are {path_lab, diagnostic_centre, hospital, doctor, pharmacy, ambulance_provider}, with no 'pathologist'. Mongo has 0 contacts of type 'pathologist'. Admin onboarding (API and UI form) creates users.role = path_lab/diagnostic_centre, the matching canonical row + branch, a CRM contact of the same type and a crm_users row. Bad lab_kind returns 400. Smoke §8: pipeline_stage and assigned_agent_id reach the canonical row within the poll window for both a path lab and a DC. Verify on a path lab without a pincode gives pending_address. Verify then reject on a DC gives verified then rejected. Lab staff API: GET/POST/PUT/DELETE/toggle-duty work by users.id and by canonical id. radiologist gets 400 on a path_lab and is allowed on a DC. Invalid role gives 400, empty name 422, sales rep 403, non-lab account 404, and New S S resolves to diagnostic_centre (DC wins). service-types GET/PUT works and is not applicable for path labs. A lab owner OTP login (TEST lab) returns 200 with needs_password_setup. UI: lab-staff-card add/edit/duty/inactive/delete work on a path lab, DC shows service-types-card plus radiologist role, path lab hides service-types-card, and the last service cannot be turned off. Labels are correct ('Path Lab' / 'Diagnostic Centre' tiles, 'Path Lab' / 'Diagnostic centre' provider tabs, no 'Pathologist' on Contacts filters or Dashboard). All TEST data was cleaned up (users, profiles, branches, lab_staff, contacts, crm_users, activities), and the cleanup was checked.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "provider_onboard.py ROLES", "issue": "path_lab / diagnostic_centre still proxy to the Provider App 'pathologist' signup endpoint + select-role 'pathologist' with providerSubtype. Now that pathologist is no longer a provider type and provider_subtype is dropped, confirm the upstream Provider App endpoint/role still exists, otherwise Provider-App onboarding of labs will fail. This was not exercised because it hits the external API."},
+      {"endpoint": "POST/PUT /api/admin/labs/{id}/staff", "issue": "The UI form sends empty strings for optional fields, so phone/email/shift are stored as '' rather than NULL. There is no format validation for phone, email or shift HH:MM."},
+      {"endpoint": "Data quality (Mongo contacts vs Supabase)", "issue": "Mongo has 137 path_lab and 71 diagnostic_centre contacts, but Supabase has 85 path_lab_profiles (35 of them are DC shadow rows) and 47 DCs. 121 lab contacts have no supabase_user_id and 78 have placeholder phones (e.g. '0e04d6f11d'). New S S (a44545ac) has 2 DC contacts, and a separate path_lab user 064c4413 named 'New S S Diagnostic Centre' shows as PATH LAB on All Users. The Dashboard 'Path Labs 136' tile is therefore inflated. These problems existed before this work; consider dedupe / skipping shadow path_lab rows in sync."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "LabStaffCard run()", "issue": "run() calls setEditing(null) on every success. If a duty toggle (~2s round-trip) finishes while the user has opened an edit form, the form closes and typed changes are lost. Only reset editing for save calls.", "selector": "[data-testid^=lab-staff-duty-], [data-testid=lab-staff-form]", "priority": "LOW"},
+      {"component": "AdminProviderKyc profile header", "issue": "The 'SERVICE TYPES: imaging, pathology' field in the profile summary is stale after toggling services in service-types-card. It needs a profile reload or shared state.", "selector": "[data-testid=service-types-card]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/admin/onboarding provider roster", "issues": ["The Vertical column shows 'Pathology' for both path labs and diagnostic centres. It should show 'Path Lab' / 'Diagnostic Centre' to match the new terminology."]},
+      {"screen": "LabStaffCard", "issues": ["If the GET fails (e.g. 500) the card silently renders nothing, the same as for non-labs. Consider showing an error state for non-404 failures."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_lab_consolidation.py", "/app/test_reports/pytest/lab_consolidation.xml"],
+  "action_items": [
+    "Verify the provider_onboard.py path_lab/diagnostic_centre mapping to the Provider App 'pathologist' signup endpoint still works upstream after consolidation",
+    "LabStaffCard: don't clear the edit form when a duty toggle / delete finishes",
+    "Refresh the profile 'Service types' field after a service toggle",
+    "Onboarding roster: show Path Lab / Diagnostic Centre instead of 'Pathology'",
+    "Optional: dedupe lab contacts / skip DC shadow path_lab rows in sync so Dashboard lab counts match Supabase; store NULL instead of '' for empty staff fields"
+  ],
+  "critical_code_review_comments": [
+    "lab_staff._lab matches 'user_id = $1 OR id = $1' with DC first. This is correct for shadow rows, but a canonical path_lab id passed for a user who also has a DC row would still resolve to the path_lab row (fine, by design).",
+    "create_provider_from_admin never sets pincode, so every admin-onboarded lab will always land in pending_address on verify until a pincode is added. Consider adding a pincode field to the onboarding form.",
+    "lab_staff.user_id is never populated (it is nullable, so no error)."
+  ],
+  "updated_files": ["/app/backend/tests/test_lab_consolidation.py"],
+  "success_rate": {"backend": "100% (23/23)", "frontend": "95% (all flows work; 2 low-priority UI state bugs)"},
+  "seed_data_creation": "None persisted. TEST labs on phones 8955500201/202 (pytest), 8955500211/212 (UI) and 8955500213 (UI form) were created and fully deleted.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend/tests && python -m pytest test_lab_consolidation.py -p no:xdist -v (takes about 2.5 min; it creates and cleans up its own TEST labs). Do not edit files under /app/backend/tests while tests run: the backend hot-reloads and requests time out. The UI was tested by injecting trata_token/trata_user into localStorage (the admin security setup is not done yet). Service-types routes live under /api/admin/directory/providers/{uid}/service-types."
+}

@@ -256,7 +256,7 @@ export default function AdminOnboarding() {
                       <div className="font-semibold text-[#091E42]">{p.name || "—"}</div>
                       <div className="text-[10px] text-[#5E6C84] font-mono">{p.id.slice(0, 8)}…</div>
                     </td>
-                    <td className="px-3 py-2 capitalize">{p.vertical || p.role}</td>
+                    <td className="px-3 py-2 capitalize">{{ path_lab: "Path Lab", diagnostic_centre: "Diagnostic Centre" }[p.role] || p.vertical || p.role}</td>
                     <td className="px-3 py-2 font-mono">+91 {p.phone}</td>
                     <td className="px-3 py-2 text-center"><StatusChip status={p.verification_status || "pending"} /></td>
                     <td className="px-3 py-2 text-center">
