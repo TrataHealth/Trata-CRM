@@ -6,7 +6,7 @@ import { relativeTime } from "../lib/constants";
 import { BulkBar, BulkActionDialog, SuspendedTag, RowCheck, useSelection } from "../components/users/BulkActions";
 
 const ROLE_LABEL = { pathologist: "Pathology / Diagnostics", ambulance_provider: "Ambulance", hospital: "Hospital", doctor: "Doctor", paramedic: "Paramedic",
-  pharmacy: "Pharmacy", pharmacist: "Pharmacist", lab_tech: "Lab technician", nurse: "Nurse", receptionist: "Receptionist" };
+  pharmacy: "Pharmacy", diagnostic_centre: "Diagnostic centre", pharmacist: "Pharmacist", lab_tech: "Lab technician", nurse: "Nurse", receptionist: "Receptionist" };
 const roleLabel = (r) => ROLE_LABEL[r] || String(r || "").replace(/_/g, " ");
 const ORG_ROLES = ["hospital", "pathologist", "ambulance_provider", "pharmacy"];
 const orgHeader = (r) => (ORG_ROLES.includes(r) ? `${roleLabel(r).split(" /")[0]} name` : "Provider name");
@@ -64,7 +64,7 @@ export default function ProviderDirectory() {
           <option value="">Any access</option><option value="active">Active</option><option value="suspended">Suspended</option>
         </select>
       </div>
-      <BulkBar count={pick.sel.size} onAction={setAction} onClear={pick.clear} />
+      <BulkBar count={pick.selected.length} onAction={setAction} onClear={pick.clear} />
       <BulkActionDialog action={action} ids={targetIds} field="user_ids" onClose={() => setAction(null)}
                         onDone={() => { setAction(null); pick.clear(); setTick((t) => t + 1); }} />
       <section className="bg-white border border-[#DFE1E6] rounded-md overflow-x-auto">

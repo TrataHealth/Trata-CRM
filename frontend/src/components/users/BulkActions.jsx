@@ -63,7 +63,8 @@ export function useSelection(rows) {
   const all = ids.length > 0 && ids.every((i) => sel.has(i));
   const toggle = (id) => setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleAll = () => setSel(all ? new Set() : new Set(ids));
-  return { sel, all, toggle, toggleAll, clear: () => setSel(new Set()) };
+  const selected = ids.filter((i) => sel.has(i));
+  return { sel, selected, all, toggle, toggleAll, clear: () => setSel(new Set()) };
 }
 
 export const RowCheck = ({ checked, onChange, testId }) => (

@@ -96,8 +96,8 @@ export default function Patients({ mode = "admin" }) {
       </div>
 
       {!isProviderView && <>
-        <BulkBar count={pick.sel.size} onAction={setAction} onClear={pick.clear} />
-        <BulkActionDialog action={action} ids={[...pick.sel]} field="user_ids" onClose={() => setAction(null)}
+        <BulkBar count={pick.selected.length} onAction={setAction} onClear={pick.clear} />
+        <BulkActionDialog action={action} ids={pick.selected} field="user_ids" onClose={() => setAction(null)}
                           onDone={() => { setAction(null); pick.clear(); load(q.trim()); }} />
       </>}
 

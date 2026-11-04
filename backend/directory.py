@@ -93,6 +93,8 @@ def create_directory_router(get_current_user):
         items = [{k: v for k, v in i.items() if k not in ("_rank", "_pnd")} for i in best.values()]
         items.sort(key=lambda i: i["created_at"] or "", reverse=True)
         role_counts = [{"role": x["role"], "count": x["n"]} for x in roles]
+        if role and not (q or kyc):
+            role_counts = [{**x, "count": len(items)} if x["role"] == role else x for x in role_counts]
         if not (role or q or kyc):
             from collections import Counter
             role_counts = [{"role": k, "count": v} for k, v in Counter(i["role"] for i in items).most_common()]

@@ -1,0 +1,36 @@
+{
+  "summary": "Tested bulk Suspend / Restore access / Delete on Trata Patient Users (/admin/patients) and Trata Providers (/users/providers), POST /api/admin/users/bulk with user_ids, restoring from the Deleted users bin, the Tathastu admin name fix, and the All Users regression. Backend: 12/12 pytest pass. UI: every requested flow passes. I only used TEST users I created myself (phones 8955500011-13 plus a placeholder pnd-8955500014) and cleaned them all up afterwards. No real users were changed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/users/bulk (contacts_for_users)", "issue": "Any bulk action on a patient or provider who has no CRM contact silently creates a Mongo contact (source='directory_bulk', type=patient/doctor). Those contacts then show up in GET /api/contacts (All Users / CRM lists) for good, even after you restore access. This was confirmed: 'Bulk Sample Clinic' appeared in /api/contacts after a suspend/unsuspend round trip. This may be intended, but it is a side effect worth a decision."},
+      {"endpoint": "GET /api/admin/directory/providers", "issue": "Role tab counts disagree with the rows shown. When a role filter is set, the counts come from SQL before duplicates are merged. Example: the Hospital tab says 9 but shows 8 rows, because Hi Tech's linked account is merged into one row. The 'All' tab count is after merging."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Patients / ProviderDirectory selection", "issue": "Selection is not cleared when the search or access filter changes. On Patients, ids = [...pick.sel], so rows that are now hidden still get the action. On Providers, targetIds drops hidden rows but the bar's count (pick.sel.size) still counts them. Suggest clearing the selection when q, status or role changes, or limiting it to rows that are visible.", "selector": "[data-testid=bulk-count]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Trata Providers role tabs", "issues": ["The 'diagnostic centre' tab label is lowercase because ROLE_LABEL has no diagnostic_centre entry", "The bar says '1 selected' but the dialog says 'Suspend users (2)' when the row has linked accounts. The math is correct, but a hint like '(incl. 1 linked)' would make it clearer"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_directory_bulk_actions.py", "/app/backend/tests/bulk_dir_fixtures.py", "/app/test_reports/pytest/directory_bulk.xml"],
+  "action_items": [
+    "(Optional) Decide whether contacts auto-created by directory bulk actions should stay in the All Users and contacts lists, or be hidden or marked",
+    "Clear the row selection when the search, access filter or role tab changes on the Patients and Providers pages",
+    "Add diagnostic_centre to ROLE_LABEL; make the role tab counts use the merged (deduped) rows"
+  ],
+  "critical_code_review_comments": [
+    "Main agent's note: the TEST name 'Bulk UI Probe' is hidden from /admin/patients, because _TEST_RX matches 'probe'. Use names like 'Bulk UI Sample' instead.",
+    "contacts_for_users: the 'have' set can include None (harmless). The new contacts are inserted one by one in a loop; fine for 500 or fewer.",
+    "On the Providers page, the dedupe step keeps only the primary row's is_suspended. If only a linked placeholder is suspended, the row shows as active."
+  ],
+  "updated_files": ["/app/backend/tests/test_directory_bulk_actions.py", "/app/backend/tests/bulk_dir_fixtures.py"],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "100% of requested flows"},
+  "seed_data_creation": "Created temporary Supabase users 8955500011 'Bulk UI Sample', 8955500012 'Bulk Sample Two' (patients), 8955500013 'Bulk Sample Clinic' (doctor) and pnd-8955500014 (linked doctor placeholder). All were deleted afterwards, along with their 4 Mongo contacts, 13 notifications and 17 audit_log rows that the tests created.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `python /app/backend/tests/bulk_dir_fixtures.py setup`, then `pytest tests/test_directory_bulk_actions.py -p no:xdist -o addopts=''`, then `python bulk_dir_fixtures.py cleanup`. Verified in the UI: a checkbox click does not open the detail page, select-all works, the reason textarea needs at least 5 characters, Suspended tags appear, the Any/Active/Suspended filter works, Delete removes the row, Restore from /contacts?view=deleted brings it back, a provider's linked accounts get the action too (request body contained both ids), and Tathastu shows Ashutosh Singh under the Hospital tab."
+}

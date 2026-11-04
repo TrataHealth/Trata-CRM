@@ -499,3 +499,8 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Onboard modal adds Nurse + Diagnostic centre. Outbound admin_bridge webhooks retired (queue_outbound no-op, dispatcher not started, retry route 410, 20 stale Mongo records marked retired).
 - Restored-rows list for Provider App: /app/memory/PHASE_D_RESTORED_ROWS.md. Tests: tests/test_phase_d_followup.py (55/58 before last fixes).
 - diagnostic_centre_profiles now has all CRM columns (Provider App, 2026-06); 10 existing diagnostic-centre leads synced; pipeline/agent/email edits verified live.
+
+## 2026-06 — Bulk actions on Trata Patient Users + Trata Providers
+- Checkbox selection + Suspend / Restore access / Delete bar (same as All Users) on both pages; /api/admin/users/bulk now accepts `user_ids` (users.id), mapping to CRM contacts (creates a plain contact if missing so 'Deleted users' bin works). Provider rows include linked_accounts. Suspended rows tagged + "Any access / Active / Suspended" filter. Restore stays in 'Deleted users'.
+- Incident: 30 Oct "Test users" delete batch archived real accounts Tathastu (3164f651…) and Hi Tech Medical Centre (055687aa…); restored 2026-11-04. Sahayak/"Master Admin" (fc6a4d35…) was restored by mistake and put back to its original deleted state (purge 29 Nov).
+- OPEN for Provider App team: block sign-in / app use for users.is_archived = TRUE (Provider App still lets deleted accounts log in). Also: something on the Provider App side flips users.role hospital↔doctor for Tathastu's owner account (3164f651…), which also has a doctors row (DM Upadhyay) on the same user_id.
