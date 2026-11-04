@@ -498,4 +498,4 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - diagnostic_centre_profiles = 6th canonical table (CRM type diagnostic_centre; pathologist users living there are routed to it). Nurse/paramedic leads = users row only (role = type). New canonical rows: INSERT … ON CONFLICT (user_id) WHERE user_id IS NOT NULL.
 - Onboard modal adds Nurse + Diagnostic centre. Outbound admin_bridge webhooks retired (queue_outbound no-op, dispatcher not started, retry route 410, 20 stale Mongo records marked retired).
 - Restored-rows list for Provider App: /app/memory/PHASE_D_RESTORED_ROWS.md. Tests: tests/test_phase_d_followup.py (55/58 before last fixes).
-- Open: diagnostic_centre_profiles lacks CRM columns (pipeline_stage, kyc_status, deal_value, assigned_agent_*, lead_source, local_decision, ai_fields_applied_*, email).
+- diagnostic_centre_profiles now has all CRM columns (Provider App, 2026-06); 10 existing diagnostic-centre leads synced; pipeline/agent/email edits verified live.
