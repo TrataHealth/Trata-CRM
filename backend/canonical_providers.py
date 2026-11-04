@@ -27,6 +27,8 @@ TABLES = {
 }
 # Phase D follow-up: nurse / paramedic leads are a users row only (right role, no profile table yet).
 USER_ONLY = {"nurse", "paramedic"}
+ROLE_ALIASES = {"lab": "pathologist", "lab_tech": "pathologist", "pathology": "pathologist", "ambulance": "ambulance_provider",
+                "diagnostic_centre_admin": "diagnostic_centre"}
 ADDRESS_RULE_TABLES = {"path_lab_profiles", "diagnostic_centre_profiles"}
 LICENSE_COL = {"path_lab_profiles": "registration_number", "pharmacy_providers": "drug_license_number"}
 RENAME = {"source": "lead_source", "ambulance_count": "total_ambulances"}
@@ -127,6 +129,8 @@ async def _ensure_user(conn, c: Dict[str, Any], phone: str) -> Optional[str]:
     existing same-role account is reused (confirmed by the Provider App team)."""
     u = await conn.fetchrow("SELECT id, role FROM public.users WHERE phone = ANY($1::text[]) LIMIT 1", [phone, f"+91{phone}"])
     if u:
+        if u["role"] is None:
+            await conn.execute("UPDATE public.users SET role = $2, updated_at = now() WHERE id = $1", u["id"], c.get("type"))
         return u["id"] if u["role"] in (None, c.get("type")) else None
     uid = str(uuid.uuid4())
     await conn.execute("""INSERT INTO public.users (id, phone, name, role, is_active, verification_status, created_at, updated_at)
@@ -230,7 +234,9 @@ async def set_verification(user_id: str, type_: str, decision: str, actor: Optio
     async with pool.acquire() as conn:
         if type_ in USER_ONLY:
             r = await conn.execute("UPDATE public.users SET verification_status = $2, updated_at = now() WHERE id = $1", user_id, decision)
-            return {"success": r.rsplit(" ", 1)[-1] != "0", "verification_status": decision}
+            if r.rsplit(" ", 1)[-1] == "0":
+                return {"success": False, "reason": "no_canonical_row"}
+            return {"success": True, "verification_status": decision}
         table, _ = await _table_for(conn, type_, user_id)
         status = decision
         if decision == "verified" and table in ADDRESS_RULE_TABLES:

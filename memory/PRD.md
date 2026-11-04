@@ -492,3 +492,10 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Supabase->CRM users mirror writes the raw Mongo collection (no echo back) and never $sets None.
 - Parity report: /app/memory/PHASE_D_PARITY_REPORT.md. Tests: /app/backend/tests/test_phase_d_canonical.py (iterations 31–32).
 - Open questions for the Provider App team: doctors/ambulance_providers lack verification_status (+ ambulance lacks is_active); path_lab_profiles has no unique index on user_id and its enum lacks 'pending'; pharmacy rows still use 'approved'; pathologist users living in diagnostic_centre_profiles not covered by the doc; nurse/paramedic/diagnostic_centre CRM types have no canonical table; users.phone is unique so new leads reuse an existing same-role user.
+
+## 2026-06 — Phase D follow-up (Provider App answers applied)
+- verification_status is the only status write on all 6 canonical tables (doctors + ambulance included); approve-all also sets it (ambulance is_active=TRUE). No CRM path writes 'approved' to verification_status / kyc_status mirror.
+- diagnostic_centre_profiles = 6th canonical table (CRM type diagnostic_centre; pathologist users living there are routed to it). Nurse/paramedic leads = users row only (role = type). New canonical rows: INSERT … ON CONFLICT (user_id) WHERE user_id IS NOT NULL.
+- Onboard modal adds Nurse + Diagnostic centre. Outbound admin_bridge webhooks retired (queue_outbound no-op, dispatcher not started, retry route 410, 20 stale Mongo records marked retired).
+- Restored-rows list for Provider App: /app/memory/PHASE_D_RESTORED_ROWS.md. Tests: tests/test_phase_d_followup.py (55/58 before last fixes).
+- Open: diagnostic_centre_profiles lacks CRM columns (pipeline_stage, kyc_status, deal_value, assigned_agent_*, lead_source, local_decision, ai_fields_applied_*, email).

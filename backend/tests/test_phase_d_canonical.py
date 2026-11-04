@@ -1,4 +1,4 @@
-# Phase D — CRM reads/writes the 5 canonical provider tables (no crm_provider_leads)
+# Phase D — CRM reads/writes the 6 canonical provider tables (no crm_provider_leads)
 import os
 import sys
 import time
@@ -103,8 +103,11 @@ class TestSupabaseContactsList:
         assert FIELDS <= set(d["items"][0].keys())
         types = {i["type"] for i in d["items"]}
         assert types <= TYPES
+        # Phase D follow-up: 6 canonical tables (diagnostic_centre_profiles reported as type 'pathologist')
         expected = sum(q(f"SELECT count(*) FROM public.{t}", fetch="val") for t in
-                       ["hospital_profiles", "path_lab_profiles", "doctors", "pharmacy_providers", "ambulance_providers"])
+                       ["hospital_profiles", "path_lab_profiles", "doctors", "pharmacy_providers", "ambulance_providers",
+                        "diagnostic_centre_profiles"])
+        assert all("canonical_table" in i for i in d["items"])
         assert d["total"] == expected
         print("types", types, "total", d["total"])
 

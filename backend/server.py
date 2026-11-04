@@ -1348,6 +1348,7 @@ async def list_contacts(
 # user.upsert outbound so the Trata Admin App + Provider App see the same user.
 PROVIDER_ROLES_ALLOWED = {
     "ambulance_provider", "hospital", "doctor", "paramedic", "pathologist", "pharmacy",
+    "nurse", "diagnostic_centre",
 }
 
 
@@ -1476,6 +1477,8 @@ def _user_type_for_role(role: str) -> str:
         "doctor": "doctor",
         "paramedic": "paramedic",
         "pathologist": "lab",
+        "diagnostic_centre": "lab",
+        "nurse": "nurse",
         "pharmacy": "pharmacy",
     }
     return mapping.get(role, role)
@@ -1758,13 +1761,15 @@ async def admin_onboarding_approve_all(user_id: str, body: Optional[AdminApprove
             "error": res.get("reason"),
             "message": "Add the provider's latitude/longitude before approving — patients can't discover it without a location.",
         })
-    canon = await cp.set_verification(user_id, summary.get("role"), "verified", current.get("name") or current.get("phone"))
+    canon = await cp.set_verification(user_id, cp.ROLE_ALIASES.get(summary.get("role"), summary.get("role")), "verified",
+                                      current.get("name") or current.get("phone"))
     res["verification_status"] = canon.get("verification_status")
+    final = canon.get("verification_status") or "verified"
     # Mirror the approval into CRM contacts so KYC queue reflects it too.
     try:
         await db.contacts.update_many(
             {"$or": [{"supabase_user_id": user_id}, {"phone": summary.get("phone")}]},
-            {"$set": {"kyc_status": "approved", "is_verified": True, "updated_at": now_iso()}},
+            {"$set": {"kyc_status": final, "is_verified": final == "verified", "updated_at": now_iso()}},
         )
     except Exception as e:
         logger.warning(f"admin approve-all · CRM contacts mirror failed: {e}")
@@ -2656,7 +2661,7 @@ async def kyc_admin_final(contact_id: str, data: KycAdminFinalBody, current=Depe
                                       current.get("name") or current.get("phone"), data.notes)
     if canon.get("reason") == "check_violation":
         raise HTTPException(status_code=400, detail="The provider record failed a shared-database rule (e.g. demo rows can't be verified, or the address is incomplete).")
-    if canon.get("reason") == "no_canonical_row" and c.get("type") in cp.TABLES:
+    if canon.get("reason") == "no_canonical_row" and (c.get("type") in cp.TABLES or c.get("type") in cp.USER_ONLY):
         raise HTTPException(status_code=409, detail="This lead has no provider record on the shared database yet, so it can't be verified or rejected.")
     final = canon.get("verification_status") or data.decision
     new_stage = final if final in ("verified", "rejected") else c.get("pipeline_stage")
@@ -6108,6 +6113,7 @@ async def bridge_sync_users(current=Depends(get_current_user)):
 async def bridge_retry(record_id: str, current=Depends(get_current_user)):
     if not is_admin_or_manager(current):
         raise HTTPException(status_code=403, detail="Admin/manager only")
+    raise HTTPException(status_code=410, detail="Outbound webhooks are retired (Phase D) — nothing is pushed anymore.")
     rec = await db.admin_bridge_outbound.find_one({"id": record_id}, {"_id": 0})
     if not rec:
         raise HTTPException(status_code=404, detail="Outbound event not found")

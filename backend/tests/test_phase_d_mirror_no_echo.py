@@ -135,12 +135,10 @@ class TestKycFinal:
         r = admin.post(f"{API}/contacts/{ZEN_CONTACT}/kyc-admin-final", json={"decision": "verified", "notes": "TEST_iter32"}, timeout=30)
         assert r.status_code == 200, r.text
         assert r.json()["verification_status"] == "pending_address"
-        ev = MDB.admin_bridge_outbound.find_one({"event": "crm.kyc.admin_verified", "data.notes": None,
-                                                 "data.phone": MDB.contacts.find_one({"id": ZEN_CONTACT})["phone"],
-                                                 "created_at": {"$gte": t0}}, sort=[("created_at", -1)])
-        assert ev, "outbound event not found"
-        assert ev["data"]["decision"] == "pending_address", ev["data"]
-        assert "PENDING_ADDRESS" in ev["data"]["text"]
+        # Phase D follow-up: outbound webhooks retired → no admin_bridge_outbound row is written
+        ev = MDB.admin_bridge_outbound.find_one({"event": "crm.kyc.admin_verified", "created_at": {"$gte": t0}})
+        assert ev is None, "outbound retired but an event was queued"
+        assert r.json()["contact"]["kyc_status"] == "pending_address"
 
     def test_check_violation_is_400(self, admin):
         q("""UPDATE public.path_lab_profiles SET address='TEST_addr', city='TEST_City', state='TEST_State', pincode='411001',

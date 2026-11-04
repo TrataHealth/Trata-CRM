@@ -10,6 +10,8 @@ const ROLE_OPTIONS = [
   { value: "paramedic",          label: "Paramedic",          icon: "➕" },
   { value: "pathologist",        label: "Pathology lab",      icon: "🧪" },
   { value: "pharmacy",           label: "Pharmacy",           icon: "💊" },
+  { value: "diagnostic_centre",  label: "Diagnostic centre",  icon: "🔬" },
+  { value: "nurse",              label: "Nurse",              icon: "🩹" },
 ];
 
 // Per-role extra fields. Keys must match the backend onboard-provider whitelist.
@@ -35,6 +37,14 @@ const ROLE_EXTRA_FIELDS = {
   pathologist: [
     { key: "lab_specialty",   label: "Lab specialty",        type: "text",   placeholder: "e.g. Pathology, Radiology" },
     { key: "license_number",  label: "Lab licence #",        type: "text",   placeholder: "Optional" },
+  ],
+  diagnostic_centre: [
+    { key: "lab_specialty",   label: "Tests offered",        type: "text",   placeholder: "e.g. Imaging, Pathology" },
+    { key: "license_number",  label: "Centre licence #",     type: "text",   placeholder: "Optional" },
+  ],
+  nurse: [
+    { key: "specialization",  label: "Nursing area",         type: "text",   placeholder: "e.g. ICU, Home care" },
+    { key: "license_number",  label: "Nursing council reg. #", type: "text", placeholder: "Optional" },
   ],
   pharmacy: [
     { key: "pharmacy_type",   label: "Pharmacy type",        type: "text",   placeholder: "e.g. Retail / 24×7" },

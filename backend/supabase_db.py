@@ -1364,8 +1364,8 @@ async def _profile_coords(conn, user_id: str, vertical: str):
 
 async def approve_all_provider_kyc(user_id: str, vertical: str, admin_name: Optional[str],
                                    lat: Optional[float] = None, lng: Optional[float] = None) -> Dict[str, Any]:
-    """One-click approval → docs approved, users + profile 'verified' (hospital) /
-    'approved' (pathologists, ambulance), labs branch activated. Refuses if the
+    """One-click approval → docs approved, users + profile verification_status 'verified'
+    (canonical status set by canonical_providers.set_verification), labs branch activated. Refuses if the
     entity has no valid coordinates (patient discovery needs them)."""
     admin = admin_name or "master_admin"
     pool = await get_pool()
@@ -1395,7 +1395,7 @@ async def approve_all_provider_kyc(user_id: str, vertical: str, admin_name: Opti
                 """, user_id, json.dumps({"lat": lat, "lng": lng}))
             elif vertical == "ambulance":
                 await conn.execute("""
-                    UPDATE public.ambulance_providers SET status='approved', verification_status='verified', approved_at=now(), approved_by=$2,
+                    UPDATE public.ambulance_providers SET status='approved', verification_status='verified', is_active=TRUE, approved_at=now(), approved_by=$2,
                            business_lat=$3, business_lng=$4, updated_at=now() WHERE user_id=$1::text
                 """, user_id, admin, lat, lng)
             elif vertical == "doctor":
