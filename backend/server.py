@@ -1244,20 +1244,17 @@ async def _sync_supabase_users_into_contacts() -> Dict[str, Any]:
                     "supabase_user_id": r["supabase_user_id"],
                     "name": r["name"],
                     "type": r["type"],
-                    "email": r.get("email") or None,
-                    "city": r.get("city") or None,
-                    "state": r.get("state") or None,
-                    "address": r.get("address") or None,
                     "is_active": r["is_active"],
                     "updated_at": now_iso(),
                     "last_upstream_sync_at": now_iso(),
                 }
+                patch.update({k: r[k] for k in ("email", "city", "state", "address") if r.get(k)})
                 # Only bump verification / stage if CRM hasn't been touched.
                 if not existing.get("assigned_agent_id"):
                     if r.get("is_verified") and existing.get("kyc_status") != "approved":
                         patch["kyc_status"] = "approved"
                         patch["is_verified"] = True
-                await db.contacts.update_one({"phone": phone}, {"$set": patch})
+                await db._db.contacts.update_one({"phone": phone}, {"$set": patch})
                 updated += 1
             else:
                 new_row = {
@@ -1271,7 +1268,7 @@ async def _sync_supabase_users_into_contacts() -> Dict[str, Any]:
                     "updated_at": now_iso(),
                     "last_upstream_sync_at": now_iso(),
                 }
-                await db.contacts.insert_one(new_row)
+                await db._db.contacts.insert_one(new_row)
                 inserted += 1
                 await _notify_new_upstream_provider(new_row)
         _SB_CONTACTS_SYNC_STATE["last_run_at"] = _time.time()
@@ -1867,7 +1864,7 @@ async def update_contact(contact_id: str, data: ContactStatusUpdate, current=Dep
     c2 = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
     # Phase D — CRM edits to shared display fields land on the canonical provider row
     if set(update) & cp.DISPLAY:
-        cp._spawn(db.contacts._after({"id": contact_id}, set(update) & cp.DISPLAY))
+        cp._spawn(db.contacts._after({"id": contact_id}, set(update) & cp.DISPLAY, display=True))
     # Iter 43 — mirror edits back to shared Supabase `users` + vertical
     # profile so the mobile Patient / Provider App sees them live.
     try:
@@ -2657,6 +2654,10 @@ async def kyc_admin_final(contact_id: str, data: KycAdminFinalBody, current=Depe
         raise HTTPException(status_code=404, detail="Lead not found")
     canon = await cp.set_verification(cp.user_id_of(c), c.get("type"), data.decision,
                                       current.get("name") or current.get("phone"), data.notes)
+    if canon.get("reason") == "check_violation":
+        raise HTTPException(status_code=400, detail="The provider record failed a shared-database rule (e.g. demo rows can't be verified, or the address is incomplete).")
+    if canon.get("reason") == "no_canonical_row" and c.get("type") in cp.TABLES:
+        raise HTTPException(status_code=409, detail="This lead has no provider record on the shared database yet, so it can't be verified or rejected.")
     final = canon.get("verification_status") or data.decision
     new_stage = final if final in ("verified", "rejected") else c.get("pipeline_stage")
     await db.contacts.update_one({"id": contact_id}, {"$set": {
@@ -2672,8 +2673,8 @@ async def kyc_admin_final(contact_id: str, data: KycAdminFinalBody, current=Depe
         "name": c.get("name"),
         "kyc_id": c.get("kyc_id"),
         "upstream_user_id": c.get("upstream_user_id"),
-        "decision": data.decision,
-        "text": f"TRATA HEALTH ADMIN FINAL: {data.decision.upper()}" + (f" — {data.notes}" if data.notes else ""),
+        "decision": final,
+        "text": f"TRATA HEALTH ADMIN FINAL: {final.upper()}" + (f" — {data.notes}" if data.notes else ""),
         "author_phone": current.get("phone"),
         "author_role": "admin",
         "author_name": current.get("name"),
@@ -5520,7 +5521,7 @@ async def supabase_contacts(type: Optional[str] = None, stage: Optional[str] = N
         raise HTTPException(status_code=503, detail="Supabase not configured")
     # Sales reps only see their own leads
     assigned = current["id"] if is_sales_rep(current) else None
-    payload = await cp.list_leads(type_=type, stage=stage, q=q, assigned_agent_id=assigned, limit=limit)
+    payload = await cp.list_leads(type_=type, stage=stage, q=q, assigned_agent_id=assigned, limit=max(1, min(limit, 1000)))
     return {"items": payload["items"], "total": payload["total"], "source": "supabase"}
 
 

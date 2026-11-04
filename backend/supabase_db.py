@@ -1748,19 +1748,25 @@ async def list_all_users_for_crm_sync(limit: int = 2000) -> List[Dict[str, Any]]
     async with pool.acquire() as conn:
         rs = await conn.fetch("""
             WITH prof AS (
-              SELECT user_id, name, phone, city, state, address,
+              SELECT 1 AS pri, user_id, name, phone, city, state, address,
                      verification_status AS vstatus
                 FROM public.hospital_profiles
               UNION ALL
-              SELECT user_id, business_name AS name, phone, city, state, address,
+              SELECT 1, user_id, business_name AS name, phone, city, state, address,
                      status AS vstatus
                 FROM public.ambulance_providers
               UNION ALL
-              SELECT user_id, full_name AS name, phone, city, state, address,
+              SELECT 1, user_id, full_name AS name, phone, city, state, address,
                      CASE WHEN is_verified THEN 'approved' ELSE NULL END AS vstatus
                 FROM public.doctors
               UNION ALL
-              SELECT user_id, coalesce(lab_name, name) AS name, phone, city, state, address,
+              SELECT 1, user_id, name, phone, city, state, address, verification_status
+                FROM public.path_lab_profiles
+              UNION ALL
+              SELECT 1, user_id, business_name, phone, city, state, address, verification_status
+                FROM public.pharmacy_providers
+              UNION ALL
+              SELECT 2, user_id, coalesce(lab_name, name) AS name, phone, city, state, address,
                      status AS vstatus
                 FROM public.pathologists
             )
@@ -1768,7 +1774,7 @@ async def list_all_users_for_crm_sync(limit: int = 2000) -> List[Dict[str, Any]]
                    u.is_active, u.verification_status, u.created_at, u.updated_at,
                    p.name AS profile_name, p.city, p.state, p.address, p.vstatus
               FROM public.users u
-              LEFT JOIN prof p ON p.user_id = u.id
+              LEFT JOIN LATERAL (SELECT * FROM prof WHERE prof.user_id = u.id ORDER BY pri LIMIT 1) p ON TRUE
              WHERE coalesce(u.role, 'patient') <> 'admin'
                AND coalesce(u.is_archived, FALSE) = FALSE
              ORDER BY u.created_at DESC NULLS LAST

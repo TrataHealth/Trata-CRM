@@ -1,3 +1,5 @@
+_Snapshot taken before the switch (2026-11-04). Legacy table frozen since then._
+
 # Phase D parity report (§10)
 
 ## 1. Legacy rows without a users row: **0** PASS

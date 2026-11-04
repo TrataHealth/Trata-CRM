@@ -8,7 +8,9 @@ import re
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, Optional
+
+import asyncpg
 
 import supabase_db as sb
 
@@ -159,7 +161,8 @@ async def sync_contact(c: Dict[str, Any], keys: Optional[Iterable[str]] = None, 
                     return {"success": False, "reason": "lives_in_diagnostic_centre_profiles", "user_id": uid}
                 if not exists:
                     keys = keys | DISPLAY
-            vals = {k: _coerce(v, cols[k], k) for k, v in _canonical_values(c, keys, table, name_col).items() if k in cols}
+            vals = {k: _coerce(v, cols[k], k) for k, v in _canonical_values(c, keys, table, name_col).items()
+                    if k in cols and v is not None}
             vals.pop("user_id", None)
             if exists:
                 if not vals:
@@ -212,10 +215,15 @@ async def set_verification(user_id: str, type_: str, decision: str, actor: Optio
         elif table == "ambulance_providers":
             sets.append("status = 'approved', approved_at = now()" if status == "verified" else "status = 'rejected'")
         args = [user_id, decision_json] + ([actor] if status == "verified" else [])
-        async with conn.transaction():
-            r = await conn.execute(f"UPDATE public.{table} SET {', '.join(sets)} WHERE user_id = $1", *args)
-            await conn.execute("UPDATE public.users SET verification_status = $2, updated_at = now() WHERE id = $1", user_id, status)
-    return {"success": r.rsplit(" ", 1)[-1] != "0", "verification_status": status}
+        try:
+            async with conn.transaction():
+                r = await conn.execute(f"UPDATE public.{table} SET {', '.join(sets)} WHERE user_id = $1", *args)
+                if r.rsplit(" ", 1)[-1] == "0":
+                    return {"success": False, "reason": "no_canonical_row"}
+                await conn.execute("UPDATE public.users SET verification_status = $2, updated_at = now() WHERE id = $1", user_id, status)
+        except asyncpg.exceptions.CheckViolationError as e:
+            return {"success": False, "reason": "check_violation", "detail": str(e)}
+    return {"success": True, "verification_status": status}
 
 
 # ── Read path (§7) ───────────────────────────────────────────────────────────
@@ -272,7 +280,13 @@ class _ContactsProxy:
     def __getattr__(self, n):
         return getattr(self._c, n)
 
-    async def _after(self, flt: Dict[str, Any], set_keys: Optional[Iterable[str]], many: bool = False, create: bool = False):
+    async def _after(self, flt: Dict[str, Any], set_keys: Optional[Iterable[str]], many: bool = False, create: bool = False,
+                     display: bool = False):
+        """Automatic hook carries CRM-owned fields only; shared display fields are written solely by explicit CRM edits."""
+        if set_keys is not None and not display:
+            set_keys = set(set_keys) & CRM_OWNED
+            if not set_keys:
+                return
         try:
             docs = await self._c.find(flt, {"_id": 0}).to_list(1000 if many else 1)
             for d in docs:

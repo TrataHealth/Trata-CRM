@@ -1,0 +1,40 @@
+{
+  "summary": "Phase D backend testing (canonical provider tables replacing crm_provider_leads). New pytest suite /app/backend/tests/test_phase_d_canonical.py: 23/23 pass. Covers /api/supabase/contacts list (all 5 types, union total = sum of the 5 tables, type/stage/q filters, Rohan sees only his own leads), detail by users.id or canonical id with 404 for unknown, PATCH stage+city synced to path_lab_profiles within the poll window, assign/unassign synced (assigned_agent_id/name), kyc-admin-final pending_address / rejected (local_decision.reason, users.verification_status) / verified with full address (ai_fields_applied_by/at), 400 for a bad decision, 403 for a sales rep, backfill (403 for rep, started:true returned in under 5s), regression endpoints, and crm_provider_leads unchanged (count 6, max updated_at 2026-11-04 09:25:49). CRITICAL BUG found in the existing Supabase->CRM users mirror. The Phase D SyncedDB proxy now echoes the mirror's writes back to the canonical tables, and this wipes city/state/address on path_lab_profiles (and pharmacy_providers) rows. Reproduced on Zenith.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "_sync_supabase_users_into_contacts (server.py ~1221-1260; runs automatically from GET /api/contacts with a 60s TTL at ~1304, and from POST /api/admin/sync-supabase-users)",
+        "issue": "Data loss on canonical rows. sb.list_all_users_for_crm_sync (supabase_db.py ~1749) builds its 'prof' CTE from hospital_profiles, ambulance_providers, doctors and the LEGACY 'pathologists' table. It does not include path_lab_profiles or pharmacy_providers, so for path labs and pharmacies city, state and address come back None. The mirror then runs db.contacts.update_one({phone}, $set {name, email, city:None, state:None, address:None, is_active}). That call now goes through the cp._ContactsProxy. These are DISPLAY keys, so sync_contact runs UPDATE path_lab_profiles/pharmacy_providers SET city=NULL, state=NULL, address=NULL, name=users.name. Reproduced: I set Zenith path_lab_profiles city='TEST_Repro', state='TEST_State' and called POST /api/admin/sync-supabase-users (updated:50). 8s later the canonical city and state were NULL and the Mongo city ('Pune') was also NULL. For pharmacies, business_name is also overwritten with users.name. Verified path labs throw CHECK violation path_lab_profiles_check1 in the logs ('canonical sync failed ({phone: 9000020005})'). Real rows may already have been wiped: 4 of 4 recently updated pharmacy_providers rows and 5 of 7 recently updated path_lab_profiles rows have city NULL.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {"endpoint": "PATCH /api/contacts/{id}", "issue": "Canonical sync happens twice for display keys. The proxy's update_one already syncs every $set key in CRM_OWNED|DISPLAY, and then update_contact spawns db.contacts._after again for the same DISPLAY keys (server.py ~1869-1870). This doubles the ~0.5s round-trips and the UPDATEs."},
+      {"endpoint": "POST /api/contacts/{id}/kyc-admin-final", "issue": "When the result is pending_address, the outbound crm.kyc.admin_verified webhook still sends decision=data.decision ('verified') and text 'TRATA HEALTH ADMIN FINAL: VERIFIED', but the canonical status is pending_address. It should send the final status."},
+      {"endpoint": "cp.set_verification", "issue": "For a path lab with a full address but is_demo=true, the UPDATE breaks CHECK path_lab_profiles_check1 (which requires is_demo=false). The CheckViolation is not caught, so the endpoint returns 500. Also, if the canonical row is missing, it returns success:false but the Mongo contact is still marked verified with no warning to the caller."},
+      {"endpoint": "GET /api/supabase/contacts", "issue": "The limit param has no upper cap and there is no offset/pagination."},
+      {"endpoint": "PATCH /api/contacts/{id}/assign", "issue": "Only one crm_users record (Rohan) has a sales_rep or manager role. Sales Manager Priya (9000000001) cannot be an assignee because her stored role is not 'manager', so the endpoint returns 'Sales agent not found'. Check whether this is intended."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_phase_d_canonical.py", "/app/backend/tests/pg_helper.py", "/app/test_reports/pytest/phase_d.xml"],
+  "action_items": [
+    "CRITICAL: stop the Supabase->CRM mirror from echoing upstream data back onto the canonical tables. Two options: (a) write through db._db.contacts (the raw collection) inside _sync_supabase_users_into_contacts, or (b) add a no-sync flag to the proxy. Also fix list_all_users_for_crm_sync to read path_lab_profiles(name) and pharmacy_providers(business_name) instead of the legacy pathologists table. And never $set city/state/address to None when the upstream value is missing.",
+    "Audit path_lab_profiles and pharmacy_providers for rows whose city/state/address/name were nulled or overwritten by the mirror (anything with updated_at since Phase D went live), and restore them from backups or Mongo history if possible.",
+    "Remove the duplicate cp._spawn in update_contact.",
+    "Send the final verification_status (pending_address) in the kyc-admin-final outbound event.",
+    "Catch asyncpg CheckViolation in set_verification and return a clear 4xx (e.g. demo rows or a missing address)."
+  ],
+  "critical_code_review_comments": [
+    "The SyncedDB proxy hooks every db.contacts write, including system/sync jobs that write upstream-derived values. Every such call site now becomes a write to the canonical tables, so writes that originate upstream need an explicit bypass.",
+    "sync_contact uses a module-level _cols cache that is never invalidated. A schema change on the shared DB needs a backend restart.",
+    "server.py is 6300 lines and should be split into modules."
+  ],
+  "updated_files": ["/app/backend/tests/test_phase_d_canonical.py", "/app/backend/tests/pg_helper.py"],
+  "success_rate": {"backend": "23/23 requested-flow tests pass; 1 critical regression found outside the tested endpoints (mirror job)", "frontend": "not tested (backend only)"},
+  "seed_data_creation": "None. Zenith (path_lab_profiles user f585d675...) was temporarily modified and restored to its original state: city/state/address/pincode/lat/long NULL, kyc_status 'pending', local_decision NULL, pipeline_stage 'verified', verification_status 'pending_address', assigned to Rohan; users.verification_status 'pending'; Mongo contact kyc_status 'pending', pipeline_stage 'verified', city 'Pune'. The mirror job will set Mongo city to NULL again on its next run because of the critical bug.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_phase_d_canonical.py -v. The module fixture snapshots and restores Zenith. To check the fix for the critical bug, see the repro steps in 'rca of the issue': after the fix, the canonical city must stay 'TEST_Repro'. Restore Zenith city/state to NULL afterwards. Only Rohan is assignable in crm_users.",
+  "rca of the issue": "Repro: 1) UPDATE path_lab_profiles SET city='TEST_Repro' WHERE user_id='f585d675-96bb-569a-8b28-1ef336ff71ff'. 2) POST /api/admin/sync-supabase-users as admin, or GET /api/contacts once the 60s TTL has expired. 3) After about 5s, path_lab_profiles.city is NULL. Root cause: list_all_users_for_crm_sync has no path_lab_profiles/pharmacy_providers branch, so city is None. The mirror does $set city:None on Mongo contacts through the SyncedDB proxy, and the proxy runs sync_contact with the DISPLAY keys, which writes NULL to the canonical row. Mitigation: use the raw collection (db._db.contacts) in the mirror, fix the CTE, and skip None values."
+}
