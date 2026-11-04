@@ -30,6 +30,7 @@ import csv
 import upstream_sync as us
 import admin_bridge as ab
 import supabase_db as sb
+import canonical_providers as cp
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -58,7 +59,7 @@ if RESEND_API_KEY:
     _resend.api_key = RESEND_API_KEY
 
 client = AsyncIOMotorClient(MONGO_URL)
-db = client[DB_NAME]
+db = cp.SyncedDB(client[DB_NAME])
 
 app = FastAPI(title="TrataHealth CRM API")
 api = APIRouter(prefix="/api")
@@ -1613,11 +1614,6 @@ async def admin_onboarding_create_provider(body: AdminOnboardProviderBody, curre
             "supabase_user_id": sb_user_id,
         }
         await db.contacts.insert_one(new_contact.copy())
-        # Best-effort dual-write mirror
-        try:
-            await sb.upsert_provider_lead(new_contact)
-        except Exception as e:
-            logger.warning(f"admin onboarding · mirror to crm_provider_leads failed: {e}")
 
     await db.activities.insert_one({
         "id": str(uuid.uuid4()), "type": "note", "category": "kyc",
@@ -1765,6 +1761,8 @@ async def admin_onboarding_approve_all(user_id: str, body: Optional[AdminApprove
             "error": res.get("reason"),
             "message": "Add the provider's latitude/longitude before approving — patients can't discover it without a location.",
         })
+    canon = await cp.set_verification(user_id, summary.get("role"), "verified", current.get("name") or current.get("phone"))
+    res["verification_status"] = canon.get("verification_status")
     # Mirror the approval into CRM contacts so KYC queue reflects it too.
     try:
         await db.contacts.update_many(
@@ -1867,8 +1865,9 @@ async def update_contact(contact_id: str, data: ContactStatusUpdate, current=Dep
     update["updated_at"] = now_iso()
     await db.contacts.update_one({"id": contact_id}, {"$set": update})
     c2 = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
-    # Phase B.2 — dual-write mirror to Supabase crm_provider_leads
-    await _mirror_contact(c2)
+    # Phase D — CRM edits to shared display fields land on the canonical provider row
+    if set(update) & cp.DISPLAY:
+        cp._spawn(db.contacts._after({"id": contact_id}, set(update) & cp.DISPLAY))
     # Iter 43 — mirror edits back to shared Supabase `users` + vertical
     # profile so the mobile Patient / Provider App sees them live.
     try:
@@ -1915,8 +1914,6 @@ async def assign_lead(contact_id: str, data: AssignLead, current=Depends(get_cur
         {"id": contact_id},
         {"$set": {"assigned_agent_id": data.agent_id, "assigned_agent_name": agent_name, "updated_at": now_iso()}},
     )
-    # Phase B.2 — dual-write mirror to Supabase crm_provider_leads
-    await _mirror_contact(await db.contacts.find_one({"id": contact_id}, {"_id": 0}))
     # Emit lead.assigned outbound
     c = await db.contacts.find_one({"id": contact_id}, {"_id": 0, "phone": 1, "name": 1, "city": 1, "type": 1})
     old_agent = None
@@ -2658,9 +2655,12 @@ async def kyc_admin_final(contact_id: str, data: KycAdminFinalBody, current=Depe
     c = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
     if not c:
         raise HTTPException(status_code=404, detail="Lead not found")
-    new_stage = "verified" if data.decision == "verified" else c.get("pipeline_stage")
+    canon = await cp.set_verification(cp.user_id_of(c), c.get("type"), data.decision,
+                                      current.get("name") or current.get("phone"), data.notes)
+    final = canon.get("verification_status") or data.decision
+    new_stage = final if final in ("verified", "rejected") else c.get("pipeline_stage")
     await db.contacts.update_one({"id": contact_id}, {"$set": {
-        "kyc_status": data.decision,
+        "kyc_status": final,
         "kyc_admin_decision_at": now_iso(),
         "kyc_admin_decision_notes": data.notes,
         "kyc_admin_decision_by": current.get("name") or current.get("phone"),
@@ -2680,7 +2680,7 @@ async def kyc_admin_final(contact_id: str, data: KycAdminFinalBody, current=Depe
         "reviewed_at": now_iso(),
     })
     c2 = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
-    return {"success": True, "contact": c2}
+    return {"success": True, "contact": c2, "verification_status": final}
 
 
 @api.get("/admin/kyc-queue")
@@ -4038,47 +4038,26 @@ async def seed_demo_accounts(current=Depends(get_current_user)):
     # incoming SOS so their Emergency Command Centre has something to play with.
     demo_ops = await _seed_hospital_demo_ops()
 
-    # Phase B.2 — mirror every demo contact into Supabase crm_provider_leads
-    leads_mirrored = 0
-    async for c in db.contacts.find({"source": "demo_seed"}, {"_id": 0}):
-        res = await sb.upsert_provider_lead(c)
-        if res.get("success"):
-            leads_mirrored += 1
-
     return {
         "success": True,
         "created_users": created_users,
         "created_contacts": created_contacts,
         "already_existed": updated,
         "supabase_mirrored": mirrored,
-        "leads_mirrored_to_postgres": leads_mirrored,
         "demo_ops": demo_ops,
         "credentials_hint": "OTP 123456 · password Trata@123 for every demo account",
     }
 
 
-@api.post("/admin/mirror-contacts-to-postgres")
-async def mirror_contacts_to_postgres(current=Depends(get_current_user)):
-    """Phase B.2 one-shot backfill: iterate every Mongo `contacts` doc and
-    upsert into Supabase `crm_provider_leads`. Safe to re-run — the upsert
-    keys off contact.id. Master-admin only."""
+@api.post("/admin/canonical/backfill")
+async def canonical_backfill(current=Depends(get_current_user)):
+    """Phase D one-shot: write every CRM contact's CRM-owned fields onto its canonical provider row."""
     if not (current.get("is_master_admin") or current.get("role") == "admin"):
         raise HTTPException(status_code=403, detail="Trata Health Admin only")
     if not sb.is_configured():
         raise HTTPException(status_code=503, detail="Supabase not configured")
-
-    total = ok = failed = 0
-    reasons: Dict[str, int] = {}
-    async for c in db.contacts.find({}, {"_id": 0}):
-        total += 1
-        res = await sb.upsert_provider_lead(c)
-        if res.get("success"):
-            ok += 1
-        else:
-            failed += 1
-            key = res.get("reason", "unknown")
-            reasons[key] = reasons.get(key, 0) + 1
-    return {"success": True, "total": total, "mirrored": ok, "failed": failed, "failure_reasons": reasons}
+    cp._spawn(cp.backfill(db._db.contacts))
+    return {"success": True, "started": True, "message": "Backfill running in the background — see backend logs for stats."}
 
 
 @api.post("/admin/sync-supabase-users")
@@ -4170,9 +4149,6 @@ async def purge_test_users(body: Optional[TestUserPurgeBody] = None, current=Dep
             await conn.execute("DELETE FROM public.ambulance_providers  WHERE user_id = ANY($1::text[])", user_ids)
             await conn.execute("DELETE FROM public.doctors              WHERE user_id = ANY($1::text[])", user_ids)
             await conn.execute("DELETE FROM public.pathologists         WHERE user_id = ANY($1::text[])", user_ids)
-            # Provider-app leads mirror
-            await conn.execute("DELETE FROM public.crm_provider_leads   WHERE phone = ANY($1::text[]) OR phone = ANY($2::text[])",
-                               phones_full, phones10)
             # Soft-archive the user (no cascade needed, history preserved)
             archived = await conn.execute("""
                 UPDATE public.users
@@ -4794,19 +4770,6 @@ def _verify_webhook_signature(raw_body: bytes, signature_header: Optional[str]) 
 
 def sign_webhook_payload(raw_body: bytes) -> str:
     return "sha256=" + hmac.new(PROVIDER_WEBHOOK_SECRET.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-
-
-
-async def _mirror_contact(contact_doc: Optional[Dict[str, Any]]) -> None:
-    """Phase B.2 dual-write: best-effort mirror a Mongo contact into Supabase
-    `crm_provider_leads`. Never raises — failures are logged and swallowed
-    so the primary Mongo path stays authoritative during cutover."""
-    if not contact_doc:
-        return
-    try:
-        await sb.upsert_provider_lead(contact_doc)
-    except Exception as e:
-        logger.debug(f"_mirror_contact suppressed: {e}")
 
 
 
@@ -5551,14 +5514,13 @@ async def supabase_kyc_overview(current=Depends(require_internal)):
 async def supabase_contacts(type: Optional[str] = None, stage: Optional[str] = None,
                             q: Optional[str] = None, limit: int = 200,
                             current=Depends(require_internal)):
-    """Provider-lead list served from crm_provider_leads (Postgres).
+    """Provider-lead list served from the 5 canonical provider tables (Phase D).
     Same response shape as /api/contacts so the frontend can swap seamlessly."""
     if not _supabase_ready():
         raise HTTPException(status_code=503, detail="Supabase not configured")
     # Sales reps only see their own leads
     assigned = current["id"] if is_sales_rep(current) else None
-    payload = await sb.fetch_crm_contacts(type_=type, stage=stage, q=q,
-                                           assigned_agent_id=assigned, limit=limit)
+    payload = await cp.list_leads(type_=type, stage=stage, q=q, assigned_agent_id=assigned, limit=limit)
     return {"items": payload["items"], "total": payload["total"], "source": "supabase"}
 
 
@@ -5566,7 +5528,7 @@ async def supabase_contacts(type: Optional[str] = None, stage: Optional[str] = N
 async def supabase_contact(contact_id: str, current=Depends(require_internal)):
     if not _supabase_ready():
         raise HTTPException(status_code=503, detail="Supabase not configured")
-    c = await sb.fetch_crm_contact(contact_id)
+    c = await cp.get_lead(contact_id)
     if not c:
         raise HTTPException(status_code=404, detail="Lead not found")
     if is_sales_rep(current) and c.get("assigned_agent_id") != current["id"]:

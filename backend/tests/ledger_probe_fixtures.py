@@ -34,7 +34,6 @@ async def _cleanup_sb():
             await c.execute("DELETE FROM public.hospital_profiles WHERE user_id = ANY($1::text[])", ids)
             await c.execute("DELETE FROM public.users WHERE id = ANY($1::text[])", ids)
         await c.execute("DELETE FROM public.emergency_cases WHERE customer_phone = 'TEST_probe_ledger'")
-        await c.execute("DELETE FROM public.crm_provider_leads WHERE phone = ANY($1::text[])", PHONES)
         return ids
     finally:
         await c.close()

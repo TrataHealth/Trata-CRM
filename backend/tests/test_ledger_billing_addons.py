@@ -83,7 +83,6 @@ def teardown_module_data():
         sbrun("DELETE FROM public.notifications WHERE user_id = ANY($1::text[])", ids, fetch=False)
         sbrun("DELETE FROM public.kyc_documents WHERE user_id = ANY($1::text[])", ids, fetch=False)
         sbrun("DELETE FROM public.users WHERE id = ANY($1::text[])", ids, fetch=False)
-    sbrun("DELETE FROM public.crm_provider_leads WHERE phone = ANY($1::text[])", LAB_PHONES, fetch=False)
 
 
 def post(path, **kw):

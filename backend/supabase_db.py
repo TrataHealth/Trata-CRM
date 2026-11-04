@@ -287,52 +287,6 @@ async def fetch_ambulance_providers() -> List[Dict[str, Any]]:
     return _rows(rs)
 
 
-# ── CRM-owned tables (Phase B — read paths) ──────────────────────────────────
-async def fetch_crm_contacts(type_: Optional[str] = None, stage: Optional[str] = None,
-                             q: Optional[str] = None, assigned_agent_id: Optional[str] = None,
-                             limit: int = 200) -> Dict[str, Any]:
-    """List provider leads owned by the CRM. Mirrors the shape of GET /api/contacts."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        clauses = ["1=1"]
-        args: List[Any] = []
-        if type_:
-            args.append(type_)
-            clauses.append(f"type = ${len(args)}")
-        if stage:
-            args.append(stage)
-            clauses.append(f"pipeline_stage = ${len(args)}")
-        if assigned_agent_id:
-            args.append(assigned_agent_id)
-            clauses.append(f"assigned_agent_id = ${len(args)}")
-        if q:
-            args.append(f"%{q.lower()}%")
-            clauses.append(f"(lower(name) LIKE ${len(args)} OR phone LIKE ${len(args)})")
-        # count
-        total_row = await conn.fetchrow(
-            f"SELECT count(*) AS c FROM public.crm_provider_leads WHERE {' AND '.join(clauses)}",
-            *args,
-        )
-        args.append(limit)
-        rs = await conn.fetch(
-            f"""SELECT * FROM public.crm_provider_leads
-                WHERE {' AND '.join(clauses)}
-             ORDER BY updated_at DESC NULLS LAST
-                LIMIT ${len(args)}""",
-            *args,
-        )
-    return {"items": _rows(rs), "total": total_row["c"]}
-
-
-async def fetch_crm_contact(contact_id: str) -> Optional[Dict[str, Any]]:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        r = await conn.fetchrow(
-            "SELECT * FROM public.crm_provider_leads WHERE id = $1", contact_id
-        )
-    return _row(r)
-
-
 # ── Ambulance-provider PC dashboard (Phase 2 vertical slice) ────────────────
 async def fetch_ambulance_provider_dashboard(user_id: str) -> Dict[str, Any]:
     """Home tiles + recent cases + fleet + earnings for one ambulance provider.
@@ -1100,34 +1054,6 @@ async def delete_hospital_staff(user_id: str, staff_id: str) -> Dict[str, Any]:
     return {"success": r.endswith("1")}
 
 
-# ── Phase B.2 — CRM Contacts ↔ Postgres dual-write ──────────────────────────
-_LEAD_COLUMNS = (
-    "id", "upstream_user_id", "name", "type", "phone", "email",
-    "city", "state", "address", "is_verified", "is_active",
-    "pipeline_stage", "kyc_status", "kyc_id", "deal_value",
-    "assigned_agent_id", "assigned_agent_name",
-    "source", "onboarded_by", "onboarded_at", "avatar",
-    "specialization", "pan_number", "gst_number",
-    "vehicle_reg", "vehicle_make_model", "aadhaar_last4",
-    "father_name", "dob", "hospital_name", "ambulance_count",
-    "license_number", "lab_specialty", "pharmacy_type",
-    "kyc_doc_issue_date", "kyc_doc_expiry_date", "kyc_doc_authority",
-    "kyc_document_number",
-    "ai_doc_prescreens", "ai_prescreen_summary", "ai_extracted_fields",
-    "agent_doc_reviews", "local_decision",
-    "ai_fields_applied_at", "ai_fields_applied_by",
-    "last_admin_sync_at", "created_at", "updated_at",
-)
-_LEAD_JSON_COLS = {
-    "ai_doc_prescreens", "ai_prescreen_summary", "ai_extracted_fields",
-    "agent_doc_reviews", "local_decision",
-}
-_LEAD_TIMESTAMP_COLS = {
-    "onboarded_at", "ai_fields_applied_at", "last_admin_sync_at",
-    "created_at", "updated_at",
-}
-
-
 def _to_datetime(v):
     """Best-effort coerce ISO-8601 string / datetime → datetime for asyncpg."""
     if v is None or v == "":
@@ -1142,71 +1068,6 @@ def _to_datetime(v):
         except Exception:
             return None
     return None
-
-
-def _lead_row_from_contact(c: Dict[str, Any]) -> Dict[str, Any]:
-    """Map a Mongo `contacts` doc → the columns of Postgres `crm_provider_leads`.
-    Everything not present becomes NULL. JSON columns are pre-serialised;
-    timestamp columns are parsed from ISO strings to datetime for asyncpg."""
-    def _get(k, default=None):
-        v = c.get(k, default)
-        return v if v is not None else default
-    row = {col: _get(col) for col in _LEAD_COLUMNS}
-    # NOT NULL columns fall back to sensible defaults
-    row["id"] = c.get("id") or c.get("_id")
-    row["name"] = c.get("name") or c.get("business_name") or c.get("phone") or "Unnamed"
-    row["type"] = c.get("type") or c.get("provider_type") or "other"
-    row["phone"] = c.get("phone") or ""
-    row["pipeline_stage"] = c.get("pipeline_stage") or "lead"
-    # JSON columns → serialised strings for asyncpg jsonb binding
-    for j in _LEAD_JSON_COLS:
-        v = row.get(j)
-        if v is None:
-            continue
-        if not isinstance(v, str):
-            try:
-                row[j] = json.dumps(v)
-            except Exception:
-                row[j] = None
-    # Timestamp columns → datetime instances (Mongo stores ISO strings)
-    for t in _LEAD_TIMESTAMP_COLS:
-        row[t] = _to_datetime(row.get(t))
-    return row
-
-
-async def upsert_provider_lead(contact: Dict[str, Any]) -> Dict[str, Any]:
-    """Idempotently mirror a Mongo `contacts` document to Postgres
-    `crm_provider_leads`. Silently no-ops if Supabase is offline — best-effort
-    dual-write, never a blocker for the primary Mongo write."""
-    if not is_configured():
-        return {"success": False, "reason": "supabase_offline"}
-    if not contact or not (contact.get("id") or contact.get("_id")):
-        return {"success": False, "reason": "missing_id"}
-    if not contact.get("phone"):
-        return {"success": False, "reason": "missing_phone"}
-
-    row = _lead_row_from_contact(contact)
-    cols = list(row.keys())
-    values = [row[c] for c in cols]
-    placeholders = ", ".join(f"${i+1}" for i in range(len(cols)))
-    updates = ", ".join(
-        f"{c} = EXCLUDED.{c}"
-        for c in cols
-        if c not in ("id", "created_at", "updated_at")
-    )
-    sql = f"""
-        INSERT INTO public.crm_provider_leads ({', '.join(cols)})
-        VALUES ({placeholders})
-        ON CONFLICT (id) DO UPDATE SET {updates}, updated_at = now()
-    """
-    try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(sql, *values)
-        return {"success": True, "id": row["id"]}
-    except Exception as e:
-        logger.warning(f"upsert_provider_lead({row.get('id')}) failed: {e}")
-        return {"success": False, "reason": str(e)}
 
 
 # ── Provider KYC document uploader (Phase C — all verticals) ───────────────

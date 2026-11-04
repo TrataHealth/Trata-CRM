@@ -68,7 +68,6 @@ async def _cleanup():
             await c.execute("DELETE FROM public.hospital_profiles WHERE user_id = ANY($1::text[])", ids)
             await c.execute("DELETE FROM public.ambulance_providers WHERE user_id = ANY($1::text[])", ids)
             await c.execute("DELETE FROM public.users WHERE id = ANY($1::text[])", ids)
-        await c.execute("DELETE FROM public.crm_provider_leads WHERE phone = ANY($1::text[]) AND name ILIKE 'TEST_probe%'", PHONES)
     finally:
         await c.close()
     from motor.motor_asyncio import AsyncIOMotorClient
