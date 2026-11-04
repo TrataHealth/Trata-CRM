@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="9" time="46.390" timestamp="2026-11-04T10:26:31.501506+00:00" hostname="agent-env-337d85bf-730a-429f-b58c-56d76c810994"><testcase classname="tests.test_phase_d_mirror_no_echo.TestMirrorNoEcho" name="test_sync_endpoint_no_canonical_write" time="9.379"><failure message="asyncpg.exceptions.UndefinedColumnError: column &quot;name&quot; does not exist">tests/test_phase_d_mirror_no_echo.py:64: in test_sync_endpoint_no_canonical_write
+    before = _snap()
+             ^^^^^^^
+tests/test_phase_d_mirror_no_echo.py:28: in _snap
+    return {(r["t"], r["u"]): (r["n"], r["c"], r["s"], r["a"]) for r in q(SNAP_SQL)}
+                                                                        ^^^^^^^^^^^
+tests/pg_helper.py:27: in q
+    return asyncio.run(_q(sql, *args, fetch=fetch))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/pg_helper.py:15: in _q
+    return [dict(r) for r in await conn.fetch(sql, *args)]
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/asyncpg/connection.py:694: in fetch
+    return await self._execute(
+/root/.venv/lib/python3.11/site-packages/asyncpg/connection.py:1873: in _execute
+    result, _ = await self.__execute(
+/root/.venv/lib/python3.11/site-packages/asyncpg/connection.py:1970: in __execute
+    result, stmt = await self._do_execute(
+/root/.venv/lib/python3.11/site-packages/asyncpg/connection.py:2013: in _do_execute
+    stmt = await self._get_statement(
+/root/.venv/lib/python3.11/site-packages/asyncpg/connection.py:443: in _get_statement
+    statement = await self._protocol.prepare(
+asyncpg/protocol/protocol.pyx:165: in prepare
+    ???
+E   asyncpg.exceptions.UndefinedColumnError: column "name" does not exist</failure></testcase><testcase classname="tests.test_phase_d_mirror_no_echo.TestMirrorNoEcho" name="test_mirror_never_sets_none" time="4.751"><failure message="AssertionError: assert 352 &lt;= 351&#10; +  where 352 = count_documents({'city': None})&#10; +    where count_documents = Collection(Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'tratacrm_db'), 'contacts').count_documents&#10; +      where Collection(Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'tratacrm_db'), 'contacts') = Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'tratacrm_db').contacts">tests/test_phase_d_mirror_no_echo.py:86: in test_mirror_never_sets_none
+    assert MDB.contacts.count_documents({"city": None}) &lt;= nulls_before
+E   AssertionError: assert 352 &lt;= 351
+E    +  where 352 = count_documents({'city': None})
+E    +    where count_documents = Collection(Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'tratacrm_db'), 'contacts').count_documents
+E    +      where Collection(Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'tratacrm_db'), 'contacts') = Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'tratacrm_db').contacts</failure></testcase><testcase classname="tests.test_phase_d_mirror_no_echo.TestMirrorNoEcho" name="test_contacts_ttl_autosync_no_echo" time="4.439"><failure message="asyncpg.exceptions.UndefinedColumnError: column &quot;name&quot; does not exist">tests/test_phase_d_mirror_no_echo.py:92: in test_contacts_ttl_autosync_no_echo
+    before = _snap()
+             ^^^^^^^
+tests/test_phase_d_mirror_no_echo.py:28: in _snap
+    return {(r["t"], r["u"]): (r["n"], r["c"], r["s"], r["a"]) for r in q(SNAP_SQL)}
+                                                                        ^^^^^^^^^^^
+tests/pg_helper.py:27: in q
+    return asyncio.run(_q(sql, *args, fetch=fetch))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/pg_helper.py:15: in _q
+    return [dict(r) for r in await conn.fetch(sql, *args)]
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/asyncpg/connection.py:694: in fetch
+    return await self._execute(
+/root/.venv/lib/python3.11/site-packages/asyncpg/connection.py:1873: in _execute
+    result, _ = await self.__execute(
+/root/.venv/lib/python3.11/site-packages/asyncpg/connection.py:1970: in __execute
+    result, stmt = await self._do_execute(
+/root/.venv/lib/python3.11/site-packages/asyncpg/connection.py:2013: in _do_execute
+    stmt = await self._get_statement(
+/root/.venv/lib/python3.11/site-packages/asyncpg/connection.py:443: in _get_statement
+    statement = await self._protocol.prepare(
+asyncpg/protocol/protocol.pyx:165: in prepare
+    ???
+E   asyncpg.exceptions.UndefinedColumnError: column "name" does not exist</failure></testcase><testcase classname="tests.test_phase_d_mirror_no_echo.TestHookCrmOwnedOnly" name="test_hook_drops_display_keys" time="0.015"><failure message="RuntimeError: asyncio.run() cannot be called from a running event loop">tests/test_phase_d_mirror_no_echo.py:125: in test_hook_drops_display_keys
+    canon0, canon = asyncio.run(run())
+                    ^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_phase_d_mirror_no_echo.py:116: in run
+    canon0 = q("SELECT name, city, deal_value FROM public.path_lab_profiles WHERE user_id=$1", ZEN_USER, fetch="row")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/pg_helper.py:27: in q
+    return asyncio.run(_q(sql, *args, fetch=fetch))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:186: in run
+    raise RuntimeError(
+E   RuntimeError: asyncio.run() cannot be called from a running event loop</failure></testcase><testcase classname="tests.test_phase_d_mirror_no_echo.TestKycFinal" name="test_pending_address_outbound_uses_final" time="4.969" /><testcase classname="tests.test_phase_d_mirror_no_echo.TestKycFinal" name="test_check_violation_is_400" time="6.160" /><testcase classname="tests.test_phase_d_mirror_no_echo.TestKycFinal" name="test_no_canonical_row_is_409[random]" time="1.761" /><testcase classname="tests.test_phase_d_mirror_no_echo.TestKycFinal" name="test_no_canonical_row_is_409[none]" time="0.087"><failure message="AssertionError: 200 {&quot;success&quot;:true,&quot;contact&quot;:{&quot;id&quot;:&quot;b0127d02-69f2-4181-912e-a5d6927e6932&quot;,&quot;name&quot;:&quot;TEST_iter32_none&quot;,&quot;phone&quot;:&quot;TESTb0127d02&quot;,&quot;type&quot;:&quot;pathologist&quot;,&quot;pipeline_stage&quot;:&quot;verified&quot;,&quot;kyc_status&quot;:&quot;verified&quot;,&quot;archived&quot;:true,&quot;kyc_admin_decision_at&quot;:&quot;2026-11-04T10:27:03.400179+00:00&quot;,&quot;kyc_admin_decision_by&quot;:&quot;Trata H&#10;assert 200 == 409&#10; +  where 200 = &lt;Response [200]&gt;.status_code">tests/test_phase_d_mirror_no_echo.py:165: in test_no_canonical_row_is_409
+    assert r.status_code == 409, f"{r.status_code} {r.text[:300]}"
+E   AssertionError: 200 {"success":true,"contact":{"id":"b0127d02-69f2-4181-912e-a5d6927e6932","name":"TEST_iter32_none","phone":"TESTb0127d02","type":"pathologist","pipeline_stage":"verified","kyc_status":"verified","archived":true,"kyc_admin_decision_at":"2026-11-04T10:27:03.400179+00:00","kyc_admin_decision_by":"Trata H
+E   assert 200 == 409
+E    +  where 200 = &lt;Response [200]&gt;.status_code</failure></testcase><testcase classname="tests.test_phase_d_mirror_no_echo.TestLimitCap" name="test_limit_capped" time="14.458" /></testsuite></testsuites>

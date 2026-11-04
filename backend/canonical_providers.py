@@ -37,6 +37,8 @@ CRM_OWNED = {
 }
 # Shared display fields — written only from explicit CRM edits / new leads.
 DISPLAY = {"name", "phone", "email", "city", "state", "address", "is_active", "avatar"}
+_DISPLAY_COLS = {"name", "full_name", "business_name", "phone", "email", "city", "state", "address", "is_active",
+                 "logo_url", "profile_image"}
 PATH_LAB_ADDRESS = ("address", "city", "state", "pincode", "latitude", "longitude")
 
 _cols: Dict[str, Dict[str, str]] = {}
@@ -162,7 +164,7 @@ async def sync_contact(c: Dict[str, Any], keys: Optional[Iterable[str]] = None, 
                 if not exists:
                     keys = keys | DISPLAY
             vals = {k: _coerce(v, cols[k], k) for k, v in _canonical_values(c, keys, table, name_col).items()
-                    if k in cols and v is not None}
+                    if k in cols and (v is not None or k not in _DISPLAY_COLS)}
             vals.pop("user_id", None)
             if exists:
                 if not vals:
@@ -189,8 +191,10 @@ async def set_verification(user_id: str, type_: str, decision: str, actor: Optio
                            reason: Optional[str] = None) -> Dict[str, Any]:
     """§6/§8 — the one status write. decision: 'verified' | 'rejected'. Path labs with an incomplete address → pending_address."""
     spec = TABLES.get(type_)
-    if not spec or not user_id or not sb.is_configured():
+    if not spec or not sb.is_configured():
         return {"success": False, "reason": "no_canonical_table"}
+    if not user_id:
+        return {"success": False, "reason": "no_canonical_row"}
     table, _ = spec
     pool = await sb.get_pool()
     async with pool.acquire() as conn:

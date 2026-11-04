@@ -1,0 +1,48 @@
+{
+  "summary": "Phase D retest (backend only). The CRITICAL iteration_31 mirror-echo bug is FIXED. POST /api/admin/sync-supabase-users and the GET /api/contacts 60s-TTL auto-sync no longer write to any of the 5 canonical tables: a before/after snapshot of name/city/state/address/email across all 131 canonical rows shows zero diffs, and Zenith city='TEST_Repro' survives 10s after the sync. The mirror now picks up city from path_lab_profiles and never $sets None (Zenith Mongo city 'Pune' was kept when canonical city is NULL). An in-process test of the proxy hook passed: $set {city, name, deal_value} synced only deal_value. These kyc-admin-final checks passed: the outbound event carries decision=pending_address with text 'PENDING_ADDRESS'; is_demo=true with a full address returns 400 and Mongo is unchanged; a lead whose supabase_user_id has no canonical row returns 409 and Mongo is not marked verified. GET /api/supabase/contacts?limit=5000 returns all 131 (cap at 1000 in code) and limit=0 returns 1. Results: new suite 8/9, original suite 22/23. Two failures, both real bugs. (1) Regression: unassigning a lead no longer clears assigned_agent_id/name on the canonical row. (2) A mapped-type lead with NO user id gets 200 and is marked verified instead of 409.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "PATCH /api/contacts/{id}/assign (agent_id=null) → cp.sync_contact",
+        "issue": "REGRESSION from the new 'None values are never written' rule. canonical_providers.py sync_contact builds vals with `if k in cols and v is not None`, so $set assigned_agent_id=None / assigned_agent_name=None is silently dropped. Repro: unassign Zenith → Mongo shows unassigned, but path_lab_profiles.assigned_agent_id stays Rohan (7044b30e...). Because GET /api/supabase/contacts scopes reps by canonical assigned_agent_id, the old rep keeps seeing a lead that is no longer his. Any CRM-owned field can no longer be cleared (e.g. notes or kyc fields set to null). test_phase_d_canonical.py::test_assign_syncs fails; it passed in iteration_31. Fix: drop None only for DISPLAY keys (or only in the mirror and create paths) and allow explicit None for CRM_OWNED keys such as assigned_agent_id/name.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/contacts/{id}/kyc-admin-final",
+        "issue": "The 409 guard only fires on reason=='no_canonical_row'. When the lead has no upstream_user_id/supabase_user_id, cp.set_verification returns reason 'no_canonical_table' (because of `not user_id`), so the endpoint returns 200, marks the Mongo contact kyc_status=verified / pipeline_stage=verified, and queues the outbound event. Repro: a type=pathologist contact with no supabase_user_id → 200 with verified. Fix: in set_verification, return no_canonical_row when user_id is missing but the type is mapped. Alternatively, have the endpoint return 409 whenever success is false and the type is in cp.TABLES. Also consider supabase being offline in that check."
+      },
+      {
+        "endpoint": "admin_bridge outbound dispatcher",
+        "issue": "Every crm.kyc.admin_verified / crm.deal.closed send fails with 'HTTP 404: 404 page not found' (the admin webhook URL is misconfigured or unreachable), and the events retry forever. This existed before; flagging it for visibility."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_phase_d_mirror_no_echo.py",
+    "/app/backend/tests/test_phase_d_canonical.py",
+    "/app/backend/tests/pg_helper.py",
+    "/app/test_reports/pytest/phase_d.xml",
+    "/app/test_reports/pytest/phase_d_iter32_mirror.xml"
+  ],
+  "action_items": [
+    "HIGH: sync_contact must write explicit None for CRM_OWNED keys (at least assigned_agent_id/assigned_agent_name) so that unassign clears the canonical row. Keep the None filter only for DISPLAY keys and for the mirror.",
+    "kyc-admin-final: return 409 (and leave Mongo untouched) when a mapped-type lead has no user id. Today set_verification returns 'no_canonical_table', which bypasses the guard.",
+    "Optional: fix the admin bridge webhook URL (404s) or cap the retries."
+  ],
+  "critical_code_review_comments": [
+    "canonical_providers.sync_contact: the blanket `v is not None` filter conflates 'unknown upstream value' with 'CRM intentionally cleared'. Apply it per key category.",
+    "set_verification returns no_canonical_table both for an unmapped type and for a missing user_id. These need distinct reasons so callers can react correctly.",
+    "update_contact: a PATCH with both CRM and display keys now runs two separate canonical UPDATEs (the proxy hook for CRM keys, then an explicit display sync). This is acceptable and not a duplicate of the same keys.",
+    "The mirror (_sync_supabase_users_into_contacts) correctly uses db._db.contacts for both update and insert, so new upstream contacts never trigger canonical creation."
+  ],
+  "updated_files": ["/app/backend/tests/test_phase_d_mirror_no_echo.py (new)"],
+  "success_rate": {"backend": "94% (30/32)", "frontend": "not tested"},
+  "seed_data_creation": "Temporary TEST_iter32_* Mongo contacts (archived) were created and deleted by id. No users rows were created (verified). The Zenith canonical row, users.verification_status and the Mongo contact were snapshotted and restored. Final state: path_lab city/state/address NULL, pending_address, assigned to Rohan, deal_value 0; Mongo city Pune, kyc pending, stage verified. One outbound event for the TEST 'none' contact was queued (it was the bug path).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: pytest tests/test_phase_d_canonical.py, then tests/test_phase_d_mirror_no_echo.py. The second takes about 3 minutes because of a 62s TTL wait. Run them sequentially, not in parallel, because both mutate the Zenith row (user f585d675..., contact 77d46c7b...). Expected failures until fixed: test_assign_syncs and test_no_canonical_row_is_409[none].",
+  "rca of the issue": "Unassign regression: server.py assign does $set assigned_agent_id=None → the proxy spawns sync_contact with keys {assigned_agent_id, assigned_agent_name} → _canonical_values yields None values → the `v is not None` filter removes them → vals is empty → it returns updated:0, so the canonical row keeps the old agent."
+}

@@ -484,3 +484,11 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 ## 2026-06 — Trata Providers: two name columns
 - /api/admin/directory/providers now returns org_name (hospital/lab/pharmacy/ambulance or the hospital a doctor/nurse/staff belongs to) + admin_name (contact person/owner/account name); search matches both.
 - ProviderDirectory.jsx shows "<Type> name" + "Admin name" columns ("Not linked"/"Not set" when missing).
+
+## 2026-06 — Phase D: CRM on canonical provider tables
+- `canonical_providers.py`: every CRM `contacts` write (via `SyncedDB` proxy) mirrors CRM-owned fields onto hospital_profiles / path_lab_profiles / doctors / pharmacy_providers / ambulance_providers, keyed only by users.id. Display fields only from explicit CRM edits or new rows. New leads create users row + canonical row in one transaction.
+- Verify/reject (`kyc-admin-final`, approve-all) write verification_status + pipeline_stage + local_decision; path labs with incomplete address → `pending_address`. Doctors use is_verified, ambulance uses status (no verification_status column there).
+- `/api/supabase/contacts` reads a UNION of the 5 tables. `crm_provider_leads` is no longer read or written. `/api/admin/canonical/backfill` replaces mirror-contacts-to-postgres.
+- Supabase->CRM users mirror writes the raw Mongo collection (no echo back) and never $sets None.
+- Parity report: /app/memory/PHASE_D_PARITY_REPORT.md. Tests: /app/backend/tests/test_phase_d_canonical.py (iterations 31–32).
+- Open questions for the Provider App team: doctors/ambulance_providers lack verification_status (+ ambulance lacks is_active); path_lab_profiles has no unique index on user_id and its enum lacks 'pending'; pharmacy rows still use 'approved'; pathologist users living in diagnostic_centre_profiles not covered by the doc; nurse/paramedic/diagnostic_centre CRM types have no canonical table; users.phone is unique so new leads reuse an existing same-role user.
