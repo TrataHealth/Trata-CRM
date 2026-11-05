@@ -10,7 +10,7 @@ const ROLE_LABEL = { path_lab: "Path Lab", ambulance_provider: "Ambulance", hosp
   pharmacy: "Pharmacy", diagnostic_centre: "Diagnostic centre", pharmacist: "Pharmacist", lab_tech: "Lab technician", nurse: "Nurse", receptionist: "Receptionist" };
 const roleLabel = (r) => ROLE_LABEL[r] || String(r || "").replace(/_/g, " ");
 const ORG_ROLES = ["hospital", "path_lab", "diagnostic_centre", "ambulance_provider", "pharmacy"];
-const orgHeader = (r) => (ORG_ROLES.includes(r) ? `${roleLabel(r).split(" /")[0]} name` : "Provider name");
+const orgHeader = (r) => (r === "doctor" ? "Doctor name" : ORG_ROLES.includes(r) ? `${roleLabel(r).split(" /")[0]} name` : "Provider name");
 const KYC_TONE = { verified: "bg-[#E3FCEF] text-[#006644]", approved: "bg-[#E3FCEF] text-[#006644]", rejected: "bg-[#FFEBE6] text-[#BF2600]", pending: "bg-[#FFFAE6] text-[#974F0C]" };
 
 /** Trata Health Admin: one row per provider profile — the same list the Provider App admin shows. */
@@ -87,9 +87,12 @@ export default function ProviderDirectory() {
             <tbody>{items.map((p) => (
               <tr key={p.row_key} onClick={() => p.id && nav(`/admin/onboarding/${p.id}`)} className={`border-t border-[#F4F5F7] hover:bg-[#F8F9FA] ${p.id ? "cursor-pointer" : ""} ${pick.sel.has(p.row_key) ? "bg-[#DEEBFF]/40" : ""}`} data-testid={`provider-row-${p.row_key}`}>
                 <td className="pl-4 py-3">{p.id && <RowCheck checked={pick.sel.has(p.row_key)} onChange={() => pick.toggle(p.row_key)} testId={`provider-select-${p.row_key}`} />}</td>
-                <td className="px-4 py-3"><div className={p.org_name ? "font-semibold text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-org-${p.row_key}`}>{p.org_name || "Not linked"}{p.is_suspended && <SuspendedTag reason={p.suspended_reason} testId={`provider-suspended-${p.row_key}`} />}</div>
-                  {!p.id && <div className="text-[11px] text-[#97A0AF]">No app login yet</div>}</td>
-                <td className="px-4 py-3"><div className={p.admin_name ? "text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-admin-${p.row_key}`}>{p.admin_name || "Not set"}</div>{p.email && <div className="text-xs text-[#5E6C84]">{p.email}</div>}</td>
+                <td className="px-4 py-3">{p.role === "doctor" ? <>
+                  <div className="font-semibold text-[#091E42]" data-testid={`provider-org-${p.row_key}`}>{p.admin_name || p.org_name || "Name not set"}{p.is_suspended && <SuspendedTag reason={p.suspended_reason} testId={`provider-suspended-${p.row_key}`} />}</div>
+                  <div className="text-xs text-[#5E6C84]" data-testid={`provider-hospital-${p.row_key}`}>{p.admin_name && p.org_name ? p.org_name : "No hospital linked"}</div></>
+                  : <><div className={p.org_name ? "font-semibold text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-org-${p.row_key}`}>{p.org_name || "Not linked"}{p.is_suspended && <SuspendedTag reason={p.suspended_reason} testId={`provider-suspended-${p.row_key}`} />}</div>
+                  {!p.id && <div className="text-[11px] text-[#97A0AF]">No app login yet</div>}</>}</td>
+                <td className="px-4 py-3"><div className={p.admin_name ? "text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-admin-${p.row_key}`}>{p.role === "doctor" ? (p.admin_name ? "Self" : "Not set") : p.admin_name || "Not set"}</div>{p.email && <div className="text-xs text-[#5E6C84]">{p.email}</div>}</td>
                 <td className="px-4 py-3"><span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-[#F4F5F7] text-[#42526E]">{roleLabel(p.role)}</span></td>
                 <td className="px-4 py-3 font-mono text-xs">{p.phone || "—"}</td>
                 <td className="px-4 py-3"><span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${KYC_TONE[String(p.kyc_status).toLowerCase()] || KYC_TONE.pending}`}>{p.kyc_status}</span></td>
