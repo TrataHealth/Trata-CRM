@@ -78,7 +78,6 @@ export default function AgentDashboard() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 pb-24" data-testid="agent-dashboard-page">
-      <FollowupsDue />
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="overline">Sales Agent · {user?.name?.split(" ")[0]}</div>
@@ -158,11 +157,13 @@ export default function AgentDashboard() {
         <KPI icon={ListChecks} label="Pending Tasks" value={dash.today_tasks.length} sub="due today / overdue" accent="#6554C0" testid="kpi-tasks" />
       </div>
 
+      <FollowupsDue />
+
       {/* Funnel by stage */}
       <div className="bg-white border border-[#DFE1E6] rounded-md p-5" data-testid="agent-funnel">
         <div className="overline mb-2">My Pipeline</div>
-        <div className="font-heading text-lg font-bold text-[#091E42] mb-3">Onboarding funnel</div>
-        <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
+        <div className="font-heading text-lg font-bold text-[#091E42] mb-3">Sales funnel</div>
+        <div className="grid grid-cols-4 lg:grid-cols-8 gap-2">
           {PIPELINE_STAGES.map((s) => (
             <button
               key={s.value}

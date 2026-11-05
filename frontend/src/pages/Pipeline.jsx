@@ -38,7 +38,7 @@ export default function Pipeline() {
         <p className="text-sm text-[#5E6C84] mt-1">Drag providers between stages. Hospitals, doctors, ambulances, paramedics & labs only.</p>
       </div>
 
-      <div className="flex lg:grid gap-3 lg:grid-cols-6 overflow-x-auto scrollbar-thin -mx-4 px-4 sm:mx-0 sm:px-0 pb-3 min-h-[60vh] snap-x" data-testid="pipeline-board">
+      <div className="flex lg:grid gap-3 lg:grid-cols-8 overflow-x-auto scrollbar-thin -mx-4 px-4 sm:mx-0 sm:px-0 pb-3 min-h-[60vh] snap-x" data-testid="pipeline-board">
         {PIPELINE_STAGES.map((s) => {
           const items = data.items_by_stage[s.value] || [];
           return (

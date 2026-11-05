@@ -23,7 +23,8 @@ LEGACY_STAGE = {
     "churned": "dropped", "suspended": "dropped", "deactivated": "dropped",
 }
 LEAD_TYPES = {"hospital", "path_lab", "doctor", "pharmacy", "ambulance_provider", "diagnostic_centre", "nurse", "paramedic"}
-SELF_SIGNUP_SOURCES = {"supabase_sync", "admin_users_sync", "org_entity", "provider_app_webhook", "trata_admin_webhook"}
+SELF_SIGNUP_SOURCES = {"supabase_sync", "supabase_labs_sync", "admin_users_sync", "org_entity", "provider_app_webhook",
+                       "trata_admin_webhook"}
 COLS = ("name", "type", "email", "city", "state", "address", "pipeline_stage", "deal_value", "assigned_agent_id",
         "assigned_agent_name", "source", "onboarded_by", "avatar", "specialization", "vehicle_reg", "vehicle_make_model",
         "ambulance_count", "lab_specialty", "pharmacy_type", "notes", "next_followup_at", "upstream_user_id")
@@ -42,7 +43,8 @@ def _row(c: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "name": c.get("name") or "Unnamed", "type": "path_lab" if c.get("type") == "pathologist" else c.get("type"),
         "email": c.get("email"), "city": c.get("city"), "state": c.get("state"), "address": c.get("address"),
-        "pipeline_stage": stage(c.get("pipeline_stage")) or "new",
+        # Self-signups that already have an app account count as Won (user choice)
+        "pipeline_stage": "won" if src in SELF_SIGNUP_SOURCES and user_id_of(c) else (stage(c.get("pipeline_stage")) or "new"),
         "deal_value": Decimal(str(c["deal_value"])) if c.get("deal_value") not in (None, "") else None,
         "assigned_agent_id": c.get("assigned_agent_id"), "assigned_agent_name": c.get("assigned_agent_name"),
         "source": "inbound" if src in SELF_SIGNUP_SOURCES else src, "onboarded_by": c.get("onboarded_by"),

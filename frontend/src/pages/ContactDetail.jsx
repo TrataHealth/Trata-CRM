@@ -118,7 +118,7 @@ export default function ContactDetail() {
             onClick={() => updateVerified(!c.is_verified)}
             className="px-3 py-1.5 text-sm border border-[#DFE1E6] rounded-md hover:bg-[#F8F9FA]"
           >
-            {c.is_verified ? "Mark as Pending" : "Mark as Verified"}
+            {c.is_verified ? "Mark KYC pending" : "Mark KYC verified"}
           </button>
         </div>
       </div>

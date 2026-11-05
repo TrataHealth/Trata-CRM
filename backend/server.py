@@ -1950,11 +1950,14 @@ async def assign_lead(contact_id: str, data: AssignLead, current=Depends(get_cur
 # ---------- Pipeline ----------
 @api.get("/pipeline")
 async def get_pipeline(current=Depends(require_internal)):
-    stages = ["lead", "contacted", "kyc_submitted", "verified", "active", "churned"]
+    stages = list(sl.STAGES)
     out = {}
+    base = {"type": {"$in": sorted(sl.LEAD_TYPES)}, "archived": {"$ne": True}}
+    if is_sales_rep(current):
+        base["assigned_agent_id"] = current["id"]
     for s in stages:
         items = await db.contacts.find(
-            {"pipeline_stage": s, "type": {"$in": ["doctor", "hospital", "paramedic", "ambulance_provider", "path_lab", "diagnostic_centre"]}},
+            {**base, "pipeline_stage": s},
             {"_id": 0, "id": 1, "name": 1, "type": 1, "phone": 1, "city": 1, "specialization": 1, "created_at": 1, "deal_value": 1, "avatar": 1},
         ).sort("created_at", -1).limit(50).to_list(50)
         out[s] = items
@@ -2681,6 +2684,7 @@ async def kyc_admin_final(contact_id: str, data: KycAdminFinalBody, current=Depe
     final = canon.get("verification_status") or data.decision
     new_stage = {"verified": "won", "rejected": "lost"}.get(final, c.get("pipeline_stage"))
     await db.contacts.update_one({"id": contact_id}, {"$set": {
+        "is_verified": final == "verified",
         "kyc_status": final,
         "kyc_admin_decision_at": now_iso(),
         "kyc_admin_decision_notes": data.notes,
@@ -3196,6 +3200,8 @@ async def quick_log(data: QuickLogActivity, current=Depends(get_current_user)):
     })
 
     # Auto-advance pipeline stage
+    if data.advance_to_stage and data.advance_to_stage not in sl.STAGES:
+        raise HTTPException(status_code=400, detail=f"advance_to_stage must be one of: {', '.join(sl.STAGES)}")
     target_stage = data.advance_to_stage or OUTCOME_TO_STAGE.get(data.outcome or "")
     if target_stage:
         await db.contacts.update_one(
@@ -3252,8 +3258,9 @@ async def agent_dashboard(range_key: str = Query("7d", alias="range"), current=D
         "$or": [{"updated_at": {"$lt": stale_cutoff}}, {"updated_at": {"$exists": False}}],
     })
     by_stage = {}
-    for stage in ["lead", "contacted", "kyc_submitted", "verified", "active", "churned"]:
-        by_stage[stage] = await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": stage})
+    for stage in sl.STAGES:
+        by_stage[stage] = await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": stage,
+                                                             "archived": {"$ne": True}, "type": {"$in": sorted(sl.LEAD_TYPES)}})
 
     today_activities = await db.activities.count_documents({"agent_id": aid, "created_at": {"$gte": today_start}})
     window_activities = await db.activities.count_documents({"agent_id": aid, "created_at": {"$gte": window_start}})

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="19" time="127.503" timestamp="2026-11-05T08:44:07.019948+00:00" hostname="agent-env-337d85bf-730a-429f-b58c-56d76c810994"><testcase classname="test_phase_e_sales_leads.TestProspect" name="test_onboard_prospect_creates_lead_only" time="26.983" /><testcase classname="test_phase_e_sales_leads.TestProspect" name="test_invalid_stage_400" time="0.070" /><testcase classname="test_phase_e_sales_leads.TestProspect" name="test_patch_stage_and_followup" time="4.360" /><testcase classname="test_phase_e_sales_leads.TestProspect" name="test_followups_due_visibility" time="4.022" /><testcase classname="test_phase_e_sales_leads.TestProspect" name="test_outcome_map" time="8.717" /><testcase classname="test_phase_e_sales_leads.TestProspect" name="test_not_interested_lost_and_leaves_queue" time="5.213" /><testcase classname="test_phase_e_sales_leads.TestWonConversion" name="test_legacy_verified_coerced_to_won_and_converts" time="11.026" /><testcase classname="test_phase_e_sales_leads.TestWonConversion" name="test_signed_on_app_outcome_converts" time="9.821" /><testcase classname="test_phase_e_sales_leads.TestWonConversion" name="test_kyc_final_reject_lost_then_verify_won" time="5.490" /><testcase classname="test_phase_e_sales_leads.TestWonConversion" name="test_kyc_final_on_prospect_without_account" time="2.174" /><testcase classname="test_phase_e_sales_leads.TestStageLists" name="test_dashboard_pipeline_8_stages" time="0.096" /><testcase classname="test_phase_e_sales_leads.TestStageLists" name="test_pipeline_endpoint_8_stages" time="0.069"><failure message="AssertionError: /api/pipeline returns old stages: ['lead', 'contacted', 'kyc_submitted', 'verified', 'active', 'churned']&#10;assert ['lead', 'con...e', 'churned'] == ['new', 'cont...', 'won', ...]&#10;  &#10;  At index 0 diff: 'lead' != 'new'&#10;  Right contains 2 more items, first extra item: 'lost'&#10;  &#10;  Full diff:&#10;    [&#10;  -     'new',...&#10;  &#10;  ...Full output truncated (17 lines hidden), use '-vv' to show">test_phase_e_sales_leads.py:239: in test_pipeline_endpoint_8_stages
+    assert r.json()["stages"] == STAGES, f"/api/pipeline returns old stages: {r.json()['stages']}"
+E   AssertionError: /api/pipeline returns old stages: ['lead', 'contacted', 'kyc_submitted', 'verified', 'active', 'churned']
+E   assert ['lead', 'con...e', 'churned'] == ['new', 'cont...', 'won', ...]
+E     
+E     At index 0 diff: 'lead' != 'new'
+E     Right contains 2 more items, first extra item: 'lost'
+E     
+E     Full diff:
+E       [
+E     -     'new',...
+E     
+E     ...Full output truncated (17 lines hidden), use '-vv' to show</failure></testcase><testcase classname="test_phase_e_sales_leads.TestStageLists" name="test_agent_dashboard_by_stage" time="0.085"><failure message="AssertionError: agent by_stage keys: ['lead', 'contacted', 'kyc_submitted', 'verified', 'active', 'churned']&#10;assert ['active', 'c...', 'verified'] == ['contacted',...roposal', ...]&#10;  &#10;  At index 0 diff: 'active' != 'contacted'&#10;  Right contains 2 more items, first extra item: 'qualified'&#10;  &#10;  Full diff:&#10;    [&#10;  +     'active',...&#10;  &#10;  ...Full output truncated (17 lines hidden), use '-vv' to show">test_phase_e_sales_leads.py:244: in test_agent_dashboard_by_stage
+    assert sorted(r.json()["by_stage"].keys()) == sorted(STAGES), f"agent by_stage keys: {list(r.json()['by_stage'])}"
+E   AssertionError: agent by_stage keys: ['lead', 'contacted', 'kyc_submitted', 'verified', 'active', 'churned']
+E   assert ['active', 'c...', 'verified'] == ['contacted',...roposal', ...]
+E     
+E     At index 0 diff: 'active' != 'contacted'
+E     Right contains 2 more items, first extra item: 'qualified'
+E     
+E     Full diff:
+E       [
+E     +     'active',...
+E     
+E     ...Full output truncated (17 lines hidden), use '-vv' to show</failure></testcase><testcase classname="test_phase_e_sales_leads.TestRegression" name="test_get_ok[/admin/directory/providers]" time="1.358" /><testcase classname="test_phase_e_sales_leads.TestRegression" name="test_get_ok[/contacts?limit=5]" time="4.720" /><testcase classname="test_phase_e_sales_leads.TestRegression" name="test_get_ok[/admin/kyc-queue]" time="0.064" /><testcase classname="test_phase_e_sales_leads.TestRegression" name="test_get_ok[/admin/onboarding/providers]" time="1.016" /><testcase classname="test_phase_e_sales_leads.TestRegression" name="test_sync_supabase_users" time="2.349" /><testcase classname="test_phase_e_sales_leads.TestRegression" name="test_followups_requires_auth" time="39.638" /></testsuite></testsuites>

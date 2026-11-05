@@ -1,0 +1,47 @@
+{
+  "summary": "Tested Phase E (crm_sales_leads) against the real shared Supabase and Mongo. Backend: 17 of 19 pytest pass (new file test_phase_e_sales_leads.py). Working: a prospect created by Rohan via POST /admin/onboard-provider gets a crm_sales_leads row (stage contacted, assigned_agent_id Rohan, id equal to the Mongo id, upstream_user_id NULL) and NO users or hospital_profiles row. PATCH with an invalid stage returns 400. PATCH qualified + next_followup_at reaches the lead row in under 10s. A legacy 'verified' is coerced to 'won', which creates users (role=hospital) and a hospital_profiles row and sets crm_sales_leads.upstream_user_id and the Mongo upstream_user_id. Quick-log outcomes map correctly: pitched→proposal, kyc_collected→negotiation, meeting_scheduled→qualified, not_interested→lost, signed_on_app→won (which also converts). Follow-up queue: admin, Priya and Rohan all see the overdue lead; Rohan sees only his own leads; lost and won leads leave the queue; no auth returns 401/403. KYC final: reject→lost, verify→won; a prospect with no account returns 409. Regressions OK: directory providers, contacts, KYC queue, onboarding roster, sync-supabase-users; no crm_provider_leads errors. FAILING: GET /api/pipeline and the /api/agent/dashboard by_stage field still use the old 6 stages. UI: the stage-select shows exactly the 8 stages; next-followup-input and stage-select write through to crm_sales_leads; the Follow-ups due card works on both Dashboard and My Day (count, row, click opens the contact). But the Pipeline Kanban and the My Day funnel are effectively broken: every column except Contacted shows 0.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/pipeline (server.py ~1953)", "issue": "stages is still hard-coded to ['lead','contacted','kyc_submitted','verified','active','churned']. _norm rewrites every Mongo stage to the new values, so New, Qualified, Proposal, Negotiation, Won, Lost and Dropped are never queried. The Kanban shows 0 in all of them; only Contacted has data, even though Mongo has 197 new and 23 won. Use sl.STAGES. The type filter also leaves out pharmacy, nurse and paramedic-adjacent types, and there is no archived filter, so archived duplicates appear (e.g. many 'Trata Imaging Centre' cards). It is not scoped for sales reps either: Rohan's 'My Pipeline' shows every lead.", "priority": "HIGH"},
+      {"endpoint": "GET /api/agent/dashboard (server.py ~3255)", "issue": "by_stage loops over the old 6 stages, so the My Day funnel shows 0 for New, Qualified, Proposal, Negotiation, Won, Lost and Dropped. Rohan has 208 leads but the funnel totals 1, and the TEST lead at Proposal showed as 0. Loop over sl.STAGES.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "sales_leads._row / self-signup", "issue": "The user choice was that self-signed-up providers count as Won (source 'inbound'). _row only rewrites source to 'inbound' and keeps the contact's stage. In crm_sales_leads, 9 inbound rows that already have an app account (upstream_user_id set) are still new/contacted (e.g. Chandan Hospital, Basti Diagnostic Centre, Pharma Admin, Lab Tech Karan). 'supabase_labs_sync' (8 contacts) is also missing from SELF_SIGNUP_SOURCES."},
+      {"endpoint": "POST /api/agent/quick-log", "issue": "advance_to_stage is not validated. An unknown value is silently coerced to 'new' by _norm, which resets the lead instead of returning 400 like PATCH does."},
+      {"endpoint": "POST /api/contacts/{id}/kyc-admin-final", "issue": "Sets pipeline_stage to won/lost but leaves is_verified false (the contact showed kyc_status=verified, is_verified=false)."},
+      {"endpoint": "crm_sales_leads data", "issue": "There is an orphan row 'New S S Diagnostic Centre' (7712086522, id 8457b0de) with no Mongo contact, so its followup-{id} link would open a 404 contact. There is also a stale row with type='pathologist' (Zenith Diagnostics 9000020005). Consider running /api/admin/sales-leads/backfill. Only 21 lead rows exist."},
+      {"endpoint": "backend/tools/create_crm_tables.py, migrate_mongo_to_postgres.py, scripts/phase_d_parity.py", "issue": "These still reference the dropped crm_provider_leads table. Running create_crm_tables.py would re-create it. Delete them or mark them deprecated."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Pipeline.jsx", "issue": "Only the Contacted column is populated, because of the backend /api/pipeline stage list (see above). The grid is lg:grid-cols-6 with 8 columns, so Lost and Dropped wrap onto a second row under New and Contacted.", "selector": "[data-testid=pipeline-board]", "priority": "HIGH"},
+      {"component": "AgentDashboard funnel", "issue": "funnel-stage-* counts are wrong (backend by_stage). The grid is lg:grid-cols-6 with 8 tiles, so Lost and Dropped wrap.", "selector": "[data-testid^=funnel-stage-]", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "My Day (/agent)", "issues": ["The Follow-ups due card renders above the 'SALES AGENT · ROHAN / My Day' page header. It should go below the header or the KPI cards."]},
+      {"screen": "ContactDetail", "issues": ["The 'Mark as Verified' button uses old terminology. Consider 'Mark as Won' to match the 8 sales stages."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_phase_e_sales_leads.py", "/app/test_reports/pytest/phase_e.xml"],
+  "action_items": [
+    "GET /api/pipeline: use sl.STAGES, add an archived filter, include all LEAD_TYPES, and scope to assigned_agent_id for sales reps",
+    "GET /api/agent/dashboard: by_stage should loop over sl.STAGES",
+    "Pipeline.jsx and the AgentDashboard funnel: change the grid to 8 columns (lg:grid-cols-8 or horizontal scroll)",
+    "Make self-signups (lead has upstream_user_id and a self-signup source) land as 'won' in crm_sales_leads, and add supabase_labs_sync to SELF_SIGNUP_SOURCES",
+    "Validate advance_to_stage in quick-log (return 400 for unknown values)",
+    "Optional: set is_verified on KYC final verify; clean up the orphan/pathologist crm_sales_leads rows; remove the legacy crm_provider_leads tools"
+  ],
+  "critical_code_review_comments": [
+    "sales_leads.sync swallows every exception with logger.warning. If conversion fails (e.g. phone_owned_by_other_role), the lead is still written as 'won' with upstream_user_id NULL and nothing is shown to the user.",
+    "upsert's ON CONFLICT (phone) never updates id, so crm_sales_leads.id can drift from the Mongo contact id (FollowupsDue navigates by that id).",
+    "LEGACY_STAGE.get(v, 'new') maps any unknown string to 'new' and hides bad input on every write path except PATCH."
+  ],
+  "updated_files": ["/app/backend/tests/test_phase_e_sales_leads.py"],
+  "success_rate": {"backend": "89% (17/19)", "frontend": "70% (stage select, follow-up input and Follow-ups card work; Pipeline Kanban and agent funnel counts are broken)"},
+  "seed_data_creation": "None persisted. TEST hospitals 8955500301/302/303 (pytest; 301 and 303 were converted to Won, which created users + hospital_profiles) and 8955500311 (UI) were created. All crm_sales_leads, users, hospital_profiles, Mongo contacts and activities rows for them were deleted, and the deletion was checked (0 rows left).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend/tests && python -m pytest test_phase_e_sales_leads.py -p no:xdist -v (about 2 min; it creates and cleans up its own TEST leads on 89555003xx and asserts the phones have no users row before starting). Editing files under /app/backend/tests triggers a backend hot reload, so wait about 8s afterwards. UI was tested by injecting trata_token/trata_user into localStorage (tokens from the 3-step API login). The Rohan id is in the session user. Brute-force/cookie auth playbook checks were not run (phone+OTP+password JWT app, not in scope)."
+}
