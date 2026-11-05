@@ -442,3 +442,34 @@ async def backfill(raw_contacts, create: bool = True) -> Dict[str, Any]:
         stats[k] = stats.get(k, 0) + 1
     logger.info(f"canonical backfill: {stats}")
     return stats
+
+
+# ── Deletion parity with the Provider App: a deleted profile is verification_status = 'deactivated' ──
+async def deactivate_profiles(conn, user_ids, by: Optional[str], reason: Optional[str]) -> int:
+    n = 0
+    meta = json.dumps({"deleted_by": by, "deleted_reason": reason, "deleted_at": datetime.now(timezone.utc).isoformat()})
+    for tbl, _ in TABLES.values():
+        r = await conn.execute(f"""UPDATE public.{tbl} SET local_decision = coalesce(local_decision, '{{}}'::jsonb) || $2::jsonb
+                                     || jsonb_build_object('pre_delete_status', verification_status),
+                                     verification_status = 'deactivated', is_active = FALSE, updated_at = now()
+                                    WHERE user_id = ANY($1::text[]) AND verification_status IS DISTINCT FROM 'deactivated'""",
+                               list(user_ids), meta)
+        n += int(r.rsplit(" ", 1)[-1])
+    return n
+
+
+async def restore_profiles(conn, user_ids) -> int:
+    n = 0
+    for tbl, _ in TABLES.values():
+        prev = "coalesce(nullif(local_decision->>'pre_delete_status', ''), 'pending_review')"
+        for status in (prev, "'pending_review'"):
+            try:
+                async with conn.transaction():
+                    r = await conn.execute(f"""UPDATE public.{tbl} SET verification_status = {status}, is_active = TRUE, updated_at = now(),
+                                                 local_decision = coalesce(local_decision, '{{}}'::jsonb) - 'pre_delete_status'
+                                                WHERE user_id = ANY($1::text[]) AND verification_status = 'deactivated'""", list(user_ids))
+                n += int(r.rsplit(" ", 1)[-1])
+                break
+            except asyncpg.exceptions.CheckViolationError:
+                continue
+    return n

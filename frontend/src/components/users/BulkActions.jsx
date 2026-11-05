@@ -57,9 +57,9 @@ export const SuspendedTag = ({ reason, testId }) => (
 );
 
 /** Row-selection state for user tables keyed by users.id. */
-export function useSelection(rows) {
+export function useSelection(rows, keyOf = (r) => r.id) {
   const [sel, setSel] = useState(() => new Set());
-  const ids = rows.map((r) => r.id);
+  const ids = rows.map(keyOf);
   const all = ids.length > 0 && ids.every((i) => sel.has(i));
   const toggle = (id) => setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleAll = () => setSel(all ? new Set() : new Set(ids));

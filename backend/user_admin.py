@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 import emailer
 import ledger_docs as docs
+import canonical_providers as cp
 import supabase_db as sb
 
 log = logging.getLogger("user_admin")
@@ -121,6 +122,9 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
                 continue
             done.append(c)
         uids = list({u for c in done for u in (c.get("supabase_user_id"), c.get("upstream_user_id")) if u})
+        if body.action == "restore":
+            # Profiles deleted in the Provider App have no archived contact — restore them by account id directly.
+            uids = list(set(uids) | (set(body.user_ids) - {current.get("supabase_user_id")}))
         ids, phones = [c["id"] for c in done], [c["phone"] for c in done if c.get("phone")]
         by = current.get("name") or current.get("phone")
         pool = await sb.get_pool()
@@ -135,10 +139,12 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
                 await conn.execute("""UPDATE public.users SET is_archived = TRUE, is_active = FALSE, archived_at = now(),
                                       archived_reason = $2, purge_after = now() + interval '30 days', updated_at = now()
                                       WHERE id = ANY($1::text[])""", uids, f"admin_deleted: {reason}"[:50])
+                await cp.deactivate_profiles(conn, uids, by, reason)
             else:
                 await conn.execute("""UPDATE public.users SET is_archived = FALSE, is_active = TRUE, archived_at = NULL,
                                       archived_reason = NULL, purge_after = NULL, updated_at = now()
                                       WHERE id = ANY($1::text[]) AND coalesce(archived_reason, '') LIKE 'admin_deleted%'""", uids)
+                await cp.restore_profiles(conn, uids)
         purge_at = (datetime.now(timezone.utc) + timedelta(days=ARCHIVE_DAYS)).isoformat()
         susp = {"suspended": True, "suspended_at": _now(), "suspended_reason": reason, "suspended_by": by}
         unsusp = {"suspended": False, "suspended_at": None, "suspended_reason": None, "suspended_by": None}
@@ -158,7 +164,7 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
                 emails[c["id"]] = await notify(c, body.action == "suspend", reason, origin if origin.startswith("https://") else None)
         await db.audit_log.insert_one({"id": os.urandom(8).hex(), "action": f"users.{body.action}", "by": current.get("id"), "by_name": by,
                                        "reason": reason or None, "contact_ids": ids, "supabase_user_ids": uids, "at": _now()})
-        return {"success": True, "action": body.action, "updated": len(done), "skipped": skipped, "emails": emails,
+        return {"success": True, "action": body.action, "updated": len(uids) if body.action == "restore" else len(done), "skipped": skipped, "emails": emails,
                 "purge_after": purge_at if body.action == "archive" else None}
 
     @r.get("/admin/users/archived")

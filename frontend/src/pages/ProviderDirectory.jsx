@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Search, Loader2, Building2, UserPlus } from "lucide-react";
+import { Search, Loader2, Building2, UserPlus, Archive, ArrowLeft } from "lucide-react";
 import api from "../lib/api";
 import { relativeTime } from "../lib/constants";
 import { BulkBar, BulkActionDialog, SuspendedTag, RowCheck, useSelection } from "../components/users/BulkActions";
+import { DeletedUsers } from "../components/users/DeletedUsers";
 
 const ROLE_LABEL = { path_lab: "Path Lab", ambulance_provider: "Ambulance", hospital: "Hospital", doctor: "Doctor", paramedic: "Paramedic",
   pharmacy: "Pharmacy", diagnostic_centre: "Diagnostic centre", pharmacist: "Pharmacist", lab_tech: "Lab technician", nurse: "Nurse", receptionist: "Receptionist" };
@@ -12,12 +13,13 @@ const ORG_ROLES = ["hospital", "path_lab", "diagnostic_centre", "ambulance_provi
 const orgHeader = (r) => (ORG_ROLES.includes(r) ? `${roleLabel(r).split(" /")[0]} name` : "Provider name");
 const KYC_TONE = { verified: "bg-[#E3FCEF] text-[#006644]", approved: "bg-[#E3FCEF] text-[#006644]", rejected: "bg-[#FFEBE6] text-[#BF2600]", pending: "bg-[#FFFAE6] text-[#974F0C]" };
 
-/** Trata Health Admin: one row per Provider-app account (from the shared users table). */
+/** Trata Health Admin: one row per provider profile — the same list the Provider App admin shows. */
 export default function ProviderDirectory() {
   const nav = useNavigate();
   const [sp, setSp] = useSearchParams();
   const role = sp.get("role") || "";
   const kyc = sp.get("kyc") || "";
+  const deletedView = sp.get("view") === "deleted";
   const [q, setQ] = useState("");
   const [s, setS] = useState({ loading: true, items: [], roles: [] });
   const [status, setStatus] = useState("");
@@ -25,8 +27,8 @@ export default function ProviderDirectory() {
   const [tick, setTick] = useState(0);
   const total = s.roles.reduce((n, r) => n + r.count, 0);
   const items = s.items.filter((p) => !status || (status === "suspended") === !!p.is_suspended);
-  const pick = useSelection(items);
-  const targetIds = items.filter((p) => pick.sel.has(p.id)).flatMap((p) => [p.id, ...(p.linked_accounts || [])]);
+  const pick = useSelection(items.filter((p) => p.id), (p) => p.row_key);
+  const targetIds = [...new Set(items.filter((p) => pick.sel.has(p.row_key)).map((p) => p.id))];
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -35,7 +37,7 @@ export default function ProviderDirectory() {
         .then(({ data }) => setS({ loading: false, ...data })).catch(() => setS((p) => ({ ...p, loading: false })));
     }, 250);
     return () => clearTimeout(t);
-  }, [role, kyc, q, tick]);
+  }, [role, kyc, q, tick, deletedView]);
   const setParam = (k, v) => { const n = new URLSearchParams(sp); v ? n.set(k, v) : n.delete(k); setSp(n); };
 
   return (
@@ -43,11 +45,18 @@ export default function ProviderDirectory() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="overline flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" /> Provider app</div>
-          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1" data-testid="provider-directory-title">Trata Providers <span className="text-[#5E6C84] font-medium">/ {total}</span></h1>
-          <p className="text-sm text-[#5E6C84] mt-1">Every account on the Trata Provider app — one row per account. Click one for the full profile and complete KYC.</p>
+          <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1" data-testid="provider-directory-title">{deletedView ? "Deleted providers" : <>Trata Providers <span className="text-[#5E6C84] font-medium">/ {total}</span></>}</h1>
+          <p className="text-sm text-[#5E6C84] mt-1">{deletedView ? "Same list as the Provider App's Deleted page. Restore within 30 days — after that they're erased permanently."
+            : "Every provider on the Trata Provider app — one row per profile, exactly as the Provider App lists them. Click one for the full profile and complete KYC."}</p>
         </div>
-        <button onClick={() => nav("/admin/onboarding")} className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-md bg-[#0052CC] text-white hover:bg-[#0747A6]" data-testid="provider-directory-onboard"><UserPlus className="h-4 w-4" /> Onboard provider</button>
+        <div className="flex gap-2">
+        <button onClick={() => setParam("view", deletedView ? "" : "deleted")} data-testid="provider-directory-deleted-toggle"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-md border border-[#DFE1E6] bg-white text-[#42526E] hover:bg-[#F4F5F7]">
+          {deletedView ? <><ArrowLeft className="h-4 w-4" /> Back to providers</> : <><Archive className="h-4 w-4" /> Deleted users</>}</button>
+        {!deletedView && <button onClick={() => nav("/admin/onboarding")} className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-md bg-[#0052CC] text-white hover:bg-[#0747A6]" data-testid="provider-directory-onboard"><UserPlus className="h-4 w-4" /> Onboard provider</button>}
+        </div>
       </div>
+      {deletedView ? <DeletedUsers app="provider" /> : <>
       <div className="flex flex-nowrap overflow-x-auto gap-1.5 border-b border-[#DFE1E6] pb-3" data-testid="provider-directory-roles">
         {[{ role: "", count: total }, ...s.roles].map((r) => (
           <button key={r.role || "all"} onClick={() => setParam("role", r.role)} data-testid={`provider-role-${r.role || "all"}`}
@@ -76,11 +85,11 @@ export default function ProviderDirectory() {
               <th className="text-left px-4 py-2.5" data-testid="provider-col-org">{orgHeader(role)}</th><th className="text-left px-4 py-2.5" data-testid="provider-col-admin">Admin name</th><th className="text-left px-4 py-2.5">Type</th><th className="text-left px-4 py-2.5">Phone</th>
               <th className="text-left px-4 py-2.5">KYC</th><th className="text-left px-4 py-2.5">Documents</th><th className="text-left px-4 py-2.5">Joined</th><th className="text-left px-4 py-2.5">Last login</th></tr></thead>
             <tbody>{items.map((p) => (
-              <tr key={p.id} onClick={() => nav(`/admin/onboarding/${p.id}`)} className={`border-t border-[#F4F5F7] hover:bg-[#F8F9FA] cursor-pointer ${pick.sel.has(p.id) ? "bg-[#DEEBFF]/40" : ""}`} data-testid={`provider-row-${p.id}`}>
-                <td className="pl-4 py-3"><RowCheck checked={pick.sel.has(p.id)} onChange={() => pick.toggle(p.id)} testId={`provider-select-${p.id}`} /></td>
-                <td className="px-4 py-3"><div className={p.org_name ? "font-semibold text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-org-${p.id}`}>{p.org_name || "Not linked"}{p.is_suspended && <SuspendedTag reason={p.suspended_reason} testId={`provider-suspended-${p.id}`} />}</div>
-                  {p.linked_accounts?.length > 0 && <div className="text-[11px] text-[#97A0AF]" data-testid={`provider-linked-${p.id}`}>+{p.linked_accounts.length} linked account{p.linked_accounts.length > 1 ? "s" : ""} with the same name</div>}</td>
-                <td className="px-4 py-3"><div className={p.admin_name ? "text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-admin-${p.id}`}>{p.admin_name || "Not set"}</div>{p.email && <div className="text-xs text-[#5E6C84]">{p.email}</div>}</td>
+              <tr key={p.row_key} onClick={() => p.id && nav(`/admin/onboarding/${p.id}`)} className={`border-t border-[#F4F5F7] hover:bg-[#F8F9FA] ${p.id ? "cursor-pointer" : ""} ${pick.sel.has(p.row_key) ? "bg-[#DEEBFF]/40" : ""}`} data-testid={`provider-row-${p.row_key}`}>
+                <td className="pl-4 py-3">{p.id && <RowCheck checked={pick.sel.has(p.row_key)} onChange={() => pick.toggle(p.row_key)} testId={`provider-select-${p.row_key}`} />}</td>
+                <td className="px-4 py-3"><div className={p.org_name ? "font-semibold text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-org-${p.row_key}`}>{p.org_name || "Not linked"}{p.is_suspended && <SuspendedTag reason={p.suspended_reason} testId={`provider-suspended-${p.row_key}`} />}</div>
+                  {!p.id && <div className="text-[11px] text-[#97A0AF]">No app login yet</div>}</td>
+                <td className="px-4 py-3"><div className={p.admin_name ? "text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-admin-${p.row_key}`}>{p.admin_name || "Not set"}</div>{p.email && <div className="text-xs text-[#5E6C84]">{p.email}</div>}</td>
                 <td className="px-4 py-3"><span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-[#F4F5F7] text-[#42526E]">{roleLabel(p.role)}</span></td>
                 <td className="px-4 py-3 font-mono text-xs">{p.phone || "—"}</td>
                 <td className="px-4 py-3"><span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${KYC_TONE[String(p.kyc_status).toLowerCase()] || KYC_TONE.pending}`}>{p.kyc_status}</span></td>
@@ -89,6 +98,7 @@ export default function ProviderDirectory() {
                 <td className="px-4 py-3 text-xs text-[#5E6C84]">{p.last_login_at ? relativeTime(p.last_login_at) : "Never"}</td>
               </tr>))}</tbody></table>}
       </section>
+      </>}
     </div>
   );
 }

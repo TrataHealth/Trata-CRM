@@ -1,16 +1,18 @@
-"""Trata Health Admin directories straight from the shared users table — one row per Provider-app / Patient-app account."""
+"""Trata Health Admin directories — one row per canonical provider profile, the same list the Provider App admin shows."""
 from __future__ import annotations
 
+import math
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import canonical_providers as cp
 import supabase_db as sb
 
 NON_PROVIDER = ("admin", "patient", "customer")
-ORG_ROLES = ("hospital", "path_lab", "diagnostic_centre", "ambulance_provider", "pharmacy")
 
 
 SERVICE_TYPES = ("pathology", "imaging")
@@ -47,100 +49,110 @@ def create_directory_router(get_current_user):
             raise HTTPException(status_code=404, detail="No diagnostic centre for this account")
         return {"success": True, "service_types": types}
 
+    async def profile_rows(conn, deleted: bool) -> List[Dict[str, Any]]:
+        """One row per canonical profile — exactly what the Provider App admin lists (or its Deleted page)."""
+        parts = []
+        for role, (tbl, name_col) in cp.TABLES.items():
+            cols = await cp._columns(conn, tbl)
+            ph = "coalesce(u.phone, p.phone::text)" if "phone" in cols else "u.phone"
+            if role == "doctor":
+                org = "coalesce(nullif(p.hospital_name, ''), h.name, nullif(p.clinic_name, ''), nullif(p.facility_name, ''))"
+                admin, join = "p.full_name", "LEFT JOIN public.hospital_profiles h ON h.id = p.hospital_id"
+            else:
+                name = "coalesce(nullif(p.display_name, ''), p.name)" if "display_name" in cols else f"p.{name_col}"
+                org, join = name, ""
+                admin = "coalesce(nullif(p.owner_name, ''), u.name)" if "owner_name" in cols else "u.name"
+            parts.append(f"""SELECT '{role}'::text AS role, '{tbl}'::text AS profile_table, p.id::text AS profile_id, p.user_id::text AS user_id,
+                                    {org}::text AS org_name, {admin}::text AS admin_name, {ph}::text AS phone, u.email::text AS email,
+                                    p.verification_status::text AS kyc_status, p.created_at::timestamptz AS created_at, p.updated_at::timestamptz AS updated_at,
+                                    p.local_decision->>'deleted_reason' AS deleted_reason, p.local_decision->>'deleted_by' AS deleted_by
+                               FROM public.{tbl} p LEFT JOIN public.users u ON u.id = p.user_id {join}
+                              WHERE p.verification_status {'=' if deleted else 'IS DISTINCT FROM'} 'deactivated'""")
+        staff = f"""SELECT u.role::text, 'users'::text, NULL::text, u.id::text, coalesce(nullif(u.organization_name, ''), hs.org, pm.org)::text, u.name::text, u.phone::text, u.email::text,
+                           coalesce(u.verification_status, 'pending')::text, u.created_at::timestamptz, u.archived_at::timestamptz, u.archived_reason::text, NULL::text
+                      FROM public.users u
+                      LEFT JOIN LATERAL (SELECT h.name AS org FROM public.hospital_staff s JOIN public.hospital_profiles h ON h.id = s.hospital_id
+                                          WHERE s.user_id = u.id LIMIT 1) hs ON TRUE
+                      LEFT JOIN LATERAL (SELECT coalesce(p.hospital_name, h.name) AS org FROM public.paramedic_profiles p
+                                          LEFT JOIN public.hospital_profiles h ON h.id = p.hospital_id WHERE p.user_id = u.id LIMIT 1) pm ON TRUE
+                     WHERE u.role IS NOT NULL AND u.role <> ALL($1::text[]) AND {'' if deleted else 'NOT '}coalesce(u.is_archived, FALSE)"""
+        rows = await conn.fetch(f"""
+            WITH x AS ({' UNION ALL '.join(parts)} UNION ALL {staff})
+            SELECT x.*, u.is_active, coalesce(u.is_suspended, FALSE) AS is_suspended, u.suspended_reason, u.last_login_at,
+                   u.archived_at, u.purge_after,
+                   (SELECT count(*) FROM public.kyc_documents k WHERE k.user_id = x.user_id) AS docs_total,
+                   (SELECT count(*) FROM public.kyc_documents k WHERE k.user_id = x.user_id AND lower(coalesce(k.status, '')) = 'approved') AS docs_approved,
+                   (SELECT count(*) FROM public.kyc_documents k WHERE k.user_id = x.user_id AND lower(coalesce(k.status, '')) = 'rejected') AS docs_rejected
+              FROM x LEFT JOIN public.users u ON u.id = x.user_id
+             ORDER BY coalesce(x.updated_at, x.created_at) DESC NULLS LAST""", list(NON_PROVIDER) + list(cp.TABLES))
+        out = []
+        for x in rows:
+            i = {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in dict(x).items()}
+            i["row_key"] = f"{i['profile_table']}:{i['profile_id'] or i['user_id']}"
+            i["id"] = i["user_id"]
+            i["kyc_status"] = i["kyc_status"] or "pending"
+            i["phone"] = i["phone"] if re.fullmatch(r"\+?\d{10,13}", i["phone"] or "") else None
+            if i["org_name"] and (i["admin_name"] or "").strip().lower() == i["org_name"].strip().lower():
+                i["admin_name"] = None
+            out.append(i)
+        return out
+
+    def matches(i, q, kyc):
+        if q and q.strip():
+            s = q.strip().lower()
+            if not any(s in str(i.get(f) or "").lower() for f in ("org_name", "admin_name", "phone", "email")):
+                return False
+        if kyc:
+            v = str(i["kyc_status"]).lower()
+            ok = {"pending": v.startswith("pending") or v in ("submitted", "under_review"),
+                  "verified": v in ("verified", "approved"), "rejected": v in ("rejected", "declined")}
+            if kyc.lower() not in ok:
+                raise HTTPException(status_code=400, detail="kyc must be pending, verified or rejected")
+            return ok[kyc.lower()]
+        return True
+
+    def role_counts(items):
+        from collections import Counter
+        c = Counter(i["role"] for i in items)
+        order = [r for r in cp.TABLES if c.get(r)] + sorted((r for r in c if r not in cp.TABLES), key=lambda r: -c[r])
+        return [{"role": r, "count": c[r]} for r in order]
+
     @r.get("/providers")
-    async def providers(role: Optional[str] = None, q: Optional[str] = None, kyc: Optional[str] = None, limit: int = 500,
+    async def providers(role: Optional[str] = None, q: Optional[str] = None, kyc: Optional[str] = None,
                         current=Depends(get_current_user)):
         if not current.get("is_master_admin"):
             raise HTTPException(status_code=403, detail="Trata Health Admin only")
-        where = ["u.role IS NOT NULL", "u.role <> ALL($1::text[])", "coalesce(u.is_archived, FALSE) = FALSE", "NOT u.deactivated"]
-        args: list = [list(NON_PROVIDER)]
-        if role:
-            args.append(role)
-            where.append(f"u.role = ${len(args)}")
-        if q and q.strip():
-            args.append(f"%{q.strip().lower()}%")
-            where.append(f"(lower(coalesce(u.name, '')) LIKE ${len(args)} OR lower(coalesce(u.org_name, '')) LIKE ${len(args)} OR lower(coalesce(u.admin_name, '')) LIKE ${len(args)} OR u.phone LIKE ${len(args)} OR lower(coalesce(u.email, '')) LIKE ${len(args)})")
-        if kyc:
-            groups = {"pending": "(coalesce(lower(u.verification_status), 'pending') LIKE 'pending%' OR lower(u.verification_status) IN ('submitted', 'under_review'))",
-                      "verified": "lower(u.verification_status) IN ('verified', 'approved')",
-                      "rejected": "lower(u.verification_status) IN ('rejected', 'declined')"}
-            if kyc.lower() not in groups:
-                raise HTTPException(status_code=400, detail="kyc must be pending, verified or rejected")
-            where.append(groups[kyc.lower()])
-        args.append(max(1, min(limit, 1000)))
         pool = await sb.get_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch(f"""
-                WITH base AS (
-                  SELECT u.*, coalesce(oe.name, nullif(u.organization_name, ''), hp.name, pp.business_name, ph.pharmacy_name,
-                                       pl.name, dc.name, ap.business_name, dr.org, pm.hospital_name, hs.org) AS org_name,
-                         coalesce(dz.all_off, FALSE) AS deactivated,
-                         coalesce(nullif(oe.contact_person, ''), nullif(pp.owner_name, ''), nullif(ph.owner_name, ''),
-                                  nullif(ap.owner_name, ''), CASE WHEN u.role = 'doctor' THEN nullif(dr.full_name, '') END, u.name) AS admin_name
-                    FROM public.users u
-                    LEFT JOIN LATERAL (SELECT name, contact_person FROM public.org_entities e WHERE e.entity_user_id = u.id
-                                         AND NOT EXISTS (SELECT 1 FROM public.hospital_profiles x WHERE x.user_id = u.id AND x.verification_status = 'deactivated'
-                                                         AND lower(x.name) = lower(e.name))
-                                       ORDER BY created_at LIMIT 1) oe ON TRUE
-                    LEFT JOIN LATERAL (SELECT name FROM public.hospital_profiles WHERE (user_id = u.id OR admin_user_id = u.id) AND verification_status IS DISTINCT FROM 'deactivated' LIMIT 1) hp ON TRUE
-                    LEFT JOIN LATERAL (SELECT business_name, owner_name FROM public.pharmacy_providers WHERE user_id = u.id AND verification_status IS DISTINCT FROM 'deactivated' LIMIT 1) pp ON TRUE
-                    LEFT JOIN LATERAL (SELECT pharmacy_name, owner_name FROM public.pharmacy_profiles WHERE user_id = u.id LIMIT 1) ph ON TRUE
-                    LEFT JOIN LATERAL (SELECT coalesce(display_name, name) AS name FROM public.path_lab_profiles WHERE user_id = u.id AND verification_status IS DISTINCT FROM 'deactivated' LIMIT 1) pl ON TRUE
-                    LEFT JOIN LATERAL (SELECT name FROM public.diagnostic_centre_profiles WHERE user_id = u.id AND verification_status IS DISTINCT FROM 'deactivated' LIMIT 1) dc ON TRUE
-                    LEFT JOIN LATERAL (SELECT business_name, owner_name FROM public.ambulance_providers WHERE user_id = u.id AND verification_status IS DISTINCT FROM 'deactivated' LIMIT 1) ap ON TRUE
-                    LEFT JOIN LATERAL (SELECT d.full_name, coalesce(d.hospital_name, h.name, d.clinic_name, d.facility_name) AS org
-                                         FROM public.doctors d LEFT JOIN public.hospital_profiles h ON h.id = d.hospital_id WHERE d.user_id = u.id LIMIT 1) dr ON TRUE
-                    LEFT JOIN LATERAL (SELECT coalesce(p.hospital_name, h.name) AS hospital_name FROM public.paramedic_profiles p
-                                         LEFT JOIN public.hospital_profiles h ON h.id = p.hospital_id WHERE p.user_id = u.id LIMIT 1) pm ON TRUE
-                    LEFT JOIN LATERAL (SELECT bool_and(z.v = 'deactivated') AS all_off FROM (
-                        SELECT verification_status v FROM public.hospital_profiles WHERE user_id = u.id
-                        UNION ALL SELECT verification_status FROM public.path_lab_profiles WHERE user_id = u.id
-                        UNION ALL SELECT verification_status FROM public.doctors WHERE user_id = u.id
-                        UNION ALL SELECT verification_status FROM public.pharmacy_providers WHERE user_id = u.id
-                        UNION ALL SELECT verification_status FROM public.ambulance_providers WHERE user_id = u.id
-                        UNION ALL SELECT verification_status FROM public.diagnostic_centre_profiles WHERE user_id = u.id) z) dz ON TRUE
-                    LEFT JOIN LATERAL (SELECT h.name AS org FROM public.hospital_staff s JOIN public.hospital_profiles h ON h.id = s.hospital_id
-                                        WHERE s.user_id = u.id LIMIT 1) hs ON TRUE)
-                SELECT u.id, u.name, u.org_name, u.admin_name, u.phone, u.email, u.role, coalesce(u.verification_status, 'pending') AS kyc_status,
-                       u.is_active, coalesce(u.is_suspended, FALSE) AS is_suspended, u.suspended_reason, u.created_at, u.last_login_at,
-                       count(k.id) AS docs_total,
-                       count(k.id) FILTER (WHERE lower(coalesce(k.status, '')) = 'approved') AS docs_approved,
-                       count(k.id) FILTER (WHERE lower(coalesce(k.status, '')) = 'rejected') AS docs_rejected
-                  FROM base u LEFT JOIN public.kyc_documents k ON k.user_id = u.id
-                 WHERE {' AND '.join(where)}
-                 GROUP BY u.id, u.name, u.org_name, u.admin_name, u.phone, u.email, u.role, u.verification_status, u.is_active, u.is_suspended, u.suspended_reason, u.created_at, u.last_login_at
-                 ORDER BY u.created_at DESC NULLS LAST LIMIT ${len(args)}""", *args)
-            roles = await conn.fetch("""SELECT role, count(*) n FROM public.users WHERE role IS NOT NULL AND role <> ALL($1::text[])
-                                         AND coalesce(is_archived, FALSE) = FALSE GROUP BY 1 ORDER BY 2 DESC""", list(NON_PROVIDER))
-        items = [{**dict(x), "id": str(x["id"]), "created_at": x["created_at"].isoformat() if x["created_at"] else None,
-                  "last_login_at": x["last_login_at"].isoformat() if x["last_login_at"] else None,
-                  "_pnd": str(x["phone"] or "").startswith("pnd-"),
-                  "phone": x["phone"] if re.fullmatch(r"\+?\d{10,13}", x["phone"] or "") else None} for x in rows]
-        for i in items:
-            if not i["org_name"] and i["role"] in ORG_ROLES:
-                i["org_name"] = i["name"]
-            if i["org_name"] and (i["admin_name"] or "").strip().lower() == i["org_name"].strip().lower():
-                i["admin_name"] = None
-        # The Provider app sometimes leaves placeholder accounts (no real phone) for the same organisation — show one row per name.
-        best: Dict[tuple, Dict[str, Any]] = {}
-        for i in items:
-            k = (i["role"], (i["name"] or i["id"]).strip().lower())
-            rank = (bool(i["phone"]), i["docs_total"], i["kyc_status"] != "pending", not i["_pnd"], i["created_at"] or "")
-            cur = best.get(k)
-            if not cur:
-                best[k] = {**i, "linked_accounts": [], "_rank": rank}
-            elif rank > cur["_rank"]:
-                best[k] = {**i, "linked_accounts": cur["linked_accounts"] + [cur["id"]], "_rank": rank}
+            items = [i for i in await profile_rows(conn, False) if matches(i, q, kyc)]
+        return {"items": [i for i in items if not role or i["role"] == role], "roles": role_counts(items)}
+
+    @r.get("/deleted")
+    async def deleted(app: str = "provider", q: Optional[str] = None, current=Depends(get_current_user)):
+        if not current.get("is_master_admin"):
+            raise HTTPException(status_code=403, detail="Trata Health Admin only")
+        if app not in ("provider", "patient"):
+            raise HTTPException(status_code=400, detail="app must be provider or patient")
+        pool = await sb.get_pool()
+        async with pool.acquire() as conn:
+            if app == "provider":
+                items = [i for i in await profile_rows(conn, True) if matches(i, q, None)]
             else:
-                cur["linked_accounts"].append(i["id"])
-        items = [{k: v for k, v in i.items() if k not in ("_rank", "_pnd")} for i in best.values()]
-        items.sort(key=lambda i: i["created_at"] or "", reverse=True)
-        role_counts = [{"role": x["role"], "count": x["n"]} for x in roles]
-        if role and not (q or kyc):
-            role_counts = [{**x, "count": len(items)} if x["role"] == role else x for x in role_counts]
-        if not (role or q or kyc):
-            from collections import Counter
-            role_counts = [{"role": k, "count": v} for k, v in Counter(i["role"] for i in items).most_common()]
-        return {"items": items, "roles": role_counts}
+                rows = await conn.fetch(f"""SELECT u.id, u.name, u.phone, u.email, u.role, u.created_at, u.archived_at, u.archived_reason, u.purge_after,
+                                                   d.status AS deletion_status, d.requested_at, d.scheduled_at
+                                              FROM public.users u
+                                              LEFT JOIN LATERAL (SELECT status, requested_at, scheduled_at FROM public.account_deletions a
+                                                                  WHERE a.user_id = u.id ORDER BY requested_at DESC LIMIT 1) d ON TRUE
+                                             WHERE {sb._PATIENT_ROLE_SQL.format(a="u.")}
+                                               AND (coalesce(u.is_archived, FALSE) OR d.status IN ('pending', 'completed'))
+                                             ORDER BY coalesce(u.archived_at, d.requested_at) DESC NULLS LAST""")
+                items = [{**{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in dict(x).items()}, "row_key": x["id"]}
+                         for x in rows]
+                items = [i for i in items if not q or q.strip().lower() in f"{i['name'] or ''} {i['phone'] or ''} {i['email'] or ''}".lower()]
+        now = datetime.now(timezone.utc)
+        for i in items:
+            pa = i.get("purge_after")
+            i["days_left"] = max(0, math.ceil((datetime.fromisoformat(pa) - now).total_seconds() / 86400)) if pa else None
+        return {"items": items, "total": len(items), "roles": role_counts(items) if app == "provider" else []}
 
     return r

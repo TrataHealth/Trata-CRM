@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../lib/api";
 import { relativeTime } from "../lib/constants";
 import { BulkBar, BulkActionDialog, SuspendedTag, RowCheck, useSelection } from "../components/users/BulkActions";
+import { DeletedUsers } from "../components/users/DeletedUsers";
 import {
   Users, Search, Loader2, AlertTriangle, ChevronRight, HeartPulse,
-  Activity, Calendar, Bed, Ambulance, ShieldCheck,
+  Activity, Calendar, Bed, Ambulance, ShieldCheck, Archive, ArrowLeft,
 } from "lucide-react";
 
 const T = {
@@ -36,6 +37,8 @@ export default function Patients({ mode = "admin" }) {
   const basePath = mode === "provider" ? "/provider/patients" : "/admin/patients";
   const [state, setState] = useState({ loading: true, patients: [], err: "", scope: "", message: "" });
   const [q, setQ] = useState("");
+  const [sp, setSp] = useSearchParams();
+  const deletedView = mode === "admin" && sp.get("view") === "deleted";
 
   const load = useCallback(async (searchQ) => {
     setState((s) => ({ ...s, loading: true }));
@@ -67,15 +70,20 @@ export default function Patients({ mode = "admin" }) {
             {isProviderView ? "Patient roster" : "Trata Health Admin · Patients"}
           </div>
           <h1 className="font-heading text-2xl sm:text-3xl font-black tracking-tight text-[#091E42] mt-1">
-            {isProviderView ? "My patients" : "Trata Patient Users"}
+            {isProviderView ? "My patients" : deletedView ? "Deleted patients" : "Trata Patient Users"}
           </h1>
           <p className="text-sm text-[#5E6C84] mt-1 max-w-2xl">
             {isProviderView
               ? "Same list your mobile Provider App shows — click a patient to see their clinical profile, admissions, appointments, and ambulance rides."
+              : deletedView ? "Patient accounts deleted here or in the app. Restore within 30 days — after that they're erased permanently."
               : "Every account on the Trata Patient app — one row per person. Search by name or phone. Click a row for their full profile and history."}
           </p>
         </div>
-        <form onSubmit={submitSearch} className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+        {!isProviderView && <button type="button" onClick={() => setSp(deletedView ? {} : { view: "deleted" })} data-testid="patients-deleted-toggle"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded border border-[#DFE1E6] bg-white text-[#42526E] hover:bg-[#F4F5F7]">
+          {deletedView ? <><ArrowLeft className="h-3.5 w-3.5" /> Back to patients</> : <><Archive className="h-3.5 w-3.5" /> Deleted users</>}</button>}
+        {!deletedView && <form onSubmit={submitSearch} className="flex items-center gap-2">
           <div className="relative">
             <Search className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-[#5E6C84]" />
             <input
@@ -92,8 +100,10 @@ export default function Patients({ mode = "admin" }) {
               <option value="">Any access</option><option value="active">Active</option><option value="suspended">Suspended</option>
             </select>
           )}
-        </form>
+        </form>}
+        </div>
       </div>
+      {deletedView ? <DeletedUsers app="patient" /> : <>
 
       {!isProviderView && <>
         <BulkBar count={pick.selected.length} onAction={setAction} onClear={pick.clear} />
@@ -202,6 +212,7 @@ export default function Patients({ mode = "admin" }) {
           <Tile label="With admissions"   value={rows.filter(r => r.admits > 0).length}                      icon={Bed}        />
         </div>
       )}
+      </>}
     </div>
   );
 }
