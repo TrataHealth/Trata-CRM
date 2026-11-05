@@ -26,7 +26,8 @@ export function DeletedUsers({ app }) {
     return () => clearTimeout(t);
   }, [app, q, tick]);
   const items = s.items.filter((i) => !role || i.role === role);
-  const pick = useSelection(items.filter((i) => i.user_id || app === "patient"), (i) => i.row_key);
+  const restorable = (i) => (app === "provider" ? !!i.user_id : /^admin_deleted/.test(i.archived_reason || ""));
+  const pick = useSelection(items.filter(restorable), (i) => i.row_key);
   const ids = [...new Set(items.filter((i) => pick.sel.has(i.row_key)).map((i) => i.user_id || i.id))];
   const provider = app === "provider";
 
@@ -52,7 +53,7 @@ export function DeletedUsers({ app }) {
               <th className={th}>{provider ? "Provider name" : "Patient"}</th>{provider && <th className={th}>Admin name</th>}<th className={th}>Type</th>
               <th className={th}>Phone</th><th className={th}>Deleted</th><th className={th}>Reason</th><th className={th}>Erased in</th></tr></thead>
             <tbody>{items.map((i) => {
-              const can = !!(i.user_id || !provider);
+              const can = restorable(i);
               return (
                 <tr key={i.row_key} className={`border-t border-[#F4F5F7] ${pick.sel.has(i.row_key) ? "bg-[#DEEBFF]/40" : ""}`} data-testid={`deleted-row-${i.row_key}`}>
                   <td className="pl-4 py-3">{can && <RowCheck checked={pick.sel.has(i.row_key)} onChange={() => pick.toggle(i.row_key)} testId={`deleted-select-${i.row_key}`} />}</td>

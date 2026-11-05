@@ -466,7 +466,7 @@ async def restore_profiles(conn, user_ids) -> int:
             try:
                 async with conn.transaction():
                     r = await conn.execute(f"""UPDATE public.{tbl} SET verification_status = {status}, is_active = TRUE, updated_at = now(),
-                                                 local_decision = coalesce(local_decision, '{{}}'::jsonb) - 'pre_delete_status'
+                                                 local_decision = coalesce(local_decision, '{{}}'::jsonb) - 'pre_delete_status' - 'deleted_by' - 'deleted_reason' - 'deleted_at'
                                                 WHERE user_id = ANY($1::text[]) AND verification_status = 'deactivated'""", list(user_ids))
                 n += int(r.rsplit(" ", 1)[-1])
                 break

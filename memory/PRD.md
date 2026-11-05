@@ -540,3 +540,9 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - Follow-up queue: GET /api/sales/followups-due (reps see own) + "Follow-ups due" card on Dashboard and Agent "My Day"; "Next follow-up" date on the lead page (next_followup_at). Backfill: POST /api/admin/sales-leads/backfill (21 rows now).
 - Open question to Provider App: should canonical rows keep pipeline_stage/deal_value/agent columns post-conversion?
 - Fixes after iteration_35: /api/pipeline + agent funnel use the 8 stages (non-archived, provider types, reps scoped to own leads); 8-column boards; quick-log rejects unknown advance_to_stage; KYC final verify sets is_verified; self-signups with an app account set to Won in Mongo + crm_sales_leads (supabase_labs_sync added); "Mark KYC verified" wording; Follow-ups card placed below the My Day header.
+
+## 2026-06 — Provider Directory parity with Provider App
+- Trata Providers list is now one row per canonical profile (doctors, hospital_profiles, path_lab_profiles, pharmacy_providers, ambulance_providers, diagnostic_centre_profiles) where verification_status <> 'deactivated' — identical to the Provider App admin. Staff roles (paramedic, lab_tech, receptionist, pharmacist, nurse) stay as extra users-based tabs.
+- Deletion parity: console delete also sets profile verification_status='deactivated', is_active=false (prior status in local_decision.pre_delete_status); restore reverts. Backfill script scripts/backfill_deactivate_archived.py was run once (88 profiles of console-archived accounts deactivated).
+- New "Deleted users" views on Trata Providers and Trata Patient Users (GET /api/admin/directory/deleted?app=provider|patient) with restore. Tested: iteration_36 (100%).
+- Note: master admin account 9873117605 has a PENDING self-deletion request in account_deletions (scheduled 2026-11-29) from the Provider App.

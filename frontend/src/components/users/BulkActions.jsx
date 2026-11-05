@@ -10,7 +10,7 @@ const COPY = {
   unsuspend: { title: "Restore access", verb: "Restore access", need: false, tone: "bg-[#00875A] hover:bg-[#006644]",
     help: "The suspension is lifted everywhere and they're emailed that their account is active again." },
   archive: { title: "Delete users", verb: "Delete", need: true, tone: "bg-[#DE350B] hover:bg-[#BF2600]",
-    help: "They disappear from every Trata app and can't sign in. You can restore them from 'Deleted users' for 30 days — after that they're erased permanently." },
+    help: "They disappear from every Trata app (all profiles on the account, as in the Provider App) and can't sign in. You can restore them from 'Deleted users' for 30 days — after that they're erased permanently." },
   restore: { title: "Restore deleted users", verb: "Restore", need: false, tone: "bg-[#0052CC] hover:bg-[#0747A6]",
     help: "They come back to every Trata app with their data." },
 };

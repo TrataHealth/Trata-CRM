@@ -1,0 +1,36 @@
+{
+  "summary": "Tested whether the Admin Console provider directory matches the Provider App, against the live shared DB. Backend: 13 of 13 pytest pass (new file test_directory_parity.py). GET /api/admin/directory/providers returns 38 rows, one per profile, with no duplicate row_key. The role counts match the expected numbers exactly: hospital 2, path_lab 13, doctor 5, pharmacy 5, ambulance_provider 3, diagnostic_centre 4, paramedic 2, pharmacist 1, lab_tech 1, receptionist 1, nurse 1. The Doctor tab has exactly S Prasad, Shailja Rajpoot, Pradeep Singh, DM Upadhyay and Dr. Siddharth Gupta, with the right phones; Dr. Meera Clinic is not in it. The q filter works. kyc=pending returns 27, verified 11, rejected 0, and an invalid value returns 400. Rohan (non-master) gets 403 on both endpoints. GET /deleted?app=provider returns 148 rows, including the Dr. Meera Clinic doctor row, with role counts. app=patient returns 6 rows with roles []. An invalid app returns 400. Delete/restore round trip used the throwaway Xenon Rapid Ambulance (9999900003, owner 'Test Owner'). Archive took its profile out of providers and put it in deleted with deleted_reason 'testing parity'. Restore brought it back as 'verified', with users.is_archived=false and is_active=true. This was run 3 times (API, UI delete + UI restore, API archive + UI restore); the final DB state is restored and verified. UI: the tabs are in order All 38, Hospital 2, Path Lab 13, Doctor 5, Pharmacy 5, Ambulance 3, Diagnostic centre 4, then the staff tabs. The Doctor tab shows 5 rows. Clicking a row opens /admin/onboarding/{user_id}. The checkbox shows the bulk bar ('1 selected'). The Delete dialog's confirm button is disabled until a reason is entered. Clear works. The Deleted users toggle switches to deleted-users-provider. The type filter lists counts per type, the doctor filter shows 3 rows, search works, Restore works, and Back to providers works. On /users/patients, the patients-deleted-toggle opens deleted-users-patient (6 rows, no type filter), and back works.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "canonical_providers.restore_profiles", "issue": "Restore removes pre_delete_status but leaves deleted_at, deleted_by and deleted_reason in local_decision. If the profile is later deactivated in the Provider App (not the console), the console's Deleted list will show the stale console reason instead of 'Deleted in the Provider App'. Also strip these keys on restore."},
+      {"endpoint": "POST /api/admin/users/bulk (archive)", "issue": "deactivate_profiles works by user_id across all profile tables. Deleting one row of a person who has 2 profiles deactivates both tabs' rows. This is probably intended ('delete everywhere'), but the dialog does not warn about it."},
+      {"endpoint": "POST /api/admin/users/bulk (restore)", "issue": "Patients listed in Deleted only because of an account_deletions pending/completed row (deleted in the app, not archived by the console) cannot really be restored. The users UPDATE is guarded by archived_reason LIKE 'admin_deleted%', yet the toast still reports 'Restore: N users'."},
+      {"endpoint": "POST /api/admin/users/bulk (UI)", "issue": "Restore from the UI took about 8-9s before the row disappeared (the directory GETs take about 1s). There is a spinner on the confirm button, but it is slow."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Deleted providers", "issues": ["The 'Deleted' column uses the profile updated_at for Provider App deletions, not the actual deletion time.", "'Erased in' shows '—' for Provider App deletions that have no purge_after, which is inconsistent with the header text 'Restore within 30 days'.", "Many rows show Admin name 'Not set' (for example the Trata Imaging Centre duplicates)."]},
+      {"screen": "Trata Providers Doctor tab", "issues": ["The 'Provider name' column shows the hospital, so 4 rows read 'Tathastu Institute…'. The doctor's own name only appears in Admin name. This matches the Provider App, but it could confuse users."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_directory_parity.py", "/app/test_reports/pytest/directory_parity.xml"],
+  "action_items": [
+    "Optional: on restore, also strip deleted_at, deleted_by and deleted_reason from local_decision",
+    "Optional: warn in the Delete dialog when the user has more than one profile; make patient restore report the number actually restored; speed up bulk restore"
+  ],
+  "critical_code_review_comments": [
+    "directory.profile_rows: staff rows come from users.is_archived and profile rows from verification_status. A staff user who also has a profile shows up in both lists and has different delete semantics.",
+    "ProviderDirectory.jsx: the useEffect depends on deletedView, so the providers list is refetched even while the deleted view is open (a wasted request).",
+    "user_admin.bulk restore adds body.user_ids directly without the master-phone check. It is harmless for restore, but inconsistent."
+  ],
+  "updated_files": ["/app/backend/tests/test_directory_parity.py"],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% of requested flows"},
+  "seed_data_creation": "None. Xenon Rapid Ambulance (user bf06b74d…, profile 46f7588c…) was deleted and restored 3 times. Final state: verified, is_active=true, users not archived.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend/tests && python -m pytest test_directory_parity.py -p no:xdist -v -s (about 25s). The round-trip test automatically picks an active profile with 'test' in its org or admin name (currently Xenon Rapid Ambulance, owner 'Test Owner') and always restores it in a finally block. UI login: call the 3-step auth with fetch inside page.evaluate, then set localStorage trata_token and trata_user. The auth playbook items (bcrypt, cookies, lockout) were not tested; this is a phone+OTP+password JWT app and they were out of scope."
+}
