@@ -455,7 +455,9 @@ async def deactivate_profiles(conn, user_ids, by: Optional[str], reason: Optiona
                                     WHERE user_id = ANY($1::text[]) AND verification_status IS DISTINCT FROM 'deactivated'""",
                                list(user_ids), meta)
         n += int(r.rsplit(" ", 1)[-1])
-    return n
+    r = await conn.execute("""UPDATE public.paramedic_profiles SET verification_status = 'deactivated', updated_at = now()
+                               WHERE user_id = ANY($1::text[]) AND verification_status IS DISTINCT FROM 'deactivated'""", list(user_ids))
+    return n + int(r.rsplit(" ", 1)[-1])
 
 
 async def restore_profiles(conn, user_ids) -> int:
@@ -472,4 +474,6 @@ async def restore_profiles(conn, user_ids) -> int:
                 break
             except asyncpg.exceptions.CheckViolationError:
                 continue
-    return n
+    r = await conn.execute("""UPDATE public.paramedic_profiles SET verification_status = 'pending', updated_at = now()
+                               WHERE user_id = ANY($1::text[]) AND verification_status = 'deactivated'""", list(user_ids))
+    return n + int(r.rsplit(" ", 1)[-1])

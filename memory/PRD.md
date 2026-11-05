@@ -547,3 +547,4 @@ User shared `https://github.com/TrataHealth` (healthcare emergency platform — 
 - New "Deleted users" views on Trata Providers and Trata Patient Users (GET /api/admin/directory/deleted?app=provider|patient) with restore. Tested: iteration_36 (100%).
 - Note: master admin account 9873117605 has a PENDING self-deletion request in account_deletions (scheduled 2026-11-29) from the Provider App.
 - 2026-06: Doctor rows in Trata Providers show the doctor's name first with their hospital underneath (Admin name = 'Self').
+- 2026-06: Paramedic tab now reads paramedic_profiles (non-deactivated) and new Agent tab reads sanjeevani_agents, mirroring Provider App admin. Console delete/restore also covers paramedic_profiles.

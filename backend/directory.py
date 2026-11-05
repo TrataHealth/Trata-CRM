@@ -16,6 +16,11 @@ NON_PROVIDER = ("admin", "patient", "customer")
 
 
 SERVICE_TYPES = ("pathology", "imaging")
+# Provider App admin also lists these person profiles as their own tabs: role -> (table, person name, org, status column).
+PERSON_PROFILES = {
+    "paramedic": ("paramedic_profiles", "coalesce(nullif(p.full_name, ''), p.name)", "coalesce(nullif(p.hospital_name, ''), h.name)", "verification_status"),
+    "agent": ("sanjeevani_agents", "p.full_name", "nullif(p.hospital_affiliation::text, '')", "status"),
+}
 
 
 class ServiceTypes(BaseModel):
@@ -68,6 +73,13 @@ def create_directory_router(get_current_user):
                                     p.local_decision->>'deleted_reason' AS deleted_reason, p.local_decision->>'deleted_by' AS deleted_by
                                FROM public.{tbl} p LEFT JOIN public.users u ON u.id = p.user_id {join}
                               WHERE p.verification_status {'=' if deleted else 'IS DISTINCT FROM'} 'deactivated'""")
+        for role, (tbl, person, org, status) in PERSON_PROFILES.items():
+            parts.append(f"""SELECT '{role}'::text, '{tbl}'::text, p.id::text, p.user_id::text, {org}::text, {person}::text,
+                                    coalesce(nullif(p.phone, ''), u.phone)::text, coalesce(p.email, u.email)::text, p.{status}::text,
+                                    p.created_at::timestamptz, p.updated_at::timestamptz, u.archived_reason::text, NULL::text
+                               FROM public.{tbl} p LEFT JOIN public.users u ON u.id = p.user_id
+                               {'LEFT JOIN public.hospital_profiles h ON h.id = p.hospital_id' if role == 'paramedic' else ''}
+                              WHERE coalesce(p.{status}, '') {'=' if deleted else '<>'} 'deactivated'""")
         staff = f"""SELECT u.role::text, 'users'::text, NULL::text, u.id::text, coalesce(nullif(u.organization_name, ''), hs.org, pm.org)::text, u.name::text, u.phone::text, u.email::text,
                            coalesce(u.verification_status, 'pending')::text, u.created_at::timestamptz, u.archived_at::timestamptz, u.archived_reason::text, NULL::text
                       FROM public.users u
@@ -84,7 +96,7 @@ def create_directory_router(get_current_user):
                    (SELECT count(*) FROM public.kyc_documents k WHERE k.user_id = x.user_id AND lower(coalesce(k.status, '')) = 'approved') AS docs_approved,
                    (SELECT count(*) FROM public.kyc_documents k WHERE k.user_id = x.user_id AND lower(coalesce(k.status, '')) = 'rejected') AS docs_rejected
               FROM x LEFT JOIN public.users u ON u.id = x.user_id
-             ORDER BY coalesce(x.updated_at, x.created_at) DESC NULLS LAST""", list(NON_PROVIDER) + list(cp.TABLES))
+             ORDER BY coalesce(x.updated_at, x.created_at) DESC NULLS LAST""", list(NON_PROVIDER) + list(cp.TABLES) + list(PERSON_PROFILES))
         out = []
         for x in rows:
             i = {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in dict(x).items()}
@@ -114,7 +126,7 @@ def create_directory_router(get_current_user):
     def role_counts(items):
         from collections import Counter
         c = Counter(i["role"] for i in items)
-        order = [r for r in cp.TABLES if c.get(r)] + sorted((r for r in c if r not in cp.TABLES), key=lambda r: -c[r])
+        order = [r for r in (*cp.TABLES, *PERSON_PROFILES) if c.get(r)] + sorted((r for r in c if r not in cp.TABLES and r not in PERSON_PROFILES), key=lambda r: -c[r])
         return [{"role": r, "count": c[r]} for r in order]
 
     @r.get("/providers")
