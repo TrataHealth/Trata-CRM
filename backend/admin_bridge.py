@@ -329,7 +329,7 @@ async def sync_users_from_admin(db) -> Dict[str, int]:
                 "state": u.get("state"),
                 "is_verified": u.get("verification_status") == "verified",
                 "is_active": False,
-                "pipeline_stage": "verified" if u.get("verification_status") == "verified" else "lead",
+                "pipeline_stage": "won",
                 "deal_value": 0,
                 "assigned_agent_id": agent["id"] if agent else None,
                 "assigned_agent_name": agent["name"] if agent else None,

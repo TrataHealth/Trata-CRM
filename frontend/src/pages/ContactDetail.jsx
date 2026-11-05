@@ -107,6 +107,12 @@ export default function ContactDetail() {
               {PIPELINE_STAGES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
           </div>
+          <label className="flex items-center gap-2">
+            <span className="overline">Next follow-up</span>
+            <input type="date" data-testid="next-followup-input" value={(c.next_followup_at || "").slice(0, 10)}
+                   onChange={async (e) => { if (e.target.value) { await api.patch(`/contacts/${id}`, { next_followup_at: `${e.target.value}T09:00:00+05:30` }); load(); } }}
+                   className="px-2 py-1 text-sm bg-white border border-[#DFE1E6] rounded-md focus:border-[#4C9AFF] outline-none" />
+          </label>
           <button
             data-testid="toggle-verified-btn"
             onClick={() => updateVerified(!c.is_verified)}

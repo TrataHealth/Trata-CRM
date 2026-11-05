@@ -56,13 +56,16 @@ export function slaInfo(since, thresholdHours = 24) {
 }
 
 
+// Phase E sales stages (crm_sales_leads CHECK constraint). KYC / "live on app" is account status, not a stage.
 export const PIPELINE_STAGES = [
-  { value: "lead", label: "Lead", color: "#5E6C84" },
+  { value: "new", label: "New", color: "#5E6C84" },
   { value: "contacted", label: "Contacted", color: "#00B8D9" },
-  { value: "kyc_submitted", label: "KYC Collected", color: "#FFC400" },
-  { value: "verified", label: "App Onboarded", color: "#36B37E" },
-  { value: "active", label: "Live on App", color: "#0052CC" },
-  { value: "churned", label: "Dropped", color: "#FF5630" },
+  { value: "qualified", label: "Qualified", color: "#6554C0" },
+  { value: "proposal", label: "Proposal", color: "#FFAB00" },
+  { value: "negotiation", label: "Negotiation", color: "#FF8B00" },
+  { value: "won", label: "Won", color: "#36B37E" },
+  { value: "lost", label: "Lost", color: "#FF5630" },
+  { value: "dropped", label: "Dropped", color: "#97A0AF" },
 ];
 
 export const SALES_ACTIVITY_TYPES = [
@@ -81,14 +84,14 @@ export const SALES_ACTIVITY_TYPES = [
 export const SALES_OUTCOMES = [
   { value: "connected",          label: "Connected",            stage: null },
   { value: "no_answer",          label: "No answer",            stage: null },
-  { value: "not_interested",     label: "Not interested",       stage: "churned" },
+  { value: "not_interested",     label: "Not interested",       stage: "lost" },
   { value: "interested",         label: "Interested",           stage: "contacted" },
-  { value: "meeting_scheduled",  label: "Meeting scheduled",    stage: "contacted" },
-  { value: "pitched",            label: "Pitched",              stage: "contacted" },
-  { value: "kyc_pending",        label: "KYC pending",          stage: "contacted" },
-  { value: "kyc_collected",      label: "KYC collected",        stage: "kyc_submitted" },
-  { value: "signed_on_app",      label: "Signed on app",        stage: "verified" },
-  { value: "first_use",          label: "Live on app",          stage: "active" },
+  { value: "meeting_scheduled",  label: "Meeting scheduled",    stage: "qualified" },
+  { value: "pitched",            label: "Pitched",              stage: "proposal" },
+  { value: "kyc_pending",        label: "KYC pending",          stage: "negotiation" },
+  { value: "kyc_collected",      label: "KYC collected",        stage: "negotiation" },
+  { value: "signed_on_app",      label: "Signed on app",        stage: "won" },
+  { value: "first_use",          label: "Live on app",          stage: "won" },
 ];
 
 export const ACTIVITY_CATEGORIES = [

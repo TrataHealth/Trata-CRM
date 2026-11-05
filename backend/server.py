@@ -31,6 +31,7 @@ import upstream_sync as us
 import admin_bridge as ab
 import supabase_db as sb
 import canonical_providers as cp
+import sales_leads as sl
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -293,6 +294,7 @@ class ContactStatusUpdate(BaseModel):
     is_verified: Optional[bool] = None
     pipeline_stage: Optional[str] = None
     notes: Optional[str] = None
+    next_followup_at: Optional[str] = None
     # Iter 43 — editable identity fields (kept optional; mirrored to shared
     # Supabase `users` + vertical profile so the mobile apps see the change).
     name: Optional[str] = None
@@ -1076,7 +1078,7 @@ async def dashboard_stats(range_key: str = Query("7d", alias="range"), current=D
 
     # Pipeline stages (always all-time snapshot — pipeline is current state, not historical)
     pipeline = {}
-    for stage in ["lead", "contacted", "kyc_submitted", "verified", "active", "churned"]:
+    for stage in sl.STAGES:
         pipeline[stage] = await db.contacts.count_documents({"pipeline_stage": stage})
 
     # Revenue scoped to the time window (sum of activities with amount in window)
@@ -1278,6 +1280,7 @@ async def _sync_supabase_users_into_contacts() -> Dict[str, Any]:
                 }
                 await db._db.contacts.insert_one(new_row)
                 inserted += 1
+                cp._spawn(sl.upsert(new_row))  # Phase E: self-signups appear in crm_sales_leads as Won (source inbound)
                 await _notify_new_upstream_provider(new_row)
         removed = await cp.sync_removed_to_contacts(db._db.contacts)
         _SB_CONTACTS_SYNC_STATE["last_run_at"] = _time.time()
@@ -1872,6 +1875,8 @@ async def update_contact(contact_id: str, data: ContactStatusUpdate, current=Dep
     elif not is_internal(current):
         raise HTTPException(status_code=403, detail="Forbidden")
     update = {k: v for k, v in data.dict().items() if v is not None}
+    if update.get("pipeline_stage") and update["pipeline_stage"] not in sl.STAGES and update["pipeline_stage"] not in sl.LEGACY_STAGE:
+        raise HTTPException(status_code=400, detail=f"pipeline_stage must be one of: {', '.join(sl.STAGES)}")
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
     update["updated_at"] = now_iso()
@@ -1894,7 +1899,7 @@ async def update_contact(contact_id: str, data: ContactStatusUpdate, current=Dep
         logger.warning(f"contact PATCH · Supabase user mirror suppressed: {e}")
     # Emit crm.deal.closed if the lead just reached verified/active from another stage (CRM side, not via inbound)
     if (
-        update.get("pipeline_stage") in {"verified", "active"}
+        sl.stage(update.get("pipeline_stage")) == "won"
         and c.get("pipeline_stage") != update["pipeline_stage"]
         and c.get("source") not in {"trata_admin_webhook", "provider_app_webhook"}
     ):
@@ -2102,8 +2107,8 @@ async def review_kyc(contact_id: str, data: KycReviewBody, current=Depends(get_c
     set_doc: Dict[str, Any] = {"kyc_status": new_kyc, "kyc_reviewed_at": now_iso(), "kyc_review_notes": data.notes, "updated_at": now_iso()}
     if data.decision == "approved":
         # Bump pipeline forward if still pre-verified
-        if c.get("pipeline_stage") in {"lead", "contacted", "kyc_submitted"}:
-            set_doc["pipeline_stage"] = "verified"
+        if c.get("pipeline_stage") in sl.OPEN_STAGES:
+            set_doc["pipeline_stage"] = "won"
     await db.contacts.update_one({"id": contact_id}, {"$set": set_doc})
 
     # Audit + outbound
@@ -2674,7 +2679,7 @@ async def kyc_admin_final(contact_id: str, data: KycAdminFinalBody, current=Depe
     if canon.get("reason") == "no_canonical_row" and (c.get("type") in cp.TABLES or c.get("type") in cp.USER_ONLY):
         raise HTTPException(status_code=409, detail="This lead has no provider record on the shared database yet, so it can't be verified or rejected.")
     final = canon.get("verification_status") or data.decision
-    new_stage = final if final in ("verified", "rejected") else c.get("pipeline_stage")
+    new_stage = {"verified": "won", "rejected": "lost"}.get(final, c.get("pipeline_stage"))
     await db.contacts.update_one({"id": contact_id}, {"$set": {
         "kyc_status": final,
         "kyc_admin_decision_at": now_iso(),
@@ -2868,7 +2873,7 @@ async def get_team_member(member_id: str, current=Depends(require_internal)):
     perf_by_cat = {row["_id"]: row["count"] for row in await db.activities.aggregate(perf_pipeline).to_list(50)}
     onboarded = await db.contacts.count_documents({
         "assigned_agent_id": {"$in": target_ids},
-        "pipeline_stage": {"$in": ["app_onboarded", "live_on_app", "active", "verified"]},
+        "pipeline_stage": "won",
         "updated_at": {"$gte": month_start},
     })
     info["performance"] = {
@@ -3134,14 +3139,14 @@ SALES_ACTIVITY_TYPES = {
     "kyc_collection", "app_training", "follow_up", "whatsapp", "email", "note",
 }
 OUTCOME_TO_STAGE = {
-    "not_interested": "churned",
+    "not_interested": "lost",
     "interested": "contacted",
-    "meeting_scheduled": "contacted",
-    "pitched": "contacted",
-    "kyc_pending": "contacted",
-    "kyc_collected": "kyc_submitted",
-    "signed_on_app": "verified",
-    "first_use": "active",
+    "meeting_scheduled": "qualified",
+    "pitched": "proposal",
+    "kyc_pending": "negotiation",
+    "kyc_collected": "negotiation",
+    "signed_on_app": "won",
+    "first_use": "won",
 }
 
 
@@ -3197,7 +3202,7 @@ async def quick_log(data: QuickLogActivity, current=Depends(get_current_user)):
             {"id": contact["id"]},
             {"$set": {"pipeline_stage": target_stage, "updated_at": now_iso()}},
         )
-        if target_stage in {"verified", "active"} and contact.get("pipeline_stage") != target_stage:
+        if target_stage == "won" and contact.get("pipeline_stage") != target_stage:
             await ab.queue_outbound(db, "crm.deal.closed", {
                 "phone": contact.get("phone"),
                 "name": contact["name"],
@@ -3243,7 +3248,7 @@ async def agent_dashboard(range_key: str = Query("7d", alias="range"), current=D
     total_leads = await db.contacts.count_documents({"assigned_agent_id": aid})
     stale_leads = await db.contacts.count_documents({
         "assigned_agent_id": aid,
-        "pipeline_stage": {"$in": ["lead", "contacted"]},
+        "pipeline_stage": {"$in": ["new", "contacted"]},
         "$or": [{"updated_at": {"$lt": stale_cutoff}}, {"updated_at": {"$exists": False}}],
     })
     by_stage = {}
@@ -3253,7 +3258,7 @@ async def agent_dashboard(range_key: str = Query("7d", alias="range"), current=D
     today_activities = await db.activities.count_documents({"agent_id": aid, "created_at": {"$gte": today_start}})
     window_activities = await db.activities.count_documents({"agent_id": aid, "created_at": {"$gte": window_start}})
     onboarded_in_window = await db.contacts.count_documents({
-        "assigned_agent_id": aid, "pipeline_stage": {"$in": ["verified", "active"]},
+        "assigned_agent_id": aid, "pipeline_stage": "won",
         "updated_at": {"$gte": window_start},
     })
 
@@ -3265,13 +3270,13 @@ async def agent_dashboard(range_key: str = Query("7d", alias="range"), current=D
 
     # Hot leads = mine in stages contacted/kyc_submitted, most recent first
     hot = await db.contacts.find(
-        {"assigned_agent_id": aid, "pipeline_stage": {"$in": ["contacted", "kyc_submitted", "verified"]}},
+        {"assigned_agent_id": aid, "pipeline_stage": {"$in": ["contacted", "qualified", "proposal", "negotiation"]}},
         {"_id": 0, "id": 1, "name": 1, "type": 1, "phone": 1, "city": 1, "pipeline_stage": 1, "updated_at": 1, "deal_value": 1, "avatar": 1, "specialization": 1},
     ).sort("updated_at", -1).limit(10).to_list(10)
 
     # Stale leads needing attention
     stale = await db.contacts.find(
-        {"assigned_agent_id": aid, "pipeline_stage": {"$in": ["lead", "contacted"]},
+        {"assigned_agent_id": aid, "pipeline_stage": {"$in": ["new", "contacted"]},
          "$or": [{"updated_at": {"$lt": stale_cutoff}}, {"updated_at": {"$exists": False}}]},
         {"_id": 0, "id": 1, "name": 1, "type": 1, "phone": 1, "city": 1, "pipeline_stage": 1, "updated_at": 1, "specialization": 1},
     ).sort("created_at", 1).limit(10).to_list(10)
@@ -3429,7 +3434,7 @@ async def agent_digest(current=Depends(get_current_user)):
     aid = current["id"]
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     activities = await db.activities.find({"agent_id": aid, "created_at": {"$gte": today_start}}, {"_id": 0}).to_list(200)
-    onboarded = await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": {"$in": ["verified", "active"]}, "updated_at": {"$gte": today_start}})
+    onboarded = await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": "won", "updated_at": {"$gte": today_start}})
     tasks_done = await db.tasks.count_documents({"assigned_to": aid, "status": "done", "updated_at": {"$gte": today_start}})
 
     by_type: Dict[str, int] = {}
@@ -3474,7 +3479,7 @@ async def agent_targets(current=Depends(get_current_user)):
         "calls": await db.activities.count_documents({"agent_id": aid, "subtype": {"$in": ["cold_call", "follow_up"]}, "created_at": {"$gte": month_start}}),
         "meetings": await db.activities.count_documents({"agent_id": aid, "subtype": {"$in": ["pitch_meeting", "site_visit", "demo"]}, "created_at": {"$gte": month_start}}),
         "kyc": await db.activities.count_documents({"agent_id": aid, "subtype": "kyc_collection", "created_at": {"$gte": month_start}}),
-        "onboarded": await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": {"$in": ["verified", "active"]}, "updated_at": {"$gte": month_start}}),
+        "onboarded": await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": "won", "updated_at": {"$gte": month_start}}),
     }
     return {"target": t, "actual": actual, "month_start": month_start}
 
@@ -3494,7 +3499,7 @@ async def agent_leaderboard(current=Depends(get_current_user)):
             "role": a.get("role"),
             "calls": await db.activities.count_documents({"agent_id": aid, "subtype": {"$in": ["cold_call", "follow_up"]}, "created_at": {"$gte": month_start}}),
             "meetings": await db.activities.count_documents({"agent_id": aid, "subtype": {"$in": ["pitch_meeting", "site_visit", "demo"]}, "created_at": {"$gte": month_start}}),
-            "onboarded": await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": {"$in": ["verified", "active"]}, "updated_at": {"$gte": month_start}}),
+            "onboarded": await db.contacts.count_documents({"assigned_agent_id": aid, "pipeline_stage": "won", "updated_at": {"$gte": month_start}}),
             "leads": await db.contacts.count_documents({"assigned_agent_id": aid}),
         })
     rows.sort(key=lambda r: (r["onboarded"], r["meetings"], r["calls"]), reverse=True)
@@ -4065,6 +4070,23 @@ async def seed_demo_accounts(current=Depends(get_current_user)):
     }
 
 
+@api.get("/sales/followups-due")
+async def sales_followups_due(current=Depends(get_current_user)):
+    """Phase E §6 follow-up queue: open leads whose next_followup_at has passed (sales reps see their own)."""
+    if not sb.is_configured():
+        return {"items": []}
+    mine = None if (is_admin_or_manager(current) or current.get("is_master_admin")) else current["id"]
+    return {"items": await sl.followups_due(mine)}
+
+
+@api.post("/admin/sales-leads/backfill")
+async def sales_leads_backfill(current=Depends(get_current_user)):
+    if not (current.get("is_master_admin") or current.get("role") == "admin"):
+        raise HTTPException(status_code=403, detail="Trata Health Admin only")
+    cp._spawn(sl.backfill(db._db.contacts))
+    return {"success": True, "started": True}
+
+
 @api.post("/admin/canonical/backfill")
 async def canonical_backfill(current=Depends(get_current_user)):
     """Phase D one-shot: write every CRM contact's CRM-owned fields onto its canonical provider row."""
@@ -4323,7 +4345,7 @@ async def _do_seed(force: bool = False) -> dict:
     ]
     specializations = ["Cardiology", "Orthopedics", "Pediatrics", "Neurology", "Dermatology",
                        "General Medicine", "Gynecology", "Oncology", "Psychiatry", "Radiology"]
-    pipeline_stages = ["lead", "contacted", "kyc_submitted", "verified", "active", "churned"]
+    pipeline_stages = list(sl.STAGES)
     avatars_doctor = [
         "https://images.unsplash.com/photo-1594824476967-48c8b964273f?w=128&q=80",
         "https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=128&q=80",
@@ -4371,7 +4393,7 @@ async def _do_seed(force: bool = False) -> dict:
             avatar = None
             spec = None
 
-        stage = random.choice(pipeline_stages) if type_ != "patient" else "active"
+        stage = random.choice(pipeline_stages) if type_ != "patient" else "won"
         is_verified = stage in ("verified", "active")
 
         return {
@@ -5099,7 +5121,7 @@ async def _handle_admin_event(body: AdminInboundBody) -> Dict[str, Any]:
     d = body.data or {}
     phone = _normalize_phone(d.get("phone") or d.get("provider_phone"))
     if event in {"provider.signed_up", "provider.first_use"} and phone:
-        stage = "verified" if event == "provider.signed_up" else "active"
+        stage = "won"
         contact = None
         async for c in db.contacts.find({}, {"_id": 0}):
             if _normalize_phone(c.get("phone")) == phone:
@@ -5115,7 +5137,7 @@ async def _handle_admin_event(body: AdminInboundBody) -> Dict[str, Any]:
                 "city": d.get("city"),
                 "state": d.get("state"),
                 "is_verified": True,
-                "is_active": stage == "active",
+                "is_active": event != "provider.signed_up",
                 "pipeline_stage": stage,
                 "deal_value": 0,
                 "assigned_agent_id": agent["id"] if agent else None,
@@ -5142,7 +5164,7 @@ async def _handle_admin_event(body: AdminInboundBody) -> Dict[str, Any]:
         await db.contacts.update_one({"id": contact["id"]}, {"$set": {
             "pipeline_stage": stage,
             "is_verified": True,
-            "is_active": stage == "active",
+            "is_active": event != "provider.signed_up",
             "upstream_id": d.get("upstream_id") or contact.get("upstream_id"),
             "updated_at": now_iso(),
         }})
@@ -5162,8 +5184,8 @@ async def _handle_admin_event(body: AdminInboundBody) -> Dict[str, Any]:
         }})
         # Stage bump if still in early stages
         await db.contacts.update_one(
-            {"id": contact["id"], "pipeline_stage": {"$in": ["lead", "contacted"]}},
-            {"$set": {"pipeline_stage": "kyc_submitted"}},
+            {"id": contact["id"], "pipeline_stage": {"$in": ["new", "contacted", "qualified", "proposal"]}},
+            {"$set": {"pipeline_stage": "negotiation"}},
         )
         return {"action": f"kyc_{kyc_status}", "contact_id": contact["id"], "docs_count": len(docs)}
 

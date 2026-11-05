@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { FollowupsDue } from "../components/FollowupsDue";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
@@ -77,6 +78,7 @@ export default function AgentDashboard() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 pb-24" data-testid="agent-dashboard-page">
+      <FollowupsDue />
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="overline">Sales Agent · {user?.name?.split(" ")[0]}</div>

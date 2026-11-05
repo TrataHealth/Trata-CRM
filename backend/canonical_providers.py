@@ -33,8 +33,9 @@ ADDRESS_RULE_TABLES = {"path_lab_profiles", "diagnostic_centre_profiles"}
 LICENSE_COL = {"path_lab_profiles": "registration_number", "pharmacy_providers": "drug_license_number"}
 RENAME = {"source": "lead_source", "ambulance_count": "total_ambulances"}
 # Fields the CRM owns — synced on every CRM write.
+# Phase E: pipeline_stage now lives on crm_sales_leads (sales_leads.py), not on the canonical row.
 CRM_OWNED = {
-    "pipeline_stage", "kyc_status", "kyc_id", "deal_value", "assigned_agent_id", "assigned_agent_name",
+    "kyc_status", "kyc_id", "deal_value", "assigned_agent_id", "assigned_agent_name",
     "source", "onboarded_by", "pan_number", "gst_number", "aadhaar_last4", "father_name", "dob",
     "kyc_document_number", "kyc_doc_issue_date", "kyc_doc_expiry_date", "kyc_doc_authority",
     "ai_doc_prescreens", "ai_prescreen_summary", "ai_extracted_fields", "agent_doc_reviews", "local_decision",
@@ -363,14 +364,17 @@ class _ContactsProxy:
     async def _after(self, flt: Dict[str, Any], set_keys: Optional[Iterable[str]], many: bool = False, create: bool = False,
                      display: bool = False):
         """Automatic hook carries CRM-owned fields only; shared display fields are written solely by explicit CRM edits."""
-        if set_keys is not None and not display:
-            set_keys = set(set_keys) & CRM_OWNED
-            if not set_keys:
-                return
+        import sales_leads as sl
+        canon_keys = set_keys if set_keys is None or display else set(set_keys) & CRM_OWNED
         try:
             docs = await self._c.find(flt, {"_id": 0}).to_list(1000 if many else 1)
             for d in docs:
-                res = await sync_contact(d, set_keys, create=create, raw_contacts=self._c)
+                if not display:
+                    await sl.sync(d, self._c)
+                if canon_keys is not None and not canon_keys:
+                    continue
+                # Phase E: prospects never get an app account here — sales_leads.sync converts on Won.
+                res = await sync_contact(d, canon_keys, create=False, raw_contacts=self._c)
                 if not res.get("success") and res.get("reason") not in ("no_canonical_table", "not_created", "skipped"):
                     logger.info(f"canonical sync {d.get('id')}: {res}")
         except Exception as e:
@@ -380,26 +384,35 @@ class _ContactsProxy:
     def _keys(update: Dict[str, Any]):
         return set((update or {}).get("$set", {}).keys())
 
+    @staticmethod
+    def _norm(doc: Optional[Dict[str, Any]]):
+        """Every pipeline_stage written by any CRM code path is coerced to the Phase E sales stages."""
+        import sales_leads as sl
+        for part in (doc, (doc or {}).get("$set"), (doc or {}).get("$setOnInsert")):
+            if isinstance(part, dict) and part.get("pipeline_stage"):
+                part["pipeline_stage"] = sl.stage(part["pipeline_stage"])
+        return doc
+
     async def insert_one(self, doc, *a, **kw):
-        r = await self._c.insert_one(doc, *a, **kw)
+        r = await self._c.insert_one(self._norm(doc), *a, **kw)
         if doc.get("id"):
             _spawn(self._after({"id": doc["id"]}, None, create=True))
         return r
 
     async def update_one(self, flt, update, *a, **kw):
-        r = await self._c.update_one(flt, update, *a, **kw)
+        r = await self._c.update_one(flt, self._norm(update), *a, **kw)
         if r.modified_count or r.upserted_id:
             _spawn(self._after(flt, self._keys(update), create=bool(r.upserted_id)))
         return r
 
     async def update_many(self, flt, update, *a, **kw):
-        r = await self._c.update_many(flt, update, *a, **kw)
+        r = await self._c.update_many(flt, self._norm(update), *a, **kw)
         if r.modified_count:
             _spawn(self._after(flt, self._keys(update), many=True))
         return r
 
     async def find_one_and_update(self, flt, update, *a, **kw):
-        r = await self._c.find_one_and_update(flt, update, *a, **kw)
+        r = await self._c.find_one_and_update(flt, self._norm(update), *a, **kw)
         if r:
             _spawn(self._after({"id": r.get("id")} if r.get("id") else flt, self._keys(update), create=bool(kw.get("upsert"))))
         return r
