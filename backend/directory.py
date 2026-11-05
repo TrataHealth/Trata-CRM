@@ -126,7 +126,8 @@ def create_directory_router(get_current_user):
     def role_counts(items):
         from collections import Counter
         c = Counter(i["role"] for i in items)
-        order = [r for r in (*cp.TABLES, *PERSON_PROFILES) if c.get(r)] + sorted((r for r in c if r not in cp.TABLES and r not in PERSON_PROFILES), key=lambda r: -c[r])
+        fixed = ("doctor", "hospital", "pharmacy", "path_lab", "diagnostic_centre", "ambulance_provider", "paramedic", "agent")
+        order = list(fixed) + sorted((r for r in c if r not in fixed), key=lambda r: -c[r])
         return [{"role": r, "count": c[r]} for r in order]
 
     @r.get("/providers")
