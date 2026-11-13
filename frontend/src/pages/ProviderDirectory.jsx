@@ -1,16 +1,20 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Search, Loader2, Building2, UserPlus, Archive, ArrowLeft } from "lucide-react";
+import { Search, Loader2, Building2, UserPlus, Archive, ArrowLeft, Pencil } from "lucide-react";
 import api from "../lib/api";
 import { relativeTime } from "../lib/constants";
 import { BulkBar, BulkActionDialog, SuspendedTag, RowCheck, useSelection } from "../components/users/BulkActions";
 import { DeletedUsers } from "../components/users/DeletedUsers";
+import { EditProviderDialog } from "../components/users/EditProviderDialog";
+
+const EDITABLE = ["hospital_profiles", "path_lab_profiles", "diagnostic_centre_profiles", "pharmacy_providers", "ambulance_providers", "doctors", "paramedic_profiles"];
+const editable = (p) => p.profile_id && EDITABLE.includes(p.profile_table);
 
 const ROLE_LABEL = { path_lab: "Path Lab", ambulance_provider: "Ambulance", hospital: "Hospital", doctor: "Doctor", paramedic: "Paramedic",
-  pharmacy: "Pharmacy", diagnostic_centre: "Diagnostic centre", pharmacist: "Pharmacist", lab_tech: "Lab technician", nurse: "Nurse", receptionist: "Receptionist", agent: "Agent" };
+  pharmacy: "Pharmacy", diagnostic_centre: "Diagnostic centre", pharmacist: "Pharmacist", lab_tech: "Lab technician", nurse: "Nurse", receptionist: "Receptionist", agent: "Agent", nutritionist: "Nutritionist", wellness: "Mental wellness", ambulance_driver: "Ambulance driver", blood_bank: "Blood bank", dental: "Dental clinic", vet: "Veterinarian", wellness_event: "Health camps & retreats", };
 const roleLabel = (r) => ROLE_LABEL[r] || String(r || "").replace(/_/g, " ");
-const ORG_ROLES = ["hospital", "path_lab", "diagnostic_centre", "ambulance_provider", "pharmacy"];
-const PERSON_ROLES = ["doctor", "paramedic", "agent"];
+const ORG_ROLES = ["hospital", "path_lab", "diagnostic_centre", "ambulance_provider", "pharmacy", "blood_bank", "dental", "vet", "wellness_event"];
+const PERSON_ROLES = ["doctor", "paramedic", "agent", "nutritionist", "wellness", "ambulance_driver"];
 const orgHeader = (r) => (PERSON_ROLES.includes(r) ? `${roleLabel(r)} name` : ORG_ROLES.includes(r) ? `${roleLabel(r).split(" /")[0]} name` : "Provider name");
 const KYC_TONE = { verified: "bg-[#E3FCEF] text-[#006644]", approved: "bg-[#E3FCEF] text-[#006644]", rejected: "bg-[#FFEBE6] text-[#BF2600]", pending: "bg-[#FFFAE6] text-[#974F0C]" };
 
@@ -25,11 +29,14 @@ export default function ProviderDirectory() {
   const [s, setS] = useState({ loading: true, items: [], roles: [] });
   const [status, setStatus] = useState("");
   const [action, setAction] = useState(null);
+  const [editing, setEditing] = useState(null);
   const [tick, setTick] = useState(0);
   const total = s.roles.reduce((n, r) => n + r.count, 0);
   const items = s.items.filter((p) => !status || (status === "suspended") === !!p.is_suspended);
-  const pick = useSelection(items.filter((p) => p.id), (p) => p.row_key);
-  const targetIds = [...new Set(items.filter((p) => pick.sel.has(p.row_key)).map((p) => p.id))];
+  const pick = useSelection(items.filter((p) => p.id || editable(p)), (p) => p.row_key);
+  const chosen = items.filter((p) => pick.sel.has(p.row_key));
+  const targetIds = [...new Set(chosen.filter((p) => p.id).map((p) => p.id))];
+  const targetRefs = chosen.filter((p) => !p.id).map((p) => p.row_key);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -75,7 +82,8 @@ export default function ProviderDirectory() {
         </select>
       </div>
       <BulkBar count={pick.selected.length} onAction={setAction} onClear={pick.clear} />
-      <BulkActionDialog action={action} ids={targetIds} field="user_ids" onClose={() => setAction(null)}
+      <EditProviderDialog row={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); setTick((t) => t + 1); }} />
+      <BulkActionDialog action={action} ids={targetIds} refs={targetRefs} field="user_ids" onClose={() => setAction(null)}
                         onDone={() => { setAction(null); pick.clear(); setTick((t) => t + 1); }} />
       <section className="bg-white border border-[#DFE1E6] rounded-md overflow-x-auto">
         {s.loading && !items.length ? <div className="p-6 text-xs text-[#5E6C84] flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…</div>
@@ -84,10 +92,10 @@ export default function ProviderDirectory() {
             <thead className="bg-[#F8F9FA] text-[10px] uppercase tracking-wider text-[#5E6C84]"><tr>
               <th className="pl-4 py-2.5 w-8"><RowCheck checked={pick.all} onChange={pick.toggleAll} testId="provider-select-all" /></th>
               <th className="text-left px-4 py-2.5" data-testid="provider-col-org">{orgHeader(role)}</th>{!PERSON_ROLES.includes(role) && <th className="text-left px-4 py-2.5" data-testid="provider-col-admin">Admin name</th>}{(!role || PERSON_ROLES.includes(role)) && <th className="text-left px-4 py-2.5" data-testid="provider-col-hospital">Associated hospital</th>}<th className="text-left px-4 py-2.5">Type</th><th className="text-left px-4 py-2.5">Phone</th>
-              <th className="text-left px-4 py-2.5">KYC</th><th className="text-left px-4 py-2.5">Documents</th><th className="text-left px-4 py-2.5">Joined</th><th className="text-left px-4 py-2.5">Last login</th></tr></thead>
+              <th className="text-left px-4 py-2.5">KYC</th><th className="text-left px-4 py-2.5">Documents</th><th className="text-left px-4 py-2.5">Joined</th><th className="text-left px-4 py-2.5">Last login</th><th className="px-4 py-2.5 w-10"><span className="sr-only">Edit</span></th></tr></thead>
             <tbody>{items.map((p) => (
               <tr key={p.row_key} onClick={() => p.id && nav(`/admin/onboarding/${p.id}`)} className={`border-t border-[#F4F5F7] hover:bg-[#F8F9FA] ${p.id ? "cursor-pointer" : ""} ${pick.sel.has(p.row_key) ? "bg-[#DEEBFF]/40" : ""}`} data-testid={`provider-row-${p.row_key}`}>
-                <td className="pl-4 py-3">{p.id && <RowCheck checked={pick.sel.has(p.row_key)} onChange={() => pick.toggle(p.row_key)} testId={`provider-select-${p.row_key}`} />}</td>
+                <td className="pl-4 py-3">{(p.id || editable(p)) && <RowCheck checked={pick.sel.has(p.row_key)} onChange={() => pick.toggle(p.row_key)} testId={`provider-select-${p.row_key}`} />}</td>
                 <td className="px-4 py-3">{PERSON_ROLES.includes(p.role) ? <>
                   <div className="font-semibold text-[#091E42]" data-testid={`provider-org-${p.row_key}`}>{p.admin_name || p.org_name || "Name not set"}{p.is_suspended && <SuspendedTag reason={p.suspended_reason} testId={`provider-suspended-${p.row_key}`} />}</div>
                   {PERSON_ROLES.includes(role) && p.email && <div className="text-xs text-[#5E6C84]">{p.email}</div>}</>
@@ -102,6 +110,8 @@ export default function ProviderDirectory() {
                 <td className="px-4 py-3 text-xs text-[#42526E]">{p.docs_total ? `${p.docs_approved}/${p.docs_total} approved${p.docs_rejected ? ` · ${p.docs_rejected} rejected` : ""}` : "None"}</td>
                 <td className="px-4 py-3 text-xs text-[#5E6C84]">{p.created_at ? relativeTime(p.created_at) : "—"}</td>
                 <td className="px-4 py-3 text-xs text-[#5E6C84]">{p.last_login_at ? relativeTime(p.last_login_at) : "Never"}</td>
+                <td className="px-2 py-3">{editable(p) && <button onClick={(e) => { e.stopPropagation(); setEditing(p); }} title="Edit name & phone"
+                  className="p-1.5 rounded hover:bg-[#EBECF0] text-[#42526E]" data-testid={`provider-edit-${p.row_key}`}><Pencil className="h-3.5 w-3.5" /></button>}</td>
               </tr>))}</tbody></table>}
       </section>
       </>}

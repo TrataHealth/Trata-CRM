@@ -41,6 +41,7 @@ class BulkBody(BaseModel):
     action: Literal["suspend", "unsuspend", "archive", "restore"]
     reason: Optional[str] = Field(None, max_length=500)
     app: Literal["provider", "patient"] = "provider"
+    profile_refs: List[str] = Field(default_factory=list, max_length=500)  # "table:profile_id" for profiles with no app login
 
 
 def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, Any]:
@@ -103,6 +104,29 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
                 ids.append(cid)
         return ids
 
+    async def profile_bulk(body: BulkBody, reason: str, current) -> int:
+        """Provider profiles with no app login — act on the profile row itself."""
+        allowed = {t for t, _ in cp.TABLES.values()} | {"paramedic_profiles"}
+        groups: Dict[str, List[str]] = {}
+        for ref in body.profile_refs:
+            tbl, _, pid = ref.partition(":")
+            if tbl not in allowed or not pid:
+                raise HTTPException(status_code=400, detail=f"Unknown profile {ref}")
+            groups.setdefault(tbl, []).append(pid)
+        by = current.get("name") or current.get("phone")
+        fn = {"suspend": lambda c, ids, t: cp.suspend_profiles(c, ids, by, reason, key="id", only=t),
+              "unsuspend": lambda c, ids, t: cp.unsuspend_profiles(c, ids, key="id", only=t),
+              "archive": lambda c, ids, t: cp.deactivate_profiles(c, ids, by, reason, key="id", only=t),
+              "restore": lambda c, ids, t: cp.restore_profiles(c, ids, key="id", only=t)}[body.action]
+        n = 0
+        pool = await sb.get_pool()
+        async with pool.acquire() as conn:
+            for tbl, ids in groups.items():
+                n += await fn(conn, ids, tbl)
+        await db.audit_log.insert_one({"id": os.urandom(8).hex(), "action": f"profiles.{body.action}", "by": current.get("id"), "by_name": by,
+                                       "reason": reason or None, "profile_refs": body.profile_refs, "at": _now()})
+        return n
+
     async def patient_bulk(body: BulkBody, reason: str, current) -> Dict[str, Any]:
         """Patient App scope only: flags live on customer_profiles; the shared login and provider profiles are untouched."""
         me = current.get("supabase_user_id")
@@ -132,10 +156,13 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
         reason = (body.reason or "").strip()
         if body.action in ("suspend", "archive") and len(reason) < 5:
             raise HTTPException(status_code=400, detail="Please give a reason (at least 5 characters)")
-        if not body.contact_ids and not body.user_ids:
+        if not body.contact_ids and not body.user_ids and not body.profile_refs:
             raise HTTPException(status_code=400, detail="Select at least one user")
         if body.app == "patient":
             return await patient_bulk(body, reason, current)
+        refs_done = await profile_bulk(body, reason, current) if body.profile_refs else 0
+        if not body.contact_ids and not body.user_ids:
+            return {"success": True, "action": body.action, "updated": refs_done, "skipped": [], "emails": {}, "purge_after": None}
         contact_ids = list(body.contact_ids) + (await contacts_for_users(body.user_ids) if body.user_ids else [])
         q = {"id": {"$in": contact_ids}}
         if body.action == "restore":

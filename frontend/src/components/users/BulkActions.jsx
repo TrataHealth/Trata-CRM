@@ -15,7 +15,7 @@ const COPY = {
     help: "Their profile comes back in this app with its data." },
 };
 
-export function BulkActionDialog({ action, ids, onClose, onDone, field = "contact_ids", app = "provider" }) {
+export function BulkActionDialog({ action, ids, onClose, onDone, field = "contact_ids", app = "provider", refs = [] }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => setReason(""), [action]);
@@ -24,7 +24,7 @@ export function BulkActionDialog({ action, ids, onClose, onDone, field = "contac
   const submit = async () => {
     setBusy(true);
     try {
-      const { data } = await api.post("/admin/users/bulk", { [field]: ids, action, app, reason: reason.trim() || null });
+      const { data } = await api.post("/admin/users/bulk", { [field]: ids, profile_refs: refs, action, app, reason: reason.trim() || null });
       const sent = Object.values(data.emails || {}).filter((v) => v === "sent").length;
       toast.success(`${c.verb}: ${data.updated} user${data.updated === 1 ? "" : "s"}${sent ? ` · ${sent} emailed` : ""}${data.skipped.length ? ` · skipped: ${data.skipped.map((x) => `${x.name || "user"} (${x.why})`).join(", ")}` : ""}`);
       onDone();
@@ -33,7 +33,7 @@ export function BulkActionDialog({ action, ids, onClose, onDone, field = "contac
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-md" data-testid={`bulk-dialog-${action}`}>
-        <DialogHeader><DialogTitle className="font-heading">{c.title} ({ids.length})</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle className="font-heading">{c.title} ({ids.length + refs.length})</DialogTitle></DialogHeader>
         <p className="text-sm text-[#42526E]">{c.help}</p>
         {c.need && <label className="text-xs font-semibold text-[#42526E] block">Reason {action === "suspend" && "(shown to the user)"}
           <textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} data-testid="bulk-reason"

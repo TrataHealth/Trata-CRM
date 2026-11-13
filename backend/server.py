@@ -6292,6 +6292,10 @@ import doctor_appointments as _doctor_appts  # noqa: E402
 app.include_router(_doctor_appts.create_doctor_router(get_current_user))
 import directory as _directory  # noqa: E402
 app.include_router(_directory.create_directory_router(get_current_user))
+import provider_onboarding as _provider_onboarding  # noqa: E402
+app.include_router(_provider_onboarding.create_provider_onboarding_router(db, get_current_user))
+import provider_edit as _provider_edit  # noqa: E402
+app.include_router(_provider_edit.create_provider_edit_router(db, get_current_user, {normalize_phone(p)[-10:] for p in MASTER_ADMIN_PHONES}))
 import lab_staff as _lab_staff  # noqa: E402
 app.include_router(_lab_staff.create_lab_staff_router(get_current_user))
 

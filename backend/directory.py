@@ -20,6 +20,13 @@ SERVICE_TYPES = ("pathology", "imaging")
 PERSON_PROFILES = {
     "paramedic": ("paramedic_profiles", "coalesce(nullif(p.full_name, ''), p.name)", "coalesce(nullif(p.hospital_name, ''), h.name)", "verification_status"),
     "agent": ("sanjeevani_agents", "p.full_name", "nullif(p.hospital_affiliation::text, '')", "status"),
+    "ambulance_driver": ("ambulance_driver_profiles", "p.full_name", "(SELECT a.business_name FROM public.ambulance_providers a WHERE a.id = p.ambulance_provider_id)", "kyc_status"),
+    "nutritionist": ("nutritionists", "p.full_name", "nullif(p.clinic_name, '')", "verification_status"),
+    "wellness": ("wellness_professionals", "p.full_name", "nullif(p.clinic_name, '')", "verification_status"),
+    "dental": ("dental_clinics", "p.owner_name", "p.clinic_name", "verification_status"),
+    "vet": ("vet_clinics", "p.owner_name", "p.clinic_name", "verification_status"),
+    "blood_bank": ("blood_banks", "p.incharge_name", "p.bank_name", "verification_status"),
+    "wellness_event": ("wellness_event_providers", "p.organiser_name", "p.display_name", "kyc_status"),
 }
 
 
@@ -74,8 +81,9 @@ def create_directory_router(get_current_user):
                                FROM public.{tbl} p LEFT JOIN public.users u ON u.id = p.user_id {join}
                               WHERE p.verification_status {'=' if deleted else 'IS DISTINCT FROM'} 'deactivated'""")
         for role, (tbl, person, org, status) in PERSON_PROFILES.items():
+            email = "coalesce(p.email, u.email)" if "email" in await cp._columns(conn, tbl) else "u.email"
             parts.append(f"""SELECT '{role}'::text, '{tbl}'::text, p.id::text, p.user_id::text, {org}::text, {person}::text,
-                                    coalesce(nullif(p.phone, ''), u.phone)::text, coalesce(p.email, u.email)::text, p.{status}::text,
+                                    coalesce(nullif(p.phone, ''), u.phone)::text, {email}::text, p.{status}::text,
                                     p.created_at::timestamptz, p.updated_at::timestamptz, u.archived_reason::text, NULL::text
                                FROM public.{tbl} p LEFT JOIN public.users u ON u.id = p.user_id
                                {'LEFT JOIN public.hospital_profiles h ON h.id = p.hospital_id' if role == 'paramedic' else ''}
@@ -105,8 +113,6 @@ def create_directory_router(get_current_user):
             i["kyc_status"] = i["kyc_status"] or "pending"
             i["is_suspended"] = bool(i["is_suspended"]) or i["kyc_status"] == "suspended"
             i["phone"] = i["phone"] if re.fullmatch(r"\+?\d{10,13}", i["phone"] or "") else None
-            if i["org_name"] and (i["admin_name"] or "").strip().lower() == i["org_name"].strip().lower():
-                i["admin_name"] = None
             out.append(i)
         return out
 
@@ -127,7 +133,8 @@ def create_directory_router(get_current_user):
     def role_counts(items):
         from collections import Counter
         c = Counter(i["role"] for i in items)
-        fixed = ("doctor", "hospital", "pharmacy", "path_lab", "diagnostic_centre", "ambulance_provider", "paramedic", "agent")
+        fixed = ("doctor", "hospital", "pharmacy", "path_lab", "diagnostic_centre", "ambulance_provider", "paramedic", "agent",
+                 "nutritionist", "wellness", "ambulance_driver", "blood_bank", "dental", "vet", "wellness_event")
         order = list(fixed) + sorted((r for r in c if r not in fixed), key=lambda r: -c[r])
         return [{"role": r, "count": c[r]} for r in order]
 

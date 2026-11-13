@@ -6,7 +6,7 @@ import { BulkBar, BulkActionDialog, RowCheck, useSelection } from "./BulkActions
 
 const ROLE_LABEL = { path_lab: "Path Lab", ambulance_provider: "Ambulance", hospital: "Hospital", doctor: "Doctor", paramedic: "Paramedic",
   pharmacy: "Pharmacy", diagnostic_centre: "Diagnostic centre", pharmacist: "Pharmacist", lab_tech: "Lab technician", nurse: "Nurse",
-  receptionist: "Receptionist", agent: "Agent", patient: "Patient", customer: "Patient" };
+  receptionist: "Receptionist", agent: "Agent", nutritionist: "Nutritionist", wellness: "Mental wellness", ambulance_driver: "Ambulance driver", blood_bank: "Blood bank", dental: "Dental clinic", vet: "Veterinarian", wellness_event: "Health camps & retreats", patient: "Patient", customer: "Patient" };
 const label = (r) => ROLE_LABEL[r] || String(r || "Patient").replace(/_/g, " ");
 const th = "text-left px-4 py-2.5";
 
