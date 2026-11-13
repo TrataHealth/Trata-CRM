@@ -83,17 +83,19 @@ export default function ProviderDirectory() {
           : <table className="w-full text-sm min-w-[920px]">
             <thead className="bg-[#F8F9FA] text-[10px] uppercase tracking-wider text-[#5E6C84]"><tr>
               <th className="pl-4 py-2.5 w-8"><RowCheck checked={pick.all} onChange={pick.toggleAll} testId="provider-select-all" /></th>
-              <th className="text-left px-4 py-2.5" data-testid="provider-col-org">{orgHeader(role)}</th><th className="text-left px-4 py-2.5" data-testid="provider-col-admin">Admin name</th><th className="text-left px-4 py-2.5">Type</th><th className="text-left px-4 py-2.5">Phone</th>
+              <th className="text-left px-4 py-2.5" data-testid="provider-col-org">{orgHeader(role)}</th>{!PERSON_ROLES.includes(role) && <th className="text-left px-4 py-2.5" data-testid="provider-col-admin">Admin name</th>}{(!role || PERSON_ROLES.includes(role)) && <th className="text-left px-4 py-2.5" data-testid="provider-col-hospital">Associated hospital</th>}<th className="text-left px-4 py-2.5">Type</th><th className="text-left px-4 py-2.5">Phone</th>
               <th className="text-left px-4 py-2.5">KYC</th><th className="text-left px-4 py-2.5">Documents</th><th className="text-left px-4 py-2.5">Joined</th><th className="text-left px-4 py-2.5">Last login</th></tr></thead>
             <tbody>{items.map((p) => (
               <tr key={p.row_key} onClick={() => p.id && nav(`/admin/onboarding/${p.id}`)} className={`border-t border-[#F4F5F7] hover:bg-[#F8F9FA] ${p.id ? "cursor-pointer" : ""} ${pick.sel.has(p.row_key) ? "bg-[#DEEBFF]/40" : ""}`} data-testid={`provider-row-${p.row_key}`}>
                 <td className="pl-4 py-3">{p.id && <RowCheck checked={pick.sel.has(p.row_key)} onChange={() => pick.toggle(p.row_key)} testId={`provider-select-${p.row_key}`} />}</td>
                 <td className="px-4 py-3">{PERSON_ROLES.includes(p.role) ? <>
                   <div className="font-semibold text-[#091E42]" data-testid={`provider-org-${p.row_key}`}>{p.admin_name || p.org_name || "Name not set"}{p.is_suspended && <SuspendedTag reason={p.suspended_reason} testId={`provider-suspended-${p.row_key}`} />}</div>
-                  <div className="text-xs text-[#5E6C84]" data-testid={`provider-hospital-${p.row_key}`}>{p.admin_name && p.org_name ? p.org_name : "No organisation linked"}</div></>
+                  {PERSON_ROLES.includes(role) && p.email && <div className="text-xs text-[#5E6C84]">{p.email}</div>}</>
                   : <><div className={p.org_name ? "font-semibold text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-org-${p.row_key}`}>{p.org_name || "Not linked"}{p.is_suspended && <SuspendedTag reason={p.suspended_reason} testId={`provider-suspended-${p.row_key}`} />}</div>
                   {!p.id && <div className="text-[11px] text-[#97A0AF]">No app login yet</div>}</>}</td>
-                <td className="px-4 py-3"><div className={p.admin_name ? "text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-admin-${p.row_key}`}>{PERSON_ROLES.includes(p.role) ? (p.admin_name ? "Self" : "Not set") : p.admin_name || "Not set"}</div>{p.email && <div className="text-xs text-[#5E6C84]">{p.email}</div>}</td>
+                {!PERSON_ROLES.includes(role) && <td className="px-4 py-3"><div className={p.admin_name ? "text-[#091E42]" : "text-[#97A0AF]"} data-testid={`provider-admin-${p.row_key}`}>{PERSON_ROLES.includes(p.role) ? (p.admin_name ? "Self" : "Not set") : p.admin_name || "Not set"}</div>{p.email && <div className="text-xs text-[#5E6C84]">{p.email}</div>}</td>}
+                {(!role || PERSON_ROLES.includes(role)) && <td className="px-4 py-3 text-[#091E42] min-w-[200px]" data-testid={`provider-hospital-${p.row_key}`}>
+                  {!PERSON_ROLES.includes(p.role) ? <span className="text-[#97A0AF]">—</span> : p.admin_name && p.org_name ? p.org_name : <span className="text-[#97A0AF]">Not linked</span>}</td>}
                 <td className="px-4 py-3"><span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-[#F4F5F7] text-[#42526E]">{roleLabel(p.role)}</span></td>
                 <td className="px-4 py-3 font-mono text-xs">{p.phone || "—"}</td>
                 <td className="px-4 py-3"><span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${KYC_TONE[String(p.kyc_status).toLowerCase()] || KYC_TONE.pending}`}>{p.kyc_status}</span></td>
