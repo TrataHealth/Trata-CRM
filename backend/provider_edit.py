@@ -96,6 +96,8 @@ def create_provider_edit_router(db, get_current_user, master_phones) -> APIRoute
                         user_sets.update({"phone": f"+91{ten}" if (u["phone"] or "").startswith("+91") else ten, "phone_key": ten})
                         if u["trata_phone"]:
                             user_sets["trata_phone"] = f"+91{ten}"
+            if aname and uid and "name" not in user_sets:
+                user_sets["name"] = aname  # keep the login's display name in step; the Patient App uses its own profile name
             if not sets and not user_sets:
                 raise HTTPException(status_code=400, detail="Nothing to change")
             async with conn.transaction():
