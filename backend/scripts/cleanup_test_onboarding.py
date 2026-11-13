@@ -6,7 +6,7 @@ load_dotenv('/app/backend/.env')
 T=['hospital_profiles','doctors','paramedic_profiles','ambulance_providers','pharmacy_providers','dental_clinics','nutritionists','wellness_professionals','vet_clinics','blood_banks','ambulance_driver_profiles','wellness_event_providers']
 async def m():
     c=await asyncpg.connect(os.environ['DATABASE_URL'], statement_cache_size=0)
-    uids=[r[0] for r in await c.fetch("select id from users where phone like '90000990%'")]
+    uids=[r[0] for r in await c.fetch("select id from users where phone like '90000990%' or phone like '+9190000990%' or phone_key like '90000990%'")]
     print('users',len(uids))
     for kind,(t,b,fk) in {'d':('diagnostic_centre_profiles','diagnostic_centre_branches','diagnostic_centre_profile_id'),'p':('path_lab_profiles','path_lab_branches','path_lab_profile_id')}.items():
         await c.execute(f"delete from {b} where {fk} in (select id from {t} where user_id = any($1))", uids)

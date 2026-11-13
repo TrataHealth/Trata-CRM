@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import api from "../../lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 
-const PERSON = ["doctor", "paramedic"];
+const PERSON = ["doctor", "paramedic", "nutritionist", "wellness", "ambulance_driver"];
 const input = "mt-1 w-full px-3 py-2 text-sm border border-[#DFE1E6] rounded-md focus:border-[#4C9AFF] outline-none font-normal";
 
 /** Master admin: edit a provider profile's names and phone. */

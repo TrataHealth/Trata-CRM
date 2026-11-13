@@ -187,19 +187,23 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
             staff = [u for u in uids if u not in prof]
             if body.action == "suspend":
                 await cp.suspend_profiles(conn, list(prof), by, reason)
+                await cp.extra_status(conn, list(prof), None, "suspended")
                 await conn.execute("""UPDATE public.users SET is_suspended = TRUE, suspended_at = now(), suspended_reason = $2,
                                       suspended_by = $3, updated_at = now() WHERE id = ANY($1::text[])""", staff, reason, by)
             elif body.action == "unsuspend":
                 await cp.unsuspend_profiles(conn, list(prof))
+                await cp.extra_status(conn, list(prof), "suspended", "pending")
                 await conn.execute("""UPDATE public.users SET is_suspended = FALSE, suspended_at = NULL, suspended_reason = NULL,
                                       suspended_by = NULL, updated_at = now() WHERE id = ANY($1::text[])""", staff)
             elif body.action == "archive":
                 await cp.deactivate_profiles(conn, list(prof), by, reason)
+                await cp.extra_status(conn, list(prof), None, "deactivated")
                 await conn.execute("""UPDATE public.users SET is_archived = TRUE, is_active = FALSE, archived_at = now(),
                                       archived_reason = $2, purge_after = now() + interval '30 days', updated_at = now()
                                       WHERE id = ANY($1::text[])""", staff, f"admin_deleted: {reason}"[:50])
             else:
                 await cp.restore_profiles(conn, uids)
+                await cp.extra_status(conn, uids, "deactivated", "pending")
                 await conn.execute("""UPDATE public.users SET is_archived = FALSE, is_active = TRUE, archived_at = NULL,
                                       archived_reason = NULL, purge_after = NULL, updated_at = now()
                                       WHERE id = ANY($1::text[]) AND coalesce(archived_reason, '') LIKE 'admin_deleted%'""", staff)
@@ -242,10 +246,11 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
         pool = await sb.get_pool()
         erased_profiles = erased_patients = 0
         async with pool.acquire() as conn:
-            for tbl in [t for t, _ in cp.TABLES.values()] + ["paramedic_profiles"]:
+            status_of = {**{t: "verification_status" for t, _ in cp.TABLES.values()}, "paramedic_profiles": "verification_status", **cp.EXTRA_STATUS}
+            for tbl, col in status_of.items():
                 try:
                     async with conn.transaction():
-                        r = await conn.execute(f"DELETE FROM public.{tbl} WHERE user_id = ANY($1::text[]) AND verification_status = 'deactivated'", uids)
+                        r = await conn.execute(f"DELETE FROM public.{tbl} WHERE user_id = ANY($1::text[]) AND {col} = 'deactivated'", uids)
                     erased_profiles += int(r.rsplit(" ", 1)[-1])
                 except Exception as ex:  # noqa: BLE001 — rows referenced by history stay deactivated
                     log.info("erase: kept %s rows (%s)", tbl, type(ex).__name__)

@@ -488,7 +488,7 @@ async def restore_profiles(conn, user_ids, key: str = "user_id", only: Optional[
 
 
 async def users_with_profiles(conn, user_ids) -> set:
-    tbls = [t for t, _ in TABLES.values()] + ["paramedic_profiles"]
+    tbls = [t for t, _ in TABLES.values()] + ["paramedic_profiles", *EXTRA_STATUS]
     sql = " UNION ".join(f"SELECT user_id::text FROM public.{t} WHERE user_id = ANY($1::text[])" for t in tbls)
     return {r[0] for r in await conn.fetch(sql, list(user_ids))}
 
@@ -546,4 +546,21 @@ async def unsuspend_profiles(conn, user_ids, key: str = "user_id", only: Optiona
             break
         except asyncpg.exceptions.CheckViolationError:
             continue
+    return n
+
+
+# Other Provider-App profile tables (no local_decision column): table -> status column
+EXTRA_STATUS = {"dental_clinics": "verification_status", "vet_clinics": "verification_status", "blood_banks": "verification_status",
+                "nutritionists": "verification_status", "wellness_professionals": "verification_status",
+                "ambulance_driver_profiles": "kyc_status", "wellness_event_providers": "kyc_status"}
+
+
+async def extra_status(conn, user_ids, frm: Optional[str], to: str) -> int:
+    """Flip the status of the other Provider-App profiles: frm=None means 'any live status'."""
+    n = 0
+    for tbl, col in EXTRA_STATUS.items():
+        cond = f"{col} = '{frm}'" if frm else f"coalesce({col}, '') NOT IN ('suspended', 'deactivated')"
+        r = await conn.execute(f"UPDATE public.{tbl} SET {col} = $2, updated_at = now() WHERE user_id = ANY($1::text[]) AND {cond}",
+                               list(user_ids), to)
+        n += int(r.rsplit(" ", 1)[-1])
     return n

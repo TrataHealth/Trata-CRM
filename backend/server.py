@@ -1670,6 +1670,10 @@ async def admin_onboarding_provider_kyc(user_id: str, current=Depends(get_curren
         raise HTTPException(status_code=404, detail="Provider not found")
     vertical = SUPABASE_ROLE_TO_PROVIDER_TYPE.get(summary.get("role") or "") or (summary.get("role") or "provider")
     kyc_enabled = (summary.get("role") or "") in SUPABASE_ROLE_TO_PROVIDER_TYPE
+    if not kyc_enabled:  # Provider-App roles onboarded outside the PC console (dental, vet, blood bank…) — detect from their profile
+        extra = await _provider_onboarding.extra_vertical(user_id)
+        if extra:
+            vertical, kyc_enabled = extra, True
     checklist = kyc_checklist_for(vertical) if kyc_enabled else []
     docs = await sb.list_provider_kyc_documents(user_id)
     latest_by_key: Dict[str, Dict[str, Any]] = {}

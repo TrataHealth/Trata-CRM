@@ -7,8 +7,10 @@ import { BulkBar, BulkActionDialog, SuspendedTag, RowCheck, useSelection } from 
 import { DeletedUsers } from "../components/users/DeletedUsers";
 import { EditProviderDialog } from "../components/users/EditProviderDialog";
 
-const EDITABLE = ["hospital_profiles", "path_lab_profiles", "diagnostic_centre_profiles", "pharmacy_providers", "ambulance_providers", "doctors", "paramedic_profiles"];
+const EDITABLE = ["hospital_profiles", "path_lab_profiles", "diagnostic_centre_profiles", "pharmacy_providers", "ambulance_providers", "doctors", "paramedic_profiles",
+  "dental_clinics", "vet_clinics", "blood_banks", "wellness_event_providers", "nutritionists", "wellness_professionals", "ambulance_driver_profiles"];
 const editable = (p) => p.profile_id && EDITABLE.includes(p.profile_table);
+const selectable = (p) => p.id || (p.profile_id && EDITABLE.slice(0, 7).includes(p.profile_table));
 
 const ROLE_LABEL = { path_lab: "Path Lab", ambulance_provider: "Ambulance", hospital: "Hospital", doctor: "Doctor", paramedic: "Paramedic",
   pharmacy: "Pharmacy", diagnostic_centre: "Diagnostic centre", pharmacist: "Pharmacist", lab_tech: "Lab technician", nurse: "Nurse", receptionist: "Receptionist", agent: "Agent", nutritionist: "Nutritionist", wellness: "Mental wellness", ambulance_driver: "Ambulance driver", blood_bank: "Blood bank", dental: "Dental clinic", vet: "Veterinarian", wellness_event: "Health camps & retreats", };
@@ -33,7 +35,7 @@ export default function ProviderDirectory() {
   const [tick, setTick] = useState(0);
   const total = s.roles.reduce((n, r) => n + r.count, 0);
   const items = s.items.filter((p) => !status || (status === "suspended") === !!p.is_suspended);
-  const pick = useSelection(items.filter((p) => p.id || editable(p)), (p) => p.row_key);
+  const pick = useSelection(items.filter(selectable), (p) => p.row_key);
   const chosen = items.filter((p) => pick.sel.has(p.row_key));
   const targetIds = [...new Set(chosen.filter((p) => p.id).map((p) => p.id))];
   const targetRefs = chosen.filter((p) => !p.id).map((p) => p.row_key);
@@ -95,7 +97,7 @@ export default function ProviderDirectory() {
               <th className="text-left px-4 py-2.5">KYC</th><th className="text-left px-4 py-2.5">Documents</th><th className="text-left px-4 py-2.5">Joined</th><th className="text-left px-4 py-2.5">Last login</th><th className="px-4 py-2.5 w-10"><span className="sr-only">Edit</span></th></tr></thead>
             <tbody>{items.map((p) => (
               <tr key={p.row_key} onClick={() => p.id && nav(`/admin/onboarding/${p.id}`)} className={`border-t border-[#F4F5F7] hover:bg-[#F8F9FA] ${p.id ? "cursor-pointer" : ""} ${pick.sel.has(p.row_key) ? "bg-[#DEEBFF]/40" : ""}`} data-testid={`provider-row-${p.row_key}`}>
-                <td className="pl-4 py-3">{(p.id || editable(p)) && <RowCheck checked={pick.sel.has(p.row_key)} onChange={() => pick.toggle(p.row_key)} testId={`provider-select-${p.row_key}`} />}</td>
+                <td className="pl-4 py-3">{selectable(p) && <RowCheck checked={pick.sel.has(p.row_key)} onChange={() => pick.toggle(p.row_key)} testId={`provider-select-${p.row_key}`} />}</td>
                 <td className="px-4 py-3">{PERSON_ROLES.includes(p.role) ? <>
                   <div className="font-semibold text-[#091E42]" data-testid={`provider-org-${p.row_key}`}>{p.admin_name || p.org_name || "Name not set"}{p.is_suspended && <SuspendedTag reason={p.suspended_reason} testId={`provider-suspended-${p.row_key}`} />}</div>
                   {PERSON_ROLES.includes(role) && p.email && <div className="text-xs text-[#5E6C84]">{p.email}</div>}</>

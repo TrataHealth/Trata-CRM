@@ -152,6 +152,20 @@ CONTACT_TYPE = {"hospital_profiles": "hospital", "doctors": "doctor", "ambulance
                 "path_lab_profiles": "path_lab", "diagnostic_centre_profiles": "diagnostic_centre"}
 
 
+EXTRA_TABLE_VERTICAL = {"dental_clinics": "dental", "vet_clinics": "veterinarian", "blood_banks": "blood_bank", "nutritionists": "nutritionist",
+                        "wellness_professionals": "mental_wellness", "ambulance_driver_profiles": "ambulance_driver",
+                        "wellness_event_providers": "wellness_event"}
+
+
+async def extra_vertical(user_id: str) -> Optional[str]:
+    pool = await sb.get_pool()
+    async with pool.acquire() as conn:
+        for t, v in EXTRA_TABLE_VERTICAL.items():
+            if await conn.fetchval(f"SELECT 1 FROM public.{t} WHERE user_id = $1 LIMIT 1", user_id):
+                return v
+    return None
+
+
 class OnboardBody(BaseModel):
     type: str
     phone: str = Field(..., max_length=20)

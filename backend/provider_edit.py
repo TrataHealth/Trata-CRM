@@ -12,7 +12,10 @@ from pydantic import BaseModel, Field
 import canonical_providers as cp
 import supabase_db as sb
 
-PERSON_TABLES = {"doctors", "paramedic_profiles"}
+PERSON_TABLES = {"doctors", "paramedic_profiles", "nutritionists", "wellness_professionals", "ambulance_driver_profiles"}
+# Provider-App tables whose org / admin names live in their own columns: table -> (org column, admin column)
+ORG_COLS = {"dental_clinics": ("clinic_name", "owner_name"), "vet_clinics": ("clinic_name", "owner_name"),
+            "blood_banks": ("bank_name", "incharge_name"), "wellness_event_providers": ("display_name", "organiser_name")}
 
 
 class ProfileEdit(BaseModel):
@@ -33,7 +36,7 @@ def create_provider_edit_router(db, get_current_user, master_phones) -> APIRoute
     async def edit_profile(table: str, profile_id: str, body: ProfileEdit, current=Depends(get_current_user)):
         if not current.get("is_master_admin"):
             raise HTTPException(status_code=403, detail="Trata Health Admin only")
-        if table not in {t for t, _ in cp.TABLES.values()} | PERSON_TABLES:
+        if table not in {t for t, _ in cp.TABLES.values()} | PERSON_TABLES | set(ORG_COLS):
             raise HTTPException(status_code=400, detail="Unknown provider profile")
         pname, aname = (body.provider_name or "").strip(), (body.admin_name or "").strip()
         phone = re.sub(r"[\s-]", "", body.phone or "")
@@ -54,6 +57,11 @@ def create_provider_edit_router(db, get_current_user, master_phones) -> APIRoute
                     sets["full_name"] = aname or pname
                     if "name" in cols:
                         sets["name"] = aname or pname
+            elif table in ORG_COLS:
+                if pname:
+                    sets[ORG_COLS[table][0]] = pname
+                if aname:
+                    sets[ORG_COLS[table][1]] = aname
             else:
                 if pname:
                     sets["business_name" if "business_name" in cols else "name"] = pname
@@ -70,7 +78,8 @@ def create_provider_edit_router(db, get_current_user, master_phones) -> APIRoute
                 ten = _ten(phone)
                 if uid and ten in master_phones:
                     raise HTTPException(status_code=400, detail="That number belongs to the Trata Health Admin")
-                sets["phone"] = ten if uid else phone
+                if "phone" in cols:
+                    sets["phone"] = ten if uid else phone
                 if uid:
                     u = await conn.fetchrow("SELECT phone, phone_key, trata_phone FROM public.users WHERE id = $1", uid)
                     if _ten(u["phone"]) in master_phones:
@@ -83,7 +92,8 @@ def create_provider_edit_router(db, get_current_user, master_phones) -> APIRoute
                         # One login serves both apps — moving it would move the Patient App too, so only the listed phone changes.
                         notes.append("sign_in_unchanged_patient_app")
                     elif _ten(u["phone"]) != ten:
-                        user_sets.update({"phone": f"+91{ten}", "phone_key": ten})
+                        # Keep the stored format — the Provider App matches users.phone exactly (bare 10 digits for its accounts).
+                        user_sets.update({"phone": f"+91{ten}" if (u["phone"] or "").startswith("+91") else ten, "phone_key": ten})
                         if u["trata_phone"]:
                             user_sets["trata_phone"] = f"+91{ten}"
             if not sets and not user_sets:

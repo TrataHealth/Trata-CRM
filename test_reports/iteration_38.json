@@ -1,0 +1,45 @@
+{
+  "summary": "Tested admin onboarding for all 21 Provider-App types (API + UI), the master-admin name/phone edit, no-login profile bulk suspend/unsuspend, the new role tabs, the Ravi Kumar admin-name fix, and the Doctor/Patient regressions. Signup wrote the right row to the right table for all 21 types. Validations work: 400 for a missing required field, a bad pincode or missing lat/lng; 409 for a duplicate profile or a duplicate licence; 403 for non-master users. Edit API and UI work, including 409 phone clash, 400 for the master number, 403 for non-master, and the no-login MedPlus admin-name change (restored to 'Ms. Anita Singh'). Bulk suspend then unsuspend on MedPlus worked via both API and UI, and KYC went back to verified. Found 3 real issues: (1) a phone edit writes users.phone as '+91XXXXXXXXXX', but every Provider-App users row and this signup use a bare 10-digit number, and the Provider App's verify-otp looks up `User.phone == data.phone` with an exact match, so the provider probably can't sign in with the new number; (2) new-role profiles (dental, vet, blood bank, nutritionist, mental wellness, ambulance driver, health camps) have no edit pencil and the PUT returns 400 'Unknown provider profile'; (3) after onboarding a new-role provider, /admin/onboarding/<uid> shows 'no profile table for this role', 0/0 docs, 'Already approved' and a green 'now live' banner, and calls /api/admin/labs/<uid>/staff, which returns 404. All test data (phones 90000990xx) has been deleted.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "PUT /api/admin/directory/profiles/{table}/{profile_id} (phone)", "issue": "Sets users.phone='+91'+ten (and phone_key). Provider-App users rows store a bare 10-digit phone (80 bare vs 17 '+91' rows, and the '+91' ones are CRM admin rows). /admin/onboarding/signup also inserts a bare 10-digit phone. The cloned Provider App (backend/routes/auth.py verify-otp, and the auth_v2 _get_user_by_phone helper) looks up `User.phone == data.phone` with an exact match, and the mobile app sends a 10-digit phone. So after an admin changes the number, the Provider App most likely can't find the user (it may create a new account), which breaks the user's 'sign-in number changes' requirement. Reproduced: test pharmacy edited to 9000099040 -> users.phone='+919000099040'. The directory then also shows '+919000099041', inconsistent with the other rows. Fix: keep the existing format (write a bare 10-digit number when the old phone was a bare 10-digit number), or always write a bare 10-digit number.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "PUT /api/admin/directory/profiles/{dental_clinics|vet_clinics|blood_banks|nutritionists|wellness_professionals|ambulance_driver_profiles|wellness_event_providers}/{id}", "issue": "Returns 400 'Unknown provider profile' because the allowed set is only cp.TABLES plus doctors and paramedic_profiles. The frontend EDITABLE list hides the pencil for these tables too. The user asked for name/phone edits 'wherever applicable', and these roles are now onboardable."},
+      {"endpoint": "Provider details / KYC checklist for new roles (supabase_db profile lookup ~L1430 + server.kyc_checklist_for)", "issue": "Neither _VERTICAL_PROFILE_SPEC nor the fallback table list includes the new tables, so the KYC page for an onboarded dental/vet/etc. user says 'no profile table for this role'. The checklist is also empty, so the page shows 'Already approved' with 0/0 docs and 'this provider is now live'. That is misleading, since the profile is pending and the success toast says 'now upload the KYC docs'."},
+      {"endpoint": "GET /api/admin/labs/{uid}/staff", "issue": "The KYC page calls it for a dental user and gets 404 (twice), which is console noise."},
+      {"endpoint": "POST /api/admin/onboarding/signup (nurse)", "issue": "Nurse goes to doctors with role doctor and nothing marks it as a nurse, so the onboarded nurse shows under the Doctor tab and not the Nurse tab. This matches the Provider App, which also drops the nurse subtype, but admins may find it confusing."},
+      {"endpoint": "scripts/cleanup_test_onboarding.py", "issue": "It only matched users.phone LIKE '90000990%', so a test provider whose phone was edited to '+9190000990xx' was left behind. Fixed by the tester: it now also matches '+9190000990%' and phone_key."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Onboard dental (or other new role) -> /admin/onboarding/<uid>", "issue": "The KYC page shows 'no profile table for this role', an 'Already approved' button, 0/0 docs and the 'Every required document is approved — now live' banner for a brand-new pending provider. It also describes the provider as a 'staff account (dental)'.", "affected_selectors": ["[data-testid=pd-profile]"]},
+      {"flow": "Edit name/phone on new-role tabs", "issue": "No provider-edit-<row_key> pencil on the Dental clinic, Blood bank, Veterinarian, Nutritionist, Mental wellness, Ambulance driver or Health camps tabs.", "affected_selectors": ["[data-testid^=provider-edit-]"]}
+    ],
+    "design_issues": [
+      {"screen": "Trata Providers > Pharmacy", "issues": ["Phone column formats differ after an edit: '+919000099041' next to bare 10-digit numbers"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_admin_provider_onboarding_edit.py", "/app/test_reports/pytest/pytest_onboarding_edit.xml"],
+  "action_items": [
+    "provider_edit.py: when changing users.phone, write a bare 10-digit number (the Provider App format), not '+91'+ten, so Provider-App login keeps working; keep phone_key in sync",
+    "Allow name/phone edit for the new role tables (dental_clinics.owner_name/clinic_name, vet_clinics, blood_banks incharge_name/bank_name, wellness_event_providers organiser_name/display_name, nutritionists/wellness_professionals/ambulance_driver_profiles full_name as person tables) in both the backend allowed set and the frontend EDITABLE",
+    "KYC/details page: add the new role tables to the profile lookup and a KYC checklist for the new verticals; don't show 'Already approved' or the 'now live' banner when the checklist is empty and verification is pending",
+    "Avoid calling /api/admin/labs/{uid}/staff for non-lab roles"
+  ],
+  "critical_code_review_comments": [
+    "provider_onboarding._insert: when the phone already belongs to a users row (e.g. a Patient App user), users.role/user_type is left unchanged, so the Provider App may route that login as a patient. Confirm this is intended.",
+    "provider_onboarding: the new users row doesn't set phone_key, while provider_edit relies on phone_key for clash checks. This is OK because the clash check also uses regexp on phone, but the data is inconsistent.",
+    "Duplicate-licence UniqueViolation returns a 409 with 'pharmacy providers drug license number must be unique'. Good, but the message could name the field in plainer words.",
+    "Backend log contains past tracebacks (UniqueViolation ix_doctors_license_number and a hospital_data read-only error) from another code path, apparently unhandled 500s; worth checking which endpoint raised them."
+  ],
+  "updated_files": ["/app/backend/tests/test_admin_provider_onboarding_edit.py", "/app/backend/scripts/cleanup_test_onboarding.py"],
+  "success_rate": {"backend": "96% (49/51; failing: users.phone format after edit, new-role edit 400)", "frontend": "85% (onboarding form, type switching, doctorType hospital picker, submit -> /admin/onboarding/<uid>, new tabs, Ravi admin name, checkboxes on no-login pharmacy/lab rows, edit dialog save, bulk suspend/unsuspend all pass; new-role KYC page and missing edit pencils fail)"},
+  "seed_data_creation": "None kept. Created 23 test providers on phones 9000099001-9000099022 (renamed to 9000099040/41 during the edit test) and 9000099050 (UI). All were removed by cleanup_test_onboarding.py: 0 users, 0 profiles and 0 crm_users/contacts remain. MedPlus owner_name was restored to 'Ms. Anita Singh' and KYC is back to verified.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Login on the UI needs the 'Trata Staff' role tile first (login-role-selector), then phone/OTP/password. The pytest file onboards all 21 types on 90000990xx; pharmacy needs a unique drug licence. Always run `python scripts/cleanup_test_onboarding.py` afterwards. Doctor tab, excluding test phones, has 5 doctors; patients = 10. Provider App clone is at /tmp/tp; its auth uses an exact users.phone match.",
+  "rca of the issue": "Phone edit: provider_edit.py line ~86 hardcodes user_sets phone=f'+91{ten}', but the Provider App stores and looks up users.phone as the raw 10-digit number. New-role gaps: provider_edit's allowed set and the frontend EDITABLE only list the original 6 tables plus doctors/paramedic, and supabase_db's profile lookup and kyc_checklist_for were not extended to the 7 new role tables."
+}
