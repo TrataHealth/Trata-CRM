@@ -103,6 +103,7 @@ def create_directory_router(get_current_user):
             i["row_key"] = f"{i['profile_table']}:{i['profile_id'] or i['user_id']}"
             i["id"] = i["user_id"]
             i["kyc_status"] = i["kyc_status"] or "pending"
+            i["is_suspended"] = bool(i["is_suspended"]) or i["kyc_status"] == "suspended"
             i["phone"] = i["phone"] if re.fullmatch(r"\+?\d{10,13}", i["phone"] or "") else None
             if i["org_name"] and (i["admin_name"] or "").strip().lower() == i["org_name"].strip().lower():
                 i["admin_name"] = None
@@ -151,14 +152,11 @@ def create_directory_router(get_current_user):
             if app == "provider":
                 items = [i for i in await profile_rows(conn, True) if matches(i, q, None)]
             else:
-                rows = await conn.fetch(f"""SELECT u.id, u.name, u.phone, u.email, u.role, u.created_at, u.archived_at, u.archived_reason, u.purge_after,
-                                                   d.status AS deletion_status, d.requested_at, d.scheduled_at
-                                              FROM public.users u
-                                              LEFT JOIN LATERAL (SELECT status, requested_at, scheduled_at FROM public.account_deletions a
-                                                                  WHERE a.user_id = u.id ORDER BY requested_at DESC LIMIT 1) d ON TRUE
-                                             WHERE {sb._PATIENT_ROLE_SQL.format(a="u.")}
-                                               AND (coalesce(u.is_archived, FALSE) OR d.status IN ('pending', 'completed'))
-                                             ORDER BY coalesce(u.archived_at, d.requested_at) DESC NULLS LAST""")
+                rows = await conn.fetch("""SELECT coalesce(cp.user_id, cp.id::text) AS id, coalesce(nullif(cp.basic_info->>'fullName', ''), u.name) AS name,
+                                                  coalesce(cp.phone, u.phone) AS phone, u.email, 'patient' AS role, cp.created_at,
+                                                  cp.archived_at, cp.archived_reason, cp.purge_after
+                                             FROM public.customer_profiles cp LEFT JOIN public.users u ON u.id = cp.user_id
+                                            WHERE coalesce(cp.is_archived, FALSE) ORDER BY cp.archived_at DESC NULLS LAST""")
                 items = [{**{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in dict(x).items()}, "row_key": x["id"]}
                          for x in rows]
                 items = [i for i in items if not q or q.strip().lower() in f"{i['name'] or ''} {i['phone'] or ''} {i['email'] or ''}".lower()]

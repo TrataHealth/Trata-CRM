@@ -477,3 +477,40 @@ async def restore_profiles(conn, user_ids) -> int:
     r = await conn.execute("""UPDATE public.paramedic_profiles SET verification_status = 'pending', updated_at = now()
                                WHERE user_id = ANY($1::text[]) AND verification_status = 'deactivated'""", list(user_ids))
     return n + int(r.rsplit(" ", 1)[-1])
+
+
+async def users_with_profiles(conn, user_ids) -> set:
+    tbls = [t for t, _ in TABLES.values()] + ["paramedic_profiles"]
+    sql = " UNION ".join(f"SELECT user_id::text FROM public.{t} WHERE user_id = ANY($1::text[])" for t in tbls)
+    return {r[0] for r in await conn.fetch(sql, list(user_ids))}
+
+
+async def suspend_profiles(conn, user_ids, by: Optional[str], reason: Optional[str]) -> int:
+    """Provider App suspension = profile verification_status 'suspended' (prior status kept in local_decision)."""
+    n = 0
+    meta = json.dumps({"suspended_by": by, "suspended_reason": reason, "suspended_at": datetime.now(timezone.utc).isoformat()})
+    for tbl, _ in TABLES.values():
+        r = await conn.execute(f"""UPDATE public.{tbl} SET local_decision = coalesce(local_decision, '{{}}'::jsonb) || $2::jsonb
+                                     || jsonb_build_object('pre_suspend_status', verification_status),
+                                     verification_status = 'suspended', updated_at = now()
+                                    WHERE user_id = ANY($1::text[]) AND verification_status NOT IN ('suspended', 'deactivated')""",
+                               list(user_ids), meta)
+        n += int(r.rsplit(" ", 1)[-1])
+    return n
+
+
+async def unsuspend_profiles(conn, user_ids) -> int:
+    n = 0
+    for tbl, _ in TABLES.values():
+        prev = "coalesce(nullif(local_decision->>'pre_suspend_status', ''), 'pending_review')"
+        for status in (prev, "'pending_review'"):
+            try:
+                async with conn.transaction():
+                    r = await conn.execute(f"""UPDATE public.{tbl} SET verification_status = {status}, updated_at = now(),
+                                                 local_decision = coalesce(local_decision, '{{}}'::jsonb) - 'pre_suspend_status' - 'suspended_by' - 'suspended_reason' - 'suspended_at'
+                                                WHERE user_id = ANY($1::text[]) AND verification_status = 'suspended'""", list(user_ids))
+                n += int(r.rsplit(" ", 1)[-1])
+                break
+            except asyncpg.exceptions.CheckViolationError:
+                continue
+    return n

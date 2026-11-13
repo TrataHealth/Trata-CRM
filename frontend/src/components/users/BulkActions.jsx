@@ -6,16 +6,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 
 const COPY = {
   suspend: { title: "Suspend users", verb: "Suspend", need: true, tone: "bg-[#DE350B] hover:bg-[#BF2600]",
-    help: "They see a suspension notice in the Admin Console, Provider app and TrataX and can't use anything until you restore access. They're emailed with this reason." },
+    help: "They're suspended only in the app you're in (Provider or Patient). Their other Trata app keeps working. Providers are emailed with this reason." },
   unsuspend: { title: "Restore access", verb: "Restore access", need: false, tone: "bg-[#00875A] hover:bg-[#006644]",
-    help: "The suspension is lifted everywhere and they're emailed that their account is active again." },
+    help: "The suspension is lifted in this app." },
   archive: { title: "Delete users", verb: "Delete", need: true, tone: "bg-[#DE350B] hover:bg-[#BF2600]",
-    help: "They disappear from every Trata app (all profiles on the account, as in the Provider App) and can't sign in. You can restore them from 'Deleted users' for 30 days — after that they're erased permanently." },
+    help: "They're removed only from the app you're in (every provider profile on the account, or their patient profile) — their login and their other app stay untouched. Restore from 'Deleted users' within 30 days; after that this app's profile is erased permanently." },
   restore: { title: "Restore deleted users", verb: "Restore", need: false, tone: "bg-[#0052CC] hover:bg-[#0747A6]",
-    help: "They come back to every Trata app with their data." },
+    help: "Their profile comes back in this app with its data." },
 };
 
-export function BulkActionDialog({ action, ids, onClose, onDone, field = "contact_ids" }) {
+export function BulkActionDialog({ action, ids, onClose, onDone, field = "contact_ids", app = "provider" }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => setReason(""), [action]);
@@ -24,7 +24,7 @@ export function BulkActionDialog({ action, ids, onClose, onDone, field = "contac
   const submit = async () => {
     setBusy(true);
     try {
-      const { data } = await api.post("/admin/users/bulk", { [field]: ids, action, reason: reason.trim() || null });
+      const { data } = await api.post("/admin/users/bulk", { [field]: ids, action, app, reason: reason.trim() || null });
       const sent = Object.values(data.emails || {}).filter((v) => v === "sent").length;
       toast.success(`${c.verb}: ${data.updated} user${data.updated === 1 ? "" : "s"}${sent ? ` · ${sent} emailed` : ""}${data.skipped.length ? ` · skipped: ${data.skipped.map((x) => `${x.name || "user"} (${x.why})`).join(", ")}` : ""}`);
       onDone();

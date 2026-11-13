@@ -26,7 +26,7 @@ export function DeletedUsers({ app }) {
     return () => clearTimeout(t);
   }, [app, q, tick]);
   const items = s.items.filter((i) => !role || i.role === role);
-  const restorable = (i) => (app === "provider" ? !!i.user_id : /^admin_deleted/.test(i.archived_reason || ""));
+  const restorable = (i) => (app === "provider" ? !!i.user_id : true);
   const pick = useSelection(items.filter(restorable), (i) => i.row_key);
   const ids = [...new Set(items.filter((i) => pick.sel.has(i.row_key)).map((i) => i.user_id || i.id))];
   const provider = app === "provider";
@@ -42,7 +42,7 @@ export function DeletedUsers({ app }) {
         </select>}
       </div>
       <BulkBar count={pick.selected.length} archivedView onAction={setAction} onClear={pick.clear} />
-      <BulkActionDialog action={action} ids={ids} field="user_ids" onClose={() => setAction(null)}
+      <BulkActionDialog action={action} ids={ids} field="user_ids" app={app} onClose={() => setAction(null)}
                         onDone={() => { setAction(null); pick.clear(); setTick((t) => t + 1); }} />
       <section className="bg-white border border-[#DFE1E6] rounded-md overflow-x-auto">
         {s.loading && !items.length ? <div className="p-6 text-xs text-[#5E6C84] flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…</div>

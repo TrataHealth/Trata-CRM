@@ -1449,33 +1449,33 @@ async def fetch_provider_full_details(user_id: str, vertical: str, phone: Option
 
 # ── Patients (shared with mobile Provider App · Iter 38) ────────────────────
 async def list_all_patients_admin(q: Optional[str], limit: int = 200) -> List[Dict[str, Any]]:
-    """Master-admin roster: every user with role='patient', with a rollup of
-    total emergency cases + appointments + admissions so the roster can show
-    activity counts alongside identity."""
-    where = [_PATIENT_ROLE_SQL.format(a="u."), "coalesce(u.is_archived, FALSE) = FALSE"]
+    """Master-admin roster — one row per Patient App profile (customer_profiles), exactly what the Patient App admin lists."""
+    where = ["NOT coalesce(cp.is_archived, FALSE)"]
     args: List[Any] = []
     if q and q.strip():
         args.append(f"%{q.strip().lower()}%")
-        where.append(f"(lower(coalesce(u.name,'')) LIKE ${len(args)} OR u.phone LIKE ${len(args)})")
+        where.append(f"(lower(coalesce(cp.basic_info->>'fullName', u.name, '')) LIKE ${len(args)} OR coalesce(cp.phone, u.phone) LIKE ${len(args)})")
     args.append(limit)
     pool = await get_pool()
     async with pool.acquire() as conn:
         rs = await conn.fetch(f"""
-            SELECT u.id, u.name, u.phone, u.email, u.dob, u.patient_id, u.is_active,
-                   coalesce(u.is_suspended, FALSE) AS is_suspended, u.suspended_reason,
-                   u.verification_status, u.created_at, u.last_login_at,
-                   (SELECT count(*) FROM public.emergency_cases c WHERE c.patient_id = u.id OR c.customer_id = u.id) AS cases,
-                   (SELECT count(*) FROM public.consultation_bookings a WHERE a.patient_id = u.id)                 AS appts,
-                   (SELECT count(*) FROM public.pathology_bookings pb WHERE pb.patient_id = u.id)             AS lab_tests,
-                   (SELECT count(*) FROM public.patient_admissions ad WHERE ad.patient_id = u.id)                  AS admits
-              FROM public.users u
+            SELECT coalesce(cp.user_id, cp.id::text) AS id, cp.id::text AS profile_id,
+                   coalesce(nullif(cp.basic_info->>'fullName', ''), u.name) AS name, coalesce(cp.phone, u.phone) AS phone,
+                   u.email, cp.basic_info->>'dateOfBirth' AS dob, cp.basic_info->>'city' AS city, cp.basic_info->>'state' AS state,
+                   coalesce(cp.patient_id, u.patient_id) AS patient_id, u.is_active,
+                   coalesce(cp.is_suspended, FALSE) AS is_suspended, cp.suspended_reason,
+                   cp.created_at, u.last_login_at,
+                   (SELECT count(*) FROM public.emergency_cases c WHERE c.patient_id = cp.user_id OR c.customer_id = cp.user_id) AS cases,
+                   (SELECT count(*) FROM public.consultation_bookings a WHERE a.patient_id = cp.user_id)                 AS appts,
+                   (SELECT count(*) FROM public.pathology_bookings pb WHERE pb.patient_id = cp.user_id)             AS lab_tests,
+                   (SELECT count(*) FROM public.patient_admissions ad WHERE ad.patient_id = cp.user_id)                  AS admits
+              FROM public.customer_profiles cp
+              LEFT JOIN public.users u ON u.id = cp.user_id
              WHERE {' AND '.join(where)}
-             ORDER BY u.created_at DESC NULLS LAST
+             ORDER BY cp.created_at DESC NULLS LAST
              LIMIT ${len(args)}
         """, *args)
-    return [r for r in _rows(rs)
-            if not (r.get("name") and (_TEST_RX.search(r["name"]) or r["name"] in _TEST_EXACT))
-            and not str(r.get("id", "")).upper().startswith("TEST")]
+    return _rows(rs)
 
 
 async def list_hospital_patients_for_provider(hospital_user_id: str, q: Optional[str],

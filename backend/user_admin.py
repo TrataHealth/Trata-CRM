@@ -40,6 +40,7 @@ class BulkBody(BaseModel):
     user_ids: List[str] = Field(default_factory=list, max_length=500)
     action: Literal["suspend", "unsuspend", "archive", "restore"]
     reason: Optional[str] = Field(None, max_length=500)
+    app: Literal["provider", "patient"] = "provider"
 
 
 def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, Any]:
@@ -102,6 +103,27 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
                 ids.append(cid)
         return ids
 
+    async def patient_bulk(body: BulkBody, reason: str, current) -> Dict[str, Any]:
+        """Patient App scope only: flags live on customer_profiles; the shared login and provider profiles are untouched."""
+        me = current.get("supabase_user_id")
+        uids = [u for u in body.user_ids if u and u != me]
+        by = current.get("name") or current.get("phone")
+        sql = {"suspend": "is_suspended = TRUE, suspended_at = now(), suspended_reason = $2, suspended_by = $3",
+               "unsuspend": "is_suspended = FALSE, suspended_at = NULL, suspended_reason = NULL, suspended_by = NULL",
+               "archive": "is_archived = TRUE, archived_at = now(), archived_reason = $2, purge_after = now() + interval '30 days'",
+               "restore": "is_archived = FALSE, archived_at = NULL, archived_reason = NULL, purge_after = NULL"}[body.action]
+        args = [uids] + ([reason, by] if body.action == "suspend" else [f"admin_deleted: {reason}"] if body.action == "archive" else [])
+        args.append(list(master_phones))
+        pool = await sb.get_pool()
+        async with pool.acquire() as conn:
+            res = await conn.execute(f"""UPDATE public.customer_profiles SET {sql}, updated_at = now()
+                                          WHERE (user_id = ANY($1::text[]) OR id::text = ANY($1::text[]))
+                                            AND NOT (right(coalesce(phone, ''), 10) = ANY(${len(args)}::text[]))""", *args)
+        await db.audit_log.insert_one({"id": os.urandom(8).hex(), "action": f"patients.{body.action}", "by": current.get("id"), "by_name": by,
+                                       "reason": reason or None, "supabase_user_ids": uids, "at": _now()})
+        purge_at = (datetime.now(timezone.utc) + timedelta(days=ARCHIVE_DAYS)).isoformat() if body.action == "archive" else None
+        return {"success": True, "action": body.action, "updated": int(res.rsplit(" ", 1)[-1]), "skipped": [], "emails": {}, "purge_after": purge_at}
+
     @r.post("/admin/users/bulk")
     async def bulk(body: BulkBody, request: Request, current=Depends(get_current_user)):
         require_master(current)
@@ -110,6 +132,8 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
             raise HTTPException(status_code=400, detail="Please give a reason (at least 5 characters)")
         if not body.contact_ids and not body.user_ids:
             raise HTTPException(status_code=400, detail="Select at least one user")
+        if body.app == "patient":
+            return await patient_bulk(body, reason, current)
         contact_ids = list(body.contact_ids) + (await contacts_for_users(body.user_ids) if body.user_ids else [])
         q = {"id": {"$in": contact_ids}}
         if body.action == "restore":
@@ -129,22 +153,27 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
         by = current.get("name") or current.get("phone")
         pool = await sb.get_pool()
         async with pool.acquire() as conn:
+            # Provider App scope only: act on provider profiles; staff-only logins (no profile) fall back to the users row.
+            prof = await cp.users_with_profiles(conn, uids)
+            staff = [u for u in uids if u not in prof]
             if body.action == "suspend":
+                await cp.suspend_profiles(conn, list(prof), by, reason)
                 await conn.execute("""UPDATE public.users SET is_suspended = TRUE, suspended_at = now(), suspended_reason = $2,
-                                      suspended_by = $3, updated_at = now() WHERE id = ANY($1::text[])""", uids, reason, by)
+                                      suspended_by = $3, updated_at = now() WHERE id = ANY($1::text[])""", staff, reason, by)
             elif body.action == "unsuspend":
+                await cp.unsuspend_profiles(conn, uids)
                 await conn.execute("""UPDATE public.users SET is_suspended = FALSE, suspended_at = NULL, suspended_reason = NULL,
                                       suspended_by = NULL, updated_at = now() WHERE id = ANY($1::text[])""", uids)
             elif body.action == "archive":
+                await cp.deactivate_profiles(conn, list(prof), by, reason)
                 await conn.execute("""UPDATE public.users SET is_archived = TRUE, is_active = FALSE, archived_at = now(),
                                       archived_reason = $2, purge_after = now() + interval '30 days', updated_at = now()
-                                      WHERE id = ANY($1::text[])""", uids, f"admin_deleted: {reason}"[:50])
-                await cp.deactivate_profiles(conn, uids, by, reason)
+                                      WHERE id = ANY($1::text[])""", staff, f"admin_deleted: {reason}"[:50])
             else:
+                await cp.restore_profiles(conn, uids)
                 await conn.execute("""UPDATE public.users SET is_archived = FALSE, is_active = TRUE, archived_at = NULL,
                                       archived_reason = NULL, purge_after = NULL, updated_at = now()
-                                      WHERE id = ANY($1::text[]) AND coalesce(archived_reason, '') LIKE 'admin_deleted%'""", uids)
-                await cp.restore_profiles(conn, uids)
+                                      WHERE id = ANY($1::text[]) AND coalesce(archived_reason, '') LIKE 'admin_deleted%'""", staff)
         purge_at = (datetime.now(timezone.utc) + timedelta(days=ARCHIVE_DAYS)).isoformat()
         susp = {"suspended": True, "suspended_at": _now(), "suspended_reason": reason, "suspended_by": by}
         unsusp = {"suspended": False, "suspended_at": None, "suspended_reason": None, "suspended_by": None}
@@ -178,42 +207,34 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
         return {"items": rows, "total": len(rows)}
 
     async def erase_due() -> Dict[str, int]:
+        """Past the 30-day window, erase only the profile of the app it was deleted from — never the shared login."""
         due = await db.contacts.find({"archived": True, "purge_after": {"$lt": _now()}}, {"_id": 0}).to_list(500)
-        if not due:
-            return {"erased": 0}
         uids = list({u for c in due for u in (c.get("supabase_user_id"), c.get("upstream_user_id")) if u})
         pool = await sb.get_pool()
-        hard = soft = 0
+        erased_profiles = erased_patients = 0
         async with pool.acquire() as conn:
-            ready = {x["id"] for x in await conn.fetch("""SELECT id FROM public.users WHERE id = ANY($1::text[]) AND is_archived
-                                                        AND coalesce(archived_reason,'') LIKE 'admin_deleted%' AND purge_after < now()""", uids)}
-            for tbl, col in (("kyc_documents", "user_id"), ("hospital_staff", "user_id"), ("hospital_profiles", "user_id"),
-                             ("ambulance_providers", "user_id"), ("doctors", "user_id"),
-                             ("path_lab_profiles", "user_id"), ("diagnostic_centre_profiles", "user_id")):
+            for tbl in [t for t, _ in cp.TABLES.values()] + ["paramedic_profiles"]:
                 try:
                     async with conn.transaction():
-                        await conn.execute(f"DELETE FROM public.{tbl} WHERE {col} = ANY($1::text[])", list(ready))
-                except Exception as ex:  # noqa: BLE001 — profile rows referenced by history stay; user row is anonymised below
+                        r = await conn.execute(f"DELETE FROM public.{tbl} WHERE user_id = ANY($1::text[]) AND verification_status = 'deactivated'", uids)
+                    erased_profiles += int(r.rsplit(" ", 1)[-1])
+                except Exception as ex:  # noqa: BLE001 — rows referenced by history stay deactivated
                     log.info("erase: kept %s rows (%s)", tbl, type(ex).__name__)
-            for uid in ready:
+            for x in await conn.fetch("""SELECT id FROM public.customer_profiles WHERE coalesce(is_archived, FALSE)
+                                           AND coalesce(archived_reason, '') LIKE 'admin_deleted%' AND purge_after < now()"""):
                 try:
                     async with conn.transaction():
-                        await conn.execute("DELETE FROM public.users WHERE id = $1", uid)
-                    hard += 1
-                except Exception:  # noqa: BLE001 — FK history (bills, cases) → anonymise instead
-                    await conn.execute("""UPDATE public.users SET name = 'Deleted user', email = NULL, recovery_email = NULL,
-                        password_hash = NULL, pin_hash = NULL, security_questions = NULL, dob = NULL, organization_name = NULL,
-                        phone = left('del-' || id, 20), phone_key = NULL, trata_phone = NULL, archived_reason = 'erased',
-                        purge_after = NULL, updated_at = now() WHERE id = $1""", uid)
-                    soft += 1
-        ids = [c["id"] for c in due if not (c.get("supabase_user_id") or c.get("upstream_user_id"))
-               or (c.get("supabase_user_id") or c.get("upstream_user_id")) in ready]
-        phones = [c["phone"] for c in due if c["id"] in ids and c.get("phone")]
+                        await conn.execute("DELETE FROM public.customer_profiles WHERE id = $1", x["id"])
+                except Exception:  # noqa: BLE001 — FK history → anonymise the patient profile instead
+                    await conn.execute("""UPDATE public.customer_profiles SET basic_info = '{"fullName": "Deleted user"}'::jsonb,
+                        medical_info = '{}'::jsonb, archived_reason = 'erased', purge_after = NULL, updated_at = now()
+                        WHERE id = $1""", x["id"])
+                erased_patients += 1
+        ids = [c["id"] for c in due]
         await db.contacts.delete_many({"id": {"$in": ids}})
-        await db.crm_users.delete_many({"$or": [{"provider_id": {"$in": ids}}, {"phone": {"$in": phones}}], "is_master_admin": {"$ne": True}})
         await db.activities.delete_many({"contact_id": {"$in": ids}})
         await db.audit_log.insert_one({"id": os.urandom(8).hex(), "action": "users.erase", "by": "cron", "contact_ids": ids, "at": _now()})
-        return {"erased": len(ids), "deleted_rows": hard, "anonymised_rows": soft}
+        return {"erased": len(ids), "deleted_profiles": erased_profiles, "erased_patients": erased_patients}
 
     @r.post("/admin/cron/erase-archived")
     async def cron_erase(request: Request):
