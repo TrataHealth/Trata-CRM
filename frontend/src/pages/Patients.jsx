@@ -143,7 +143,7 @@ export default function Patients({ mode = "admin" }) {
               <thead className="bg-[#F8F9FA] text-[#5E6C84] uppercase text-[10px]">
                 <tr>
                   {!isProviderView && <th className="pl-3 py-2 w-8"><RowCheck checked={pick.all} onChange={pick.toggleAll} testId="patients-select-all" /></th>}
-                  <th className="px-3 py-2 text-left">Patient</th>
+                  <th className="px-3 py-2 text-left min-w-[260px]">Patient</th>
                   <th className="px-3 py-2 text-left">Phone</th>
                   {isProviderView ? (
                     <>

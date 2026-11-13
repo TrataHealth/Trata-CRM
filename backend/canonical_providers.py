@@ -489,12 +489,22 @@ async def suspend_profiles(conn, user_ids, by: Optional[str], reason: Optional[s
     """Provider App suspension = profile verification_status 'suspended' (prior status kept in local_decision)."""
     n = 0
     meta = json.dumps({"suspended_by": by, "suspended_reason": reason, "suspended_at": datetime.now(timezone.utc).isoformat()})
-    for tbl, _ in TABLES.values():
-        r = await conn.execute(f"""UPDATE public.{tbl} SET local_decision = coalesce(local_decision, '{{}}'::jsonb) || $2::jsonb
-                                     || jsonb_build_object('pre_suspend_status', verification_status),
-                                     verification_status = 'suspended', updated_at = now()
+    async with conn.transaction():
+        for tbl, _ in TABLES.values():
+            # Some Provider App tables CHECK that a suspended row carries suspension_reason.
+            has_reason = "suspension_reason" in await _columns(conn, tbl)
+            r = await conn.execute(f"""UPDATE public.{tbl} SET local_decision = coalesce(local_decision, '{{}}'::jsonb) || $2::jsonb
+                                         || jsonb_build_object('pre_suspend_status', verification_status),
+                                         {"suspension_reason = $3," if has_reason else ""}
+                                         verification_status = 'suspended', updated_at = now()
+                                        WHERE user_id = ANY($1::text[]) AND verification_status NOT IN ('suspended', 'deactivated')""",
+                                   list(user_ids), meta, *([reason or "Suspended by Trata Health Admin"] if has_reason else []))
+            n += int(r.rsplit(" ", 1)[-1])
+        has_reason = "suspension_reason" in await _columns(conn, "paramedic_profiles")
+        r = await conn.execute(f"""UPDATE public.paramedic_profiles SET verification_status = 'suspended', updated_at = now()
+                                     {", suspension_reason = $2" if has_reason else ""}
                                     WHERE user_id = ANY($1::text[]) AND verification_status NOT IN ('suspended', 'deactivated')""",
-                               list(user_ids), meta)
+                               list(user_ids), *([reason or "Suspended by Trata Health Admin"] if has_reason else []))
         n += int(r.rsplit(" ", 1)[-1])
     return n
 
@@ -506,11 +516,22 @@ async def unsuspend_profiles(conn, user_ids) -> int:
         for status in (prev, "'pending_review'"):
             try:
                 async with conn.transaction():
-                    r = await conn.execute(f"""UPDATE public.{tbl} SET verification_status = {status}, updated_at = now(),
+                    clr = "suspension_reason = NULL," if "suspension_reason" in await _columns(conn, tbl) else ""
+                    r = await conn.execute(f"""UPDATE public.{tbl} SET verification_status = {status}, updated_at = now(), {clr}
                                                  local_decision = coalesce(local_decision, '{{}}'::jsonb) - 'pre_suspend_status' - 'suspended_by' - 'suspended_reason' - 'suspended_at'
                                                 WHERE user_id = ANY($1::text[]) AND verification_status = 'suspended'""", list(user_ids))
                 n += int(r.rsplit(" ", 1)[-1])
                 break
             except asyncpg.exceptions.CheckViolationError:
                 continue
+    clr = ", suspension_reason = NULL" if "suspension_reason" in await _columns(conn, "paramedic_profiles") else ""
+    for status in ("pending", "pending_review"):
+        try:
+            async with conn.transaction():
+                r = await conn.execute(f"""UPDATE public.paramedic_profiles SET verification_status = '{status}', updated_at = now() {clr}
+                                            WHERE user_id = ANY($1::text[]) AND verification_status = 'suspended'""", list(user_ids))
+            n += int(r.rsplit(" ", 1)[-1])
+            break
+        except asyncpg.exceptions.CheckViolationError:
+            continue
     return n

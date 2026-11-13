@@ -1,0 +1,42 @@
+{
+  "summary": "Tested the Patient App / Provider App separation against the live shared Supabase. New file test_patient_app_parity.py: 13 of 13 pass after one fix by the testing agent. Before the fix, provider suspend returned 500. Results: /api/admin/patients returns exactly the 10 Patient App users with correct names and phones, and Manish's id is 54acfc31. Patient suspend/unsuspend on Test Patient Lko works, and the users row and provider rows are unchanged. Patient archive/restore on Test City Capture works: the row leaves the list, shows in deleted?app=patient with days_left 29-30 and reason 'admin_deleted: parity test', and comes back as Lucknow. The provider list and the provider deleted count did not change. The master admin is skipped (updated 0). Overlap test on Manish: provider suspend sets his diagnostic_centre and path_lab profiles to 'suspended', while he stays not suspended as a patient and his users row is unchanged (checked in the DB mid-test). Provider unsuspend brings back 'pending' and 'pending_review'. Patient suspend does not touch his provider rows. Provider archive/restore on Xenon (9999900003) works, and users.is_archived stays false. A users/customer_profiles/DC snapshot taken before and after the whole run is identical. UI checked: the 10 rows show and no row says 'Name not added yet'. Select, suspend dialog (app-scoped wording, confirm disabled until a reason is typed), SUSPENDED tag, unsuspend, patients-deleted-toggle (0 deleted patients) and back, and provider-directory-deleted-toggle (159 rows, with type filter) all work. Regression: the Doctor tab still has 5. test_directory_parity role counts fail because the data has drifted (see context).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/admin/users/bulk {action:'suspend', app:'provider'}", "issue": "Returned 500 (CheckViolationError path_lab_profiles_check) for any user with a path_lab or diagnostic_centre profile. The DB requires suspension_reason to be set when verification_status='suspended', and suspend_profiles never set it. FIXED by the testing agent in canonical_providers.py: it now sets suspension_reason when the column exists, clears it on unsuspend, and runs suspend in one transaction.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/admin/users/bulk suspend app:'provider' (paramedic)", "issue": "suspend_profiles only updates cp.TABLES, not paramedic_profiles. users_with_profiles counts paramedic users as 'has profile', so they are not in the staff fallback either. Suspending a paramedic from the console therefore changes nothing, yet the call reports success."},
+      {"endpoint": "POST /api/admin/users/bulk unsuspend app:'provider'", "issue": "user_admin.py lines 165-166 set users.is_suspended=FALSE for ALL uids, not just staff-only ones. This touches the shared login row and would clear a users-level suspension set elsewhere (Patient App or legacy). Restrict it to `staff` the way suspend does."},
+      {"endpoint": "POST /api/admin/users/bulk app:'patient'", "issue": "Master-admin protection matches only customer_profiles.phone. If that phone is NULL, the master admin's patient profile is not protected. Also match the phone joined from users.phone."},
+      {"endpoint": "POST /api/admin/users/bulk suspend/unsuspend app:'provider'", "issue": "This sends real suspension and unsuspension emails to real providers. Manish Mishra (a real DC owner) got about 3 suspend and 3 unsuspend emails during this test run because the requested overlap test runs on him. Consider a test or dry-run flag, or not emailing on unsuspend of a suspension that was just made."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/users/patients", "issues": ["When a row gets the SUSPENDED tag, the table columns reflow (the Phone column moves about 135px). Use table-layout fixed or set column widths."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_patient_app_parity.py", "/app/backend/tests/snap_users.py", "/app/test_reports/pytest/patient_parity.xml"],
+  "action_items": [
+    "Review the testing agent's fix in canonical_providers.py suspend_profiles/unsuspend_profiles (suspension_reason for the path_lab/diagnostic_centre CHECK constraint)",
+    "Make provider suspend work for paramedic_profiles; right now it silently does nothing",
+    "Make provider unsuspend update the users row only for staff-only logins",
+    "Make the patient_bulk master-admin guard also match users.phone",
+    "Check the role-count drift: pharmacy 5->3, path_lab 13->10 and DC 4->3 are because 6 demo/staging profiles were deactivated in one batch at 2026-11-06 12:23:33 with no local_decision, so it was not the console (Pharmacist Neha 9000000006, MedPlus 9000020008, Lab Tech Karan 9000000005, Staging Path Lab 9100000001, Coerce PL 9100000099, Staging DC 9100000002). Nurse 1->3 because 'Nurse Priya Sharma' 9000099997 and 'Bulk Nurse A' 9000088883 are now un-archived. Check whether the 167-row users un-archive brought back staff-only logins (nurse/pharmacist/lab_tech/receptionist) that the console had deleted. For those logins the users row IS the app record, so they should have stayed deleted.",
+    "Update the stale expectations in test_directory_parity.py::test_role_counts once the real counts are confirmed"
+  ],
+  "critical_code_review_comments": [
+    "canonical_providers.suspend_profiles had no CheckViolation handling and was not transactional; a failure partway through could leave some tables suspended (now fixed by the testing agent)",
+    "directory.profile_rows sets is_suspended = users.is_suspended OR kyc=='suspended', so a legacy users-level suspension still shows the provider as suspended. This is fine, but unsuspend app:provider clears it as a side effect",
+    "Provider unsuspend leaves local_decision as '{}' instead of NULL (cosmetic)"
+  ],
+  "updated_files": ["/app/backend/canonical_providers.py", "/app/backend/tests/test_patient_app_parity.py", "/app/backend/tests/snap_users.py"],
+  "success_rate": {"backend": "100% (13/13 new parity tests after fix; 1 stale role-count expectation in test_directory_parity)", "frontend": "100%"},
+  "seed_data_creation": "None. Every suspend and archive was reversed, and the before/after DB snapshot of the users, customer_profiles and DC rows is identical. Mongo contacts for Manish already existed or were created by contacts_for_users.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend/tests && python -m pytest test_patient_app_parity.py -p no:xdist -v -s (about 60s). Use python snap_users.py <phones> for a read-only DB snapshot of the users, customer_profiles and diagnostic_centre_profiles rows. GET /api/admin/patients returns {patients, total}. UI login: run the 3-step auth with fetch inside page.evaluate, then set localStorage trata_token and trata_user. Current provider role counts: doctor 5, hospital 2, pharmacy 3, path_lab 10, DC 3, ambulance 3, paramedic 0, agent 1, nurse 3, pharmacist 1, lab_tech 1, receptionist 1. Deleted providers: 159.",
+  "rca of the issue": "Provider suspend 500: path_lab_profiles and diagnostic_centre_profiles both have CHECK (verification_status <> 'suspended' OR suspension_reason IS NOT NULL). suspend_profiles only wrote local_decision and verification_status. Reproduce with POST /admin/users/bulk {user_ids:['54acfc31-...'], action:'suspend', app:'provider', reason:'parity test'}, which returned 500. Mitigation applied: write suspension_reason when the column exists and clear it on unsuspend."
+}

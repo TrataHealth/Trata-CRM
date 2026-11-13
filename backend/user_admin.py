@@ -118,7 +118,9 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
         async with pool.acquire() as conn:
             res = await conn.execute(f"""UPDATE public.customer_profiles SET {sql}, updated_at = now()
                                           WHERE (user_id = ANY($1::text[]) OR id::text = ANY($1::text[]))
-                                            AND NOT (right(coalesce(phone, ''), 10) = ANY(${len(args)}::text[]))""", *args)
+                                            AND NOT (right(coalesce(phone, ''), 10) = ANY(${len(args)}::text[]))
+                                            AND NOT EXISTS (SELECT 1 FROM public.users u WHERE u.id = customer_profiles.user_id
+                                                             AND right(coalesce(u.phone, ''), 10) = ANY(${len(args)}::text[]))""", *args)
         await db.audit_log.insert_one({"id": os.urandom(8).hex(), "action": f"patients.{body.action}", "by": current.get("id"), "by_name": by,
                                        "reason": reason or None, "supabase_user_ids": uids, "at": _now()})
         purge_at = (datetime.now(timezone.utc) + timedelta(days=ARCHIVE_DAYS)).isoformat() if body.action == "archive" else None
@@ -161,9 +163,9 @@ def create_user_admin_router(db, get_current_user, master_phones) -> Dict[str, A
                 await conn.execute("""UPDATE public.users SET is_suspended = TRUE, suspended_at = now(), suspended_reason = $2,
                                       suspended_by = $3, updated_at = now() WHERE id = ANY($1::text[])""", staff, reason, by)
             elif body.action == "unsuspend":
-                await cp.unsuspend_profiles(conn, uids)
+                await cp.unsuspend_profiles(conn, list(prof))
                 await conn.execute("""UPDATE public.users SET is_suspended = FALSE, suspended_at = NULL, suspended_reason = NULL,
-                                      suspended_by = NULL, updated_at = now() WHERE id = ANY($1::text[])""", uids)
+                                      suspended_by = NULL, updated_at = now() WHERE id = ANY($1::text[])""", staff)
             elif body.action == "archive":
                 await cp.deactivate_profiles(conn, list(prof), by, reason)
                 await conn.execute("""UPDATE public.users SET is_archived = TRUE, is_active = FALSE, archived_at = now(),
